@@ -5,9 +5,11 @@
 
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <stop_token>
 #include <string>
 
+#include "go_core.h"
 #include "pipe_server.h"
 #include "protocol.h"
 
@@ -28,16 +30,41 @@ class ServiceState {
 
   std::stop_source stopSource;
   SERVICE_STATUS_HANDLE statusHandle = nullptr;
+  std::optional<sovereign::service::GoCore> goCore;
 };
 
-std::string HandlePipeRequest(const std::string& request) {
+// GoCore is optional at this stage (P2 atom 1a proves the happy path); if
+// the DLL is missing or fails to load, the service still starts and the
+// pipe still answers everything except box_ping — a missing dev-time
+// artifact shouldn't take down the whole service.
+void TryLoadGoCore(ServiceState& state) {
+  try {
+    state.goCore.emplace(sovereign::service::ResolveGoCoreDllPath());
+  } catch (const wil::ResultException& e) {
+    std::wcerr << L"GoCore недоступен: " << e.what() << L"\n";
+  }
+}
+
+std::string HandlePipeRequest(const std::string& request,
+                               sovereign::service::GoCore* goCore) {
   // P0: эхо с подтверждением, что процесс — служба. P1 добавит реальные
   // команды (start/stop/stats) поверх кодоген-схемы конфига.
   nlohmann::json response;
   try {
     const auto parsed = nlohmann::json::parse(request);
-    response["cmd"] = "pong";
-    response["echo"] = parsed;
+    const std::string cmd = parsed.value("cmd", "");
+    if (cmd == "box_ping") {
+      if (goCore == nullptr) {
+        response["cmd"] = "error";
+        response["message"] = "gocore not loaded";
+      } else {
+        response["cmd"] = "box_pong";
+        response["reply"] = goCore->Ping();
+      }
+    } else {
+      response["cmd"] = "pong";
+      response["echo"] = parsed;
+    }
   } catch (const nlohmann::json::parse_error&) {
     response["cmd"] = "error";
     response["message"] = "invalid json";
@@ -71,9 +98,10 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD, LPVOID, LPVOID) {
   }
 }
 
-void RunPipeServer(const std::stop_token& stopToken) {
-  sovereign::service::PipeServer server(sovereign::ipc::kPipeName,
-                                         HandlePipeRequest);
+void RunPipeServer(const std::stop_token& stopToken, sovereign::service::GoCore* goCore) {
+  sovereign::service::PipeServer server(
+      sovereign::ipc::kPipeName,
+      [goCore](const std::string& request) { return HandlePipeRequest(request, goCore); });
   server.Run(stopToken);
 }
 
@@ -86,9 +114,10 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
   }
 
   ReportStatus(state.statusHandle, SERVICE_START_PENDING, NO_ERROR, 3000);
+  TryLoadGoCore(state);
   ReportStatus(state.statusHandle, SERVICE_RUNNING);
 
-  RunPipeServer(state.stopSource.get_token());
+  RunPipeServer(state.stopSource.get_token(), state.goCore ? &*state.goCore : nullptr);
 
   ReportStatus(state.statusHandle, SERVICE_STOPPED);
 }
@@ -135,9 +164,12 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
 // службы и без SCM control handler.
 void RunInConsole() {
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+  auto& state = ServiceState::Instance();
+  TryLoadGoCore(state);
   std::wcout << L"sovereign core: pipe " << sovereign::ipc::kPipeName
+             << L", GoCore " << (state.goCore ? L"loaded" : L"NOT loaded")
              << L", Ctrl+C для остановки.\n";
-  RunPipeServer(ServiceState::Instance().stopSource.get_token());
+  RunPipeServer(state.stopSource.get_token(), state.goCore ? &*state.goCore : nullptr);
 }
 
 }  // namespace
