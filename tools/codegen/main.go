@@ -239,6 +239,15 @@ func mapType(t types.Type) (cppType string, needAdapter bool, note string) {
 		if named.Obj().Pkg() != nil {
 			pkgPath = named.Obj().Pkg().Path()
 		}
+		if pkgPath == "github.com/sagernet/sing/common/json/badoption" && named.Obj().Name() == "Listable" {
+			if targs := named.TypeArgs(); targs != nil && targs.Len() == 1 {
+				elemCpp, elemAdapt, elemNote := mapType(targs.At(0))
+				if !elemAdapt {
+					return "sovereign::adapters::Listable<" + elemCpp + ">", false, ""
+				}
+				return "nlohmann::json", true, "Listable[" + targs.At(0).String() + "]: " + elemNote
+			}
+		}
 		return "nlohmann::json", true, "unmapped named type " + pkgPath + "." + named.Obj().Name() + " — needs a handwritten adapter"
 	}
 	return "nlohmann::json", true, "unmapped Go type " + t.String() + " — needs a handwritten adapter"
@@ -272,6 +281,24 @@ func goToCppFieldName(goName string) string {
 	}
 }
 
+func usesListable(fields []field) bool {
+	for _, f := range fields {
+		if strings.Contains(f.CppType, "sovereign::adapters::Listable<") {
+			return true
+		}
+	}
+	return false
+}
+
+func usesOmitEmpty(fields []field) bool {
+	for _, f := range fields {
+		if f.OmitEmpty {
+			return true
+		}
+	}
+	return false
+}
+
 func countAdapters(fields []field) int {
 	n := 0
 	for _, f := range fields {
@@ -292,7 +319,14 @@ func renderHeader(namespace, typeName string, fields []field, sourcePkg string) 
 	b.WriteString("#include <cstdint>\n")
 	b.WriteString("#include <optional>\n")
 	b.WriteString("#include <string>\n\n")
-	b.WriteString("#include <nlohmann/json.hpp>\n\n")
+	b.WriteString("#include <nlohmann/json.hpp>\n")
+	if usesListable(fields) {
+		b.WriteString("#include <adapters/listable.h>\n")
+	}
+	if usesOmitEmpty(fields) {
+		b.WriteString("#include <adapters/omit_empty.h>\n")
+	}
+	b.WriteString("\n")
 
 	parts := strings.Split(namespace, "::")
 	for _, p := range parts {
@@ -321,7 +355,12 @@ func renderHeader(namespace, typeName string, fields []field, sourcePkg string) 
 	fmt.Fprintf(&b, "inline void to_json(nlohmann::json& j, const %s& v) {\n", typeName)
 	b.WriteString("  j = nlohmann::json::object();\n")
 	for _, f := range fields {
-		fmt.Fprintf(&b, "  j[%q] = v.%s;\n", f.JSONName, f.CppName)
+		if f.OmitEmpty {
+			fmt.Fprintf(&b, "  if (!sovereign::adapters::IsEmptyValue(v.%s)) { j[%q] = v.%s; }\n",
+				f.CppName, f.JSONName, f.CppName)
+		} else {
+			fmt.Fprintf(&b, "  j[%q] = v.%s;\n", f.JSONName, f.CppName)
+		}
 	}
 	b.WriteString("}\n\n")
 

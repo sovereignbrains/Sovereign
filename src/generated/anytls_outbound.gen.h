@@ -9,6 +9,7 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+#include <adapters/omit_empty.h>
 
 namespace sovereign {
 namespace codegen {
@@ -33,8 +34,8 @@ struct AnyTLSOutboundOptions {
   std::optional<bool> udpFragment{};
   std::optional<nlohmann::json> domainResolver{};  // unmapped named type github.com/sagernet/sing-box/option.DomainResolveOptions — needs a handwritten adapter
   std::optional<nlohmann::json> networkStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.NetworkStrategy — needs a handwritten adapter
-  nlohmann::json networkType{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Listable — needs a handwritten adapter
-  nlohmann::json fallbackNetworkType{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Listable — needs a handwritten adapter
+  nlohmann::json networkType{};  // Listable[github.com/sagernet/sing-box/option.InterfaceType]: unmapped named type github.com/sagernet/sing-box/option.InterfaceType — needs a handwritten adapter
+  nlohmann::json fallbackNetworkType{};  // Listable[github.com/sagernet/sing-box/option.InterfaceType]: unmapped named type github.com/sagernet/sing-box/option.InterfaceType — needs a handwritten adapter
   nlohmann::json fallbackDelay{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Duration — needs a handwritten adapter
   nlohmann::json domainStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.DomainStrategy — needs a handwritten adapter
   std::string server{};
@@ -49,36 +50,36 @@ struct AnyTLSOutboundOptions {
 
 inline void to_json(nlohmann::json& j, const AnyTLSOutboundOptions& v) {
   j = nlohmann::json::object();
-  j["detour"] = v.detour;
-  j["bind_interface"] = v.bindInterface;
-  j["inet4_bind_address"] = v.inet4BindAddress;
-  j["inet6_bind_address"] = v.inet6BindAddress;
-  j["bind_address_no_port"] = v.bindAddressNoPort;
-  j["protect_path"] = v.protectPath;
-  j["routing_mark"] = v.routingMark;
-  j["reuse_addr"] = v.reuseAddr;
-  j["netns"] = v.netNs;
-  j["connect_timeout"] = v.connectTimeout;
-  j["tcp_fast_open"] = v.tcpFastOpen;
-  j["tcp_multi_path"] = v.tcpMultiPath;
-  j["disable_tcp_keep_alive"] = v.disableTCPKeepAlive;
-  j["tcp_keep_alive"] = v.tcpKeepAlive;
-  j["tcp_keep_alive_interval"] = v.tcpKeepAliveInterval;
-  j["udp_fragment"] = v.udpFragment;
-  j["domain_resolver"] = v.domainResolver;
-  j["network_strategy"] = v.networkStrategy;
-  j["network_type"] = v.networkType;
-  j["fallback_network_type"] = v.fallbackNetworkType;
-  j["fallback_delay"] = v.fallbackDelay;
-  j["domain_strategy"] = v.domainStrategy;
+  if (!sovereign::adapters::IsEmptyValue(v.detour)) { j["detour"] = v.detour; }
+  if (!sovereign::adapters::IsEmptyValue(v.bindInterface)) { j["bind_interface"] = v.bindInterface; }
+  if (!sovereign::adapters::IsEmptyValue(v.inet4BindAddress)) { j["inet4_bind_address"] = v.inet4BindAddress; }
+  if (!sovereign::adapters::IsEmptyValue(v.inet6BindAddress)) { j["inet6_bind_address"] = v.inet6BindAddress; }
+  if (!sovereign::adapters::IsEmptyValue(v.bindAddressNoPort)) { j["bind_address_no_port"] = v.bindAddressNoPort; }
+  if (!sovereign::adapters::IsEmptyValue(v.protectPath)) { j["protect_path"] = v.protectPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.routingMark)) { j["routing_mark"] = v.routingMark; }
+  if (!sovereign::adapters::IsEmptyValue(v.reuseAddr)) { j["reuse_addr"] = v.reuseAddr; }
+  if (!sovereign::adapters::IsEmptyValue(v.netNs)) { j["netns"] = v.netNs; }
+  if (!sovereign::adapters::IsEmptyValue(v.connectTimeout)) { j["connect_timeout"] = v.connectTimeout; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpFastOpen)) { j["tcp_fast_open"] = v.tcpFastOpen; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpMultiPath)) { j["tcp_multi_path"] = v.tcpMultiPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.disableTCPKeepAlive)) { j["disable_tcp_keep_alive"] = v.disableTCPKeepAlive; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpKeepAlive)) { j["tcp_keep_alive"] = v.tcpKeepAlive; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpKeepAliveInterval)) { j["tcp_keep_alive_interval"] = v.tcpKeepAliveInterval; }
+  if (!sovereign::adapters::IsEmptyValue(v.udpFragment)) { j["udp_fragment"] = v.udpFragment; }
+  if (!sovereign::adapters::IsEmptyValue(v.domainResolver)) { j["domain_resolver"] = v.domainResolver; }
+  if (!sovereign::adapters::IsEmptyValue(v.networkStrategy)) { j["network_strategy"] = v.networkStrategy; }
+  if (!sovereign::adapters::IsEmptyValue(v.networkType)) { j["network_type"] = v.networkType; }
+  if (!sovereign::adapters::IsEmptyValue(v.fallbackNetworkType)) { j["fallback_network_type"] = v.fallbackNetworkType; }
+  if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
+  if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
   j["server_port"] = v.serverPort;
-  j["tls"] = v.tls;
-  j["password"] = v.password;
-  j["idle_session_check_interval"] = v.idleSessionCheckInterval;
-  j["idle_session_timeout"] = v.idleSessionTimeout;
-  j["min_idle_session"] = v.minIdleSession;
-  j["client_metadata"] = v.clientMetadata;
+  if (!sovereign::adapters::IsEmptyValue(v.tls)) { j["tls"] = v.tls; }
+  if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
+  if (!sovereign::adapters::IsEmptyValue(v.idleSessionCheckInterval)) { j["idle_session_check_interval"] = v.idleSessionCheckInterval; }
+  if (!sovereign::adapters::IsEmptyValue(v.idleSessionTimeout)) { j["idle_session_timeout"] = v.idleSessionTimeout; }
+  if (!sovereign::adapters::IsEmptyValue(v.minIdleSession)) { j["min_idle_session"] = v.minIdleSession; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientMetadata)) { j["client_metadata"] = v.clientMetadata; }
 }
 
 inline void from_json(const nlohmann::json& j, AnyTLSOutboundOptions& v) {

@@ -1,0 +1,1 @@
+{"type":"anytls","tag":"proxy","server":"example.com","server_port":443,"tls":{"enabled":true,"server_name":"example.com"},"password":"hunter2"}

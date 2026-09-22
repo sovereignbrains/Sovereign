@@ -44,8 +44,13 @@ find_package(wil CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
 add_library(sovereign_common INTERFACE)
-target_include_directories(sovereign_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/common)
+target_include_directories(sovereign_common INTERFACE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/common
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/generated)
 target_link_libraries(sovereign_common INTERFACE WIL::WIL nlohmann_json::nlohmann_json)
 
 add_subdirectory(src/service)
 add_subdirectory(src/tray)
+
+enable_testing()
+add_subdirectory(tests/golden)
