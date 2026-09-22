@@ -9,6 +9,8 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+#include <adapters/duration.h>
+#include <adapters/fwmark.h>
 #include <adapters/omit_empty.h>
 
 namespace sovereign {
@@ -18,32 +20,32 @@ namespace option {
 struct AnyTLSOutboundOptions {
   std::string detour{};
   std::string bindInterface{};
-  std::optional<nlohmann::json> inet4BindAddress{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Addr — needs a handwritten adapter
-  std::optional<nlohmann::json> inet6BindAddress{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Addr — needs a handwritten adapter
+  std::optional<std::string> inet4BindAddress{};
+  std::optional<std::string> inet6BindAddress{};
   bool bindAddressNoPort{};
   std::string protectPath{};
-  nlohmann::json routingMark{};  // unmapped named type github.com/sagernet/sing-box/option.FwMark — needs a handwritten adapter
+  sovereign::adapters::FwMark routingMark{};
   bool reuseAddr{};
   std::string netNs{};
-  nlohmann::json connectTimeout{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Duration — needs a handwritten adapter
+  sovereign::adapters::Duration connectTimeout{};
   bool tcpFastOpen{};
   bool tcpMultiPath{};
   bool disableTCPKeepAlive{};
-  nlohmann::json tcpKeepAlive{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Duration — needs a handwritten adapter
-  nlohmann::json tcpKeepAliveInterval{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Duration — needs a handwritten adapter
+  sovereign::adapters::Duration tcpKeepAlive{};
+  sovereign::adapters::Duration tcpKeepAliveInterval{};
   std::optional<bool> udpFragment{};
   std::optional<nlohmann::json> domainResolver{};  // unmapped named type github.com/sagernet/sing-box/option.DomainResolveOptions — needs a handwritten adapter
   std::optional<nlohmann::json> networkStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.NetworkStrategy — needs a handwritten adapter
   nlohmann::json networkType{};  // Listable[github.com/sagernet/sing-box/option.InterfaceType]: unmapped named type github.com/sagernet/sing-box/option.InterfaceType — needs a handwritten adapter
   nlohmann::json fallbackNetworkType{};  // Listable[github.com/sagernet/sing-box/option.InterfaceType]: unmapped named type github.com/sagernet/sing-box/option.InterfaceType — needs a handwritten adapter
-  nlohmann::json fallbackDelay{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Duration — needs a handwritten adapter
+  sovereign::adapters::Duration fallbackDelay{};
   nlohmann::json domainStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.DomainStrategy — needs a handwritten adapter
   std::string server{};
   std::uint16_t serverPort{};
   std::optional<nlohmann::json> tls{};  // unmapped named type github.com/sagernet/sing-box/option.OutboundTLSOptions — needs a handwritten adapter
   std::string password{};
-  nlohmann::json idleSessionCheckInterval{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Duration — needs a handwritten adapter
-  nlohmann::json idleSessionTimeout{};  // unmapped named type github.com/sagernet/sing/common/json/badoption.Duration — needs a handwritten adapter
+  sovereign::adapters::Duration idleSessionCheckInterval{};
+  sovereign::adapters::Duration idleSessionTimeout{};
   std::int64_t minIdleSession{};
   std::string clientMetadata{};
 };

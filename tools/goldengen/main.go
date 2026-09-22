@@ -11,8 +11,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json/badoption"
 	singjson "github.com/sagernet/sing/common/json"
 )
 
@@ -26,6 +28,10 @@ func main() {
 	switch *fixture {
 	case "anytls_outbound":
 		data, err = anyTLSOutbound()
+	case "anytls_inbound_padding_single":
+		data, err = anyTLSInboundPaddingScheme([]string{"pad"})
+	case "anytls_inbound_padding_array":
+		data, err = anyTLSInboundPaddingScheme([]string{"pad-a", "pad-b", "pad-c"})
 	default:
 		fmt.Fprintf(os.Stderr, "unknown fixture %q\n", *fixture)
 		os.Exit(2)
@@ -54,6 +60,7 @@ func anyTLSOutbound() ([]byte, error) {
 		Enabled:    true,
 		ServerName: "example.com",
 	}
+	opts.ConnectTimeout = badoption.Duration(10 * time.Second)
 
 	outbound := &option.Outbound{
 		Type:    "anytls",
@@ -62,4 +69,15 @@ func anyTLSOutbound() ([]byte, error) {
 	}
 
 	return singjson.MarshalContext(context.Background(), outbound)
+}
+
+// anyTLSInboundPaddingScheme exercises badoption.Listable[string]'s two
+// wire shapes directly: Go marshals a single-element list as the bare
+// element, and any other length as a JSON array (see
+// badoption/listable.go) — one fixture per shape.
+func anyTLSInboundPaddingScheme(scheme []string) ([]byte, error) {
+	opts := &option.AnyTLSInboundOptions{
+		PaddingScheme: badoption.Listable[string](scheme),
+	}
+	return singjson.MarshalContext(context.Background(), opts)
 }

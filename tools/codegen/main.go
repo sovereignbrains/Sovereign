@@ -239,6 +239,22 @@ func mapType(t types.Type) (cppType string, needAdapter bool, note string) {
 		if named.Obj().Pkg() != nil {
 			pkgPath = named.Obj().Pkg().Path()
 		}
+		if pkgPath == "github.com/sagernet/sing/common/json/badoption" {
+			switch named.Obj().Name() {
+			case "Duration":
+				return "sovereign::adapters::Duration", false, ""
+			case "Addr":
+				// badoption.Addr marshals as a plain IP-address string; we
+				// store it as one rather than adding a structured IP type,
+				// since nothing needs to inspect/construct these
+				// programmatically yet (deferred to whenever dialer code
+				// does).
+				return "std::string", false, ""
+			}
+		}
+		if pkgPath == "github.com/sagernet/sing-box/option" && named.Obj().Name() == "FwMark" {
+			return "sovereign::adapters::FwMark", false, ""
+		}
 		if pkgPath == "github.com/sagernet/sing/common/json/badoption" && named.Obj().Name() == "Listable" {
 			if targs := named.TypeArgs(); targs != nil && targs.Len() == 1 {
 				elemCpp, elemAdapt, elemNote := mapType(targs.At(0))
@@ -281,9 +297,9 @@ func goToCppFieldName(goName string) string {
 	}
 }
 
-func usesListable(fields []field) bool {
+func usesType(fields []field, needle string) bool {
 	for _, f := range fields {
-		if strings.Contains(f.CppType, "sovereign::adapters::Listable<") {
+		if strings.Contains(f.CppType, needle) {
 			return true
 		}
 	}
@@ -320,8 +336,14 @@ func renderHeader(namespace, typeName string, fields []field, sourcePkg string) 
 	b.WriteString("#include <optional>\n")
 	b.WriteString("#include <string>\n\n")
 	b.WriteString("#include <nlohmann/json.hpp>\n")
-	if usesListable(fields) {
+	if usesType(fields, "sovereign::adapters::Listable<") {
 		b.WriteString("#include <adapters/listable.h>\n")
+	}
+	if usesType(fields, "sovereign::adapters::Duration") {
+		b.WriteString("#include <adapters/duration.h>\n")
+	}
+	if usesType(fields, "sovereign::adapters::FwMark") {
+		b.WriteString("#include <adapters/fwmark.h>\n")
 	}
 	if usesOmitEmpty(fields) {
 		b.WriteString("#include <adapters/omit_empty.h>\n")
