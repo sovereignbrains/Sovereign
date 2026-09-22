@@ -4,6 +4,10 @@ project(sovereign LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# Мы не используем C++20/23 модули; авто-сканирование под Ninja+MSVC
+# добавляет в compile_commands.json @...modmap response-файлы, которых ещё
+# нет на момент конфигурации — clang-tidy на них давится.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 if (MSVC)
   add_compile_options(/W4 /WX /permissive- /EHsc /utf-8)
