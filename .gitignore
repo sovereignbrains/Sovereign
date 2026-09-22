@@ -27,6 +27,7 @@
 # Fortran module files
 *.mod
 *.smod
+!go.mod
 
 # Compiled Static libraries
 *.lai
@@ -67,3 +68,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# pinned upstream sources codegen reads from (see tools/codegen/*.version) -
+# fetched on demand, not committed
+/vendor/
