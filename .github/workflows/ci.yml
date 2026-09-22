@@ -7,18 +7,25 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      VCPKG_ROOT: C:\vcpkg
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - uses: seanmiddleditch/gha-setup-ninja@v4
+
       - name: Bootstrap vcpkg
+        shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            if (-not (Test-Path "C:\vcpkg\.git")) {
+              git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            }
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
 
       - name: Configure
-        run: cmake --preset debug
+        run: cmake --preset ci
 
       - name: Build (warnings as errors)
-        run: cmake --build --preset debug --config Debug
+        run: cmake --build --preset ci
