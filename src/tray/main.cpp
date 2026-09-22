@@ -78,7 +78,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
 
   switch (message) {
     case WM_CREATE: {
-      static TrayIcon icon(window, LoadIconW(nullptr, IDI_APPLICATION),
+      // MAKEINTRESOURCEW(32512) == IDI_APPLICATION, но взят напрямую: сам
+      // IDI_APPLICATION раскрывается через UNICODE-условный макрос
+      // MAKEINTRESOURCE, который может не совпасть с explicit-W вызовом
+      // LoadIconW в зависимости от порядка обработки заголовков тулчейном.
+      static TrayIcon icon(window, LoadIconW(nullptr, MAKEINTRESOURCEW(32512)),
                             L"sovereign (P0 skeleton)");
       trayIcon = &icon;
       return 0;
