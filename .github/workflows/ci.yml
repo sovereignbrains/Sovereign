@@ -28,6 +28,9 @@ jobs:
       - name: Build (warnings as errors)
         run: cmake --build --preset ci
 
+      - name: Test
+        run: ctest --test-dir build/ci --output-on-failure
+
   analyze:
     runs-on: windows-latest
     steps:
@@ -147,4 +150,4 @@ jobs:
         run: cmake --preset ci
 
       - name: clang-tidy
-        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/tray/main.cpp
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp
