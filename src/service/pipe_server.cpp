@@ -94,7 +94,7 @@ void WriteMessage(HANDLE pipe, const std::string& message) {
 PipeServer::PipeServer(std::wstring pipeName, RequestHandler handler)
     : pipeName_(std::move(pipeName)), handler_(std::move(handler)) {}
 
-void PipeServer::Run(std::stop_token stopToken) {
+void PipeServer::Run(const std::stop_token& stopToken) {
   wil::unique_event_nothrow stopEvent;
   THROW_IF_FAILED(stopEvent.create(wil::EventOptions::ManualReset));
 
@@ -119,7 +119,9 @@ void PipeServer::Run(std::stop_token stopToken) {
       FlushFileBuffers(pipe.get());
     } catch (...) {
       // Один клиент не должен ронять сервер целиком; соединение просто
-      // закрывается ниже через DisconnectNamedPipe.
+      // закрывается ниже через DisconnectNamedPipe. OutputDebugString — не
+      // std::cerr, потому что под SCM у процесса нет консоли.
+      OutputDebugStringW(L"sovereign-core: pipe client request failed\n");
     }
 
     DisconnectNamedPipe(pipe.get());

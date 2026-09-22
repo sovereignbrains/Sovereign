@@ -71,7 +71,7 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD, LPVOID, LPVOID) {
   }
 }
 
-void RunPipeServer(std::stop_token stopToken) {
+void RunPipeServer(const std::stop_token& stopToken) {
   sovereign::service::PipeServer server(sovereign::ipc::kPipeName,
                                          HandlePipeRequest);
   server.Run(stopToken);

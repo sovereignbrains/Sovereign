@@ -20,7 +20,7 @@ class PipeServer {
   explicit PipeServer(std::wstring pipeName, RequestHandler handler);
 
   // Блокирует вызывающий поток до stopToken.stop_requested().
-  void Run(std::stop_token stopToken);
+  void Run(const std::stop_token& stopToken);
 
  private:
   std::wstring pipeName_;

@@ -9,9 +9,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: ilammy/msvc-dev-cmd@v1
-
       - uses: seanmiddleditch/gha-setup-ninja@v4
 
       - name: Bootstrap vcpkg
@@ -29,3 +27,115 @@ jobs:
 
       - name: Build (warnings as errors)
         run: cmake --build --preset ci
+
+  analyze:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            if (-not (Test-Path "C:\vcpkg\.git")) {
+              git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            }
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
+
+      - name: Configure
+        run: cmake --preset ci-analyze
+
+      - name: Build (/analyze, warnings as errors)
+        run: cmake --build --preset ci-analyze
+
+  asan:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            if (-not (Test-Path "C:\vcpkg\.git")) {
+              git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            }
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
+
+      - name: Configure
+        run: cmake --preset ci-asan
+
+      - name: Build
+        run: cmake --build --preset ci-asan
+
+      - name: Smoke test — core pipe round-trip under ASan
+        shell: pwsh
+        run: |
+          $core = Start-Process -FilePath "build/ci-asan/src/service/sovereign-core.exe" `
+            -ArgumentList "--run" -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput "core_out.log" -RedirectStandardError "core_err.log"
+          Start-Sleep -Milliseconds 800
+          if ($core.HasExited) { throw "sovereign-core exited early (exit code $($core.ExitCode))" }
+
+          $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", "sovereign-control", [System.IO.Pipes.PipeDirection]::InOut)
+          $pipe.Connect(5000)
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes('{"cmd":"ping","from":"ci-asan"}')
+          $pipe.Write($bytes, 0, $bytes.Length)
+          $pipe.Flush()
+          $buf = New-Object byte[] 4096
+          $n = $pipe.Read($buf, 0, $buf.Length)
+          $response = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
+          $pipe.Dispose()
+
+          Start-Sleep -Milliseconds 300
+          Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
+
+          $stderr = Get-Content "core_err.log" -Raw -ErrorAction SilentlyContinue
+          if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report)" }
+          if ($response -notmatch '"cmd":"pong"') { throw "unexpected pipe response: $response" }
+          Write-Host "OK: $response"
+
+      - name: Smoke test — tray starts cleanly under ASan
+        shell: pwsh
+        run: |
+          $tray = Start-Process -FilePath "build/ci-asan/src/tray/sovereign-tray.exe" `
+            -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput "tray_out.log" -RedirectStandardError "tray_err.log"
+          Start-Sleep -Milliseconds 800
+          if ($tray.HasExited) { throw "sovereign-tray exited early (exit code $($tray.ExitCode))" }
+          Stop-Process -Id $tray.Id -Force -ErrorAction SilentlyContinue
+
+          $stderr = Get-Content "tray_err.log" -Raw -ErrorAction SilentlyContinue
+          if ($stderr) { Write-Host $stderr; throw "sovereign-tray stderr non-empty (possible ASan report)" }
+
+  clang-tidy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v4
+      - uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1"
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            if (-not (Test-Path "C:\vcpkg\.git")) {
+              git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            }
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
+
+      - name: Configure (generates compile_commands.json)
+        run: cmake --preset ci
+
+      - name: clang-tidy
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/tray/main.cpp

@@ -5,3 +5,4 @@ add_executable(sovereign-core
 )
 
 target_link_libraries(sovereign-core PRIVATE sovereign_common advapi32)
+sovereign_copy_asan_runtime(sovereign-core)

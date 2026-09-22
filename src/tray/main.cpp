@@ -98,7 +98,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam,
 
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
+int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR,
+                       _In_ int) {
   const wchar_t kClassName[] = L"SovereignTrayWindow";
 
   WNDCLASSW windowClass{};
