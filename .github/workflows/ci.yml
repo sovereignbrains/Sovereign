@@ -120,9 +120,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
       - uses: seanmiddleditch/gha-setup-ninja@v4
-      - uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "18.1"
+
+      - name: Locate clang-tidy bundled with this VS install
+        shell: pwsh
+        run: |
+          # Standalone LLVM releases lag behind MSVC STL (e.g. STL hardening
+          # builtins like __builtin_verbose_trap), causing version-skew
+          # parse errors. The clang-tidy shipped inside VS is built against
+          # the same STL, so it's the only version guaranteed to match.
+          $clangTidy = Get-ChildItem "$env:VSINSTALLDIR\VC\Tools\Llvm" -Recurse -Filter "clang-tidy.exe" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -like "*\x64\bin\*" } | Select-Object -First 1
+          if (-not $clangTidy) { throw "clang-tidy.exe not found under VS install; Clang tools component missing" }
+          Add-Content -Path $env:GITHUB_PATH -Value $clangTidy.DirectoryName
 
       - name: Bootstrap vcpkg
         shell: pwsh
