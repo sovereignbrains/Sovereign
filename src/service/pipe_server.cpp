@@ -1,5 +1,6 @@
 #include "pipe_server.h"
 
+#include <sddl.h>
 #include <wil/resource.h>
 #include <wil/result.h>
 
@@ -11,13 +12,34 @@ namespace sovereign::service {
 
 namespace {
 
+// Служба создаёт пайп под SYSTEM, а будущий трей подключается из обычной
+// (неэлевированной) пользовательской сессии — CreateNamedPipeW с
+// nullptr-дескриптором безопасности берёт DACL по умолчанию из токена
+// создающего процесса, который не включает SID сессии другого контекста
+// того же пользователя (split-token). Без явного ACL клиент получает
+// "Access to the path is denied" на ConnectNamedPipe/CreateFile — не
+// баг клиента, а отсутствие ACL на сервере. AU/SY/BA = Authenticated
+// Users/SYSTEM/Built-in Administrators.
+wil::unique_hlocal_ptr<SECURITY_DESCRIPTOR> CreatePipeSecurityDescriptor() {
+  PSECURITY_DESCRIPTOR rawDescriptor = nullptr;
+  THROW_IF_WIN32_BOOL_FALSE(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"D:(A;;GA;;;AU)(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &rawDescriptor,
+      nullptr));
+  return wil::unique_hlocal_ptr<SECURITY_DESCRIPTOR>(
+      static_cast<SECURITY_DESCRIPTOR*>(rawDescriptor));
+}
+
 wil::unique_hfile CreatePipeInstance(const std::wstring& pipeName) {
+  const auto securityDescriptor = CreatePipeSecurityDescriptor();
+  SECURITY_ATTRIBUTES securityAttributes{sizeof(SECURITY_ATTRIBUTES),
+                                          securityDescriptor.get(), FALSE};
+
   wil::unique_hfile pipe(CreateNamedPipeW(
       pipeName.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
       PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
       1,  // nMaxInstances: один инстанс, обрабатываем клиентов по очереди
       sovereign::ipc::kPipeBufferSize, sovereign::ipc::kPipeBufferSize, 0,
-      nullptr));
+      &securityAttributes));
   THROW_LAST_ERROR_IF(!pipe);
   return pipe;
 }
