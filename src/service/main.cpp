@@ -110,14 +110,15 @@ void ReportStatus(SERVICE_STATUS_HANDLE handle, DWORD state,
   SERVICE_STATUS status{};
   status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
   status.dwCurrentState = state;
-  status.dwControlsAccepted =
-      (state == SERVICE_START_PENDING) ? 0 : SERVICE_ACCEPT_STOP;
+  status.dwControlsAccepted = (state == SERVICE_START_PENDING)
+                                   ? 0
+                                   : SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_POWEREVENT;
   status.dwWin32ExitCode = exitCode;
   status.dwWaitHint = waitHint;
   SetServiceStatus(handle, &status);
 }
 
-DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD, LPVOID, LPVOID) {
+DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) {
   auto& state = ServiceState::Instance();
   switch (control) {
     case SERVICE_CONTROL_STOP:
@@ -125,6 +126,21 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD, LPVOID, LPVOID) {
       state.stopSource.request_stop();
       return NO_ERROR;
     case SERVICE_CONTROL_INTERROGATE:
+      return NO_ERROR;
+    case SERVICE_CONTROL_POWEREVENT:
+      // 1d-1: only observing for now — box_stop/box_start on resume is 1d-2.
+      // OutputDebugStringW, not std::wcerr: the service has no console under
+      // SCM (same reasoning as pipe_server.cpp's client-request-failed log).
+      switch (eventType) {
+        case PBT_APMSUSPEND:
+          OutputDebugStringW(L"sovereign-core: power PBT_APMSUSPEND (going to sleep)\n");
+          break;
+        case PBT_APMRESUMEAUTOMATIC:
+          OutputDebugStringW(L"sovereign-core: power PBT_APMRESUMEAUTOMATIC (resuming)\n");
+          break;
+        default:
+          break;
+      }
       return NO_ERROR;
     default:
       return ERROR_CALL_NOT_IMPLEMENTED;
