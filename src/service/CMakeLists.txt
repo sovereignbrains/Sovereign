@@ -36,3 +36,16 @@ add_custom_command(TARGET sovereign-core POST_BUILD
           "$<TARGET_FILE_DIR:sovereign-core>"
   VERBATIM
 )
+
+# wintun.dll (see tools/codegen/wintun.version) is a vendored binary, not
+# something CMake builds — it's fetched into vendor/wintun/amd64/ the same
+# way vendor/sing-box is (CI step / manual local fetch), never committed.
+# sing-tun (inside GoCore's linked sing-box) loads it via LoadLibrary from
+# the process's own directory at runtime, so it has to sit next to the exe
+# just like sovereign-gocore.dll does.
+add_custom_command(TARGET sovereign-core POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/vendor/wintun/amd64/wintun.dll"
+          "$<TARGET_FILE_DIR:sovereign-core>"
+  VERBATIM
+)

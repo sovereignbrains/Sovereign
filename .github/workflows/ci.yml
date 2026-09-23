@@ -46,6 +46,21 @@ jobs:
           $tag = (Get-Content tools/codegen/sing-box.version)[0]
           git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
 
+      - name: Fetch pinned wintun.dll (sing-tun loads it at runtime; see tools/codegen/wintun.version)
+        shell: pwsh
+        run: |
+          $version = (Get-Content tools/codegen/wintun.version)[0]
+          $expectedHash = (Get-Content tools/codegen/wintun.version)[1]
+          $zipPath = "$env:RUNNER_TEMP\wintun-$version.zip"
+          curl.exe -sL -o $zipPath "https://www.wintun.net/builds/wintun-$version.zip"
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          if ($actualHash -ne $expectedHash) {
+            throw "wintun-$version.zip sha256 mismatch: expected $expectedHash, got $actualHash"
+          }
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\wintun-extracted" -Force
+          New-Item -ItemType Directory -Force -Path vendor/wintun/amd64 | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\wintun-extracted\wintun\bin\amd64\wintun.dll" vendor/wintun/amd64/wintun.dll
+
       - name: Configure
         run: cmake --preset ci
 
@@ -90,6 +105,21 @@ jobs:
           $tag = (Get-Content tools/codegen/sing-box.version)[0]
           git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
 
+      - name: Fetch pinned wintun.dll (sing-tun loads it at runtime; see tools/codegen/wintun.version)
+        shell: pwsh
+        run: |
+          $version = (Get-Content tools/codegen/wintun.version)[0]
+          $expectedHash = (Get-Content tools/codegen/wintun.version)[1]
+          $zipPath = "$env:RUNNER_TEMP\wintun-$version.zip"
+          curl.exe -sL -o $zipPath "https://www.wintun.net/builds/wintun-$version.zip"
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          if ($actualHash -ne $expectedHash) {
+            throw "wintun-$version.zip sha256 mismatch: expected $expectedHash, got $actualHash"
+          }
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\wintun-extracted" -Force
+          New-Item -ItemType Directory -Force -Path vendor/wintun/amd64 | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\wintun-extracted\wintun\bin\amd64\wintun.dll" vendor/wintun/amd64/wintun.dll
+
       - name: Configure
         run: cmake --preset ci-analyze
 
@@ -130,6 +160,21 @@ jobs:
         run: |
           $tag = (Get-Content tools/codegen/sing-box.version)[0]
           git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
+
+      - name: Fetch pinned wintun.dll (sing-tun loads it at runtime; see tools/codegen/wintun.version)
+        shell: pwsh
+        run: |
+          $version = (Get-Content tools/codegen/wintun.version)[0]
+          $expectedHash = (Get-Content tools/codegen/wintun.version)[1]
+          $zipPath = "$env:RUNNER_TEMP\wintun-$version.zip"
+          curl.exe -sL -o $zipPath "https://www.wintun.net/builds/wintun-$version.zip"
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          if ($actualHash -ne $expectedHash) {
+            throw "wintun-$version.zip sha256 mismatch: expected $expectedHash, got $actualHash"
+          }
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\wintun-extracted" -Force
+          New-Item -ItemType Directory -Force -Path vendor/wintun/amd64 | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\wintun-extracted\wintun\bin\amd64\wintun.dll" vendor/wintun/amd64/wintun.dll
 
       - name: Configure
         run: cmake --preset ci-asan
