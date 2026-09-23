@@ -3,6 +3,10 @@
 #include <wil/resource.h>
 #include <wil/result.h>
 
+#include <chrono>
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -126,6 +130,26 @@ void ReportStatus(SERVICE_STATUS_HANDLE handle, DWORD state,
   SetServiceStatus(handle, &status);
 }
 
+// OutputDebugStringW needs a live listener (DebugView) attached at the exact
+// moment the message is emitted — useless for proving what happened while
+// the machine was asleep with nobody watching. A plain file survives that;
+// %ProgramData% is writable by the SYSTEM service and, unlike a restricted
+// install directory, still readable by a non-elevated session afterward.
+void LogPowerEvent(const std::string& message) {
+  const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+  const std::string line = std::format("[{:%Y-%m-%d %H:%M:%S}] {}\n", now, message);
+  OutputDebugStringA(line.c_str());
+  try {
+    std::filesystem::create_directories(L"C:\\ProgramData\\Sovereign");
+    std::ofstream log("C:\\ProgramData\\Sovereign\\power-events.log", std::ios::app);
+    log << line;
+  } catch (...) {
+    // Best-effort: a logging failure must not take the power-event path down,
+    // but still surface it somewhere a live DebugView session would catch.
+    OutputDebugStringA("sovereign-core: power-events.log write failed\n");
+  }
+}
+
 DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) {
   auto& state = ServiceState::Instance();
   switch (control) {
@@ -136,15 +160,12 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
     case SERVICE_CONTROL_INTERROGATE:
       return NO_ERROR;
     case SERVICE_CONTROL_POWEREVENT:
-      // 1d-1: only observing for now — box_stop/box_start on resume is 1d-2.
-      // OutputDebugStringW, not std::wcerr: the service has no console under
-      // SCM (same reasoning as pipe_server.cpp's client-request-failed log).
       switch (eventType) {
         case PBT_APMSUSPEND:
-          OutputDebugStringW(L"sovereign-core: power PBT_APMSUSPEND (going to sleep)\n");
+          LogPowerEvent("power: PBT_APMSUSPEND (going to sleep)");
           break;
         case PBT_APMRESUMEAUTOMATIC:
-          OutputDebugStringW(L"sovereign-core: power PBT_APMRESUMEAUTOMATIC (resuming)\n");
+          LogPowerEvent("power: PBT_APMRESUMEAUTOMATIC (resuming)");
           // Always restart rather than probe whether the box survived sleep —
           // wintun's adapter and the route table are not guaranteed to survive
           // a suspend/resume cycle, and checking liveness first only adds a
@@ -157,15 +178,13 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
           // here.
           if (state.goCore && state.lastConfig) {
             const std::string stopError = state.goCore->Stop();
-            if (!stopError.empty()) {
-              OutputDebugStringA(("sovereign-core: resume box_stop error: " + stopError + "\n").c_str());
-            }
+            LogPowerEvent(stopError.empty() ? "power: resume box_stop OK"
+                                             : "power: resume box_stop error: " + stopError);
             const std::string startError = state.goCore->Start(*state.lastConfig);
-            if (startError.empty()) {
-              OutputDebugStringW(L"sovereign-core: resume box_start OK\n");
-            } else {
-              OutputDebugStringA(("sovereign-core: resume box_start error: " + startError + "\n").c_str());
-            }
+            LogPowerEvent(startError.empty() ? "power: resume box_start OK"
+                                              : "power: resume box_start error: " + startError);
+          } else {
+            LogPowerEvent("power: resume — nothing to restart (no GoCore or no remembered config)");
           }
           break;
         default:
