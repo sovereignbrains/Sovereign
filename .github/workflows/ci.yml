@@ -194,6 +194,55 @@ jobs:
           if ($response -notmatch '"cmd":"box_pong"') { throw "unexpected pipe response: $response" }
           Write-Host "OK: $response"
 
+      - name: Smoke test — box_start/box_stop through GoCore under ASan
+        shell: pwsh
+        run: |
+          # A minimal config (one direct outbound, no inbounds/TLS/certs) is
+          # enough to exercise box_start's real path — sing-box option
+          # parsing, box.New, box.Start — and box_stop's box.Close, without
+          # the cost of standing up a real anytls server. The anytls
+          # outbound itself, with real traffic through it, is proven by
+          # tests/manual/anytls_traffic_smoke.ps1 (needs two live sing-box
+          # instances and a TCP proxy round-trip, more than a CI smoke test
+          # should cost on every push).
+          # log.disabled is set because this step treats non-empty stderr as
+          # an ASan report (matching the other smoke tests below) — a real
+          # box instance logs its own startup lines to stderr otherwise.
+          $core = Start-Process -FilePath "build/ci-asan/src/service/sovereign-core.exe" `
+            -ArgumentList "--run" -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput "core_out.log" -RedirectStandardError "core_err.log"
+          Start-Sleep -Milliseconds 800
+          if ($core.HasExited) { throw "sovereign-core exited early (exit code $($core.ExitCode))" }
+
+          function Send-PipeCommand([string]$json) {
+            $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", "sovereign-control", [System.IO.Pipes.PipeDirection]::InOut)
+            $pipe.Connect(5000)
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+            $pipe.Write($bytes, 0, $bytes.Length)
+            $pipe.Flush()
+            $buf = New-Object byte[] 4096
+            $n = $pipe.Read($buf, 0, $buf.Length)
+            $response = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
+            $pipe.Dispose()
+            return $response
+          }
+
+          $startResponse = Send-PipeCommand '{"cmd":"box_start","config":{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}}'
+          if ($startResponse -notmatch '"box_started"') { throw "unexpected box_start response: $startResponse" }
+
+          $restartResponse = Send-PipeCommand '{"cmd":"box_start","config":{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}}'
+          if ($restartResponse -notmatch '"box already started"') { throw "expected a already-started error, got: $restartResponse" }
+
+          $stopResponse = Send-PipeCommand '{"cmd":"box_stop"}'
+          if ($stopResponse -notmatch '"box_stopped"') { throw "unexpected box_stop response: $stopResponse" }
+
+          Start-Sleep -Milliseconds 300
+          Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
+
+          $stderr = Get-Content "core_err.log" -Raw -ErrorAction SilentlyContinue
+          if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report, cross-CRT free bug, etc.)" }
+          Write-Host "OK: start=$startResponse restart=$restartResponse stop=$stopResponse"
+
       - name: Smoke test — tray starts cleanly under ASan
         shell: pwsh
         run: |

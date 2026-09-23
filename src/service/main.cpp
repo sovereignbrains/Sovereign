@@ -61,6 +61,39 @@ std::string HandlePipeRequest(const std::string& request,
         response["cmd"] = "box_pong";
         response["reply"] = goCore->Ping();
       }
+    } else if (cmd == "box_start") {
+      if (goCore == nullptr) {
+        response["cmd"] = "error";
+        response["message"] = "gocore not loaded";
+      } else if (!parsed.contains("config")) {
+        response["cmd"] = "error";
+        response["message"] = "missing config field";
+      } else {
+        // "config" carries a full sing-box config document as a nested JSON
+        // object (not a pre-serialized string) — natural for a JSON-over-pipe
+        // request. It is re-serialized here because GoCore's box_start
+        // export takes the config as raw text, same as `sing-box run -c`.
+        const std::string error = goCore->Start(parsed.at("config").dump());
+        if (error.empty()) {
+          response["cmd"] = "box_started";
+        } else {
+          response["cmd"] = "error";
+          response["message"] = error;
+        }
+      }
+    } else if (cmd == "box_stop") {
+      if (goCore == nullptr) {
+        response["cmd"] = "error";
+        response["message"] = "gocore not loaded";
+      } else {
+        const std::string error = goCore->Stop();
+        if (error.empty()) {
+          response["cmd"] = "box_stopped";
+        } else {
+          response["cmd"] = "error";
+          response["message"] = error;
+        }
+      }
     } else {
       response["cmd"] = "pong";
       response["echo"] = parsed;

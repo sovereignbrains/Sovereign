@@ -1,8 +1,8 @@
-module github.com/sovereignbrains/sovereign/gocore
+module github.com/sovereignbrains/sovereign/tools/boxrun
 
 go 1.27.0
 
-replace github.com/sagernet/sing-box => ../vendor/sing-box
+replace github.com/sagernet/sing-box => ../../vendor/sing-box
 
 require (
 	github.com/sagernet/sing v0.9.4

@@ -35,19 +35,34 @@ GoCore::GoCore(const std::wstring& dllPath) {
       reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_ping")));
   THROW_LAST_ERROR_IF(!boxPing_);
 
+  boxStart_ = reinterpret_cast<BoxStartFn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_start")));
+  THROW_LAST_ERROR_IF(!boxStart_);
+
+  boxStop_ = reinterpret_cast<BoxStopFn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_stop")));
+  THROW_LAST_ERROR_IF(!boxStop_);
+
   boxFree_ = reinterpret_cast<BoxFreeFn>(  // NOLINT(performance-no-int-to-ptr)
       reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_free")));
   THROW_LAST_ERROR_IF(!boxFree_);
 }
 
-std::string GoCore::Ping() {
-  char* reply = boxPing_();
-  if (!reply) {
+std::string GoCore::TakeOwnedString(char* dllString) {
+  if (!dllString) {
     return {};
   }
-  std::string result(reply);
-  boxFree_(reply);
+  std::string result(dllString);
+  boxFree_(dllString);
   return result;
 }
+
+std::string GoCore::Ping() { return TakeOwnedString(boxPing_()); }
+
+std::string GoCore::Start(const std::string& configJson) {
+  return TakeOwnedString(boxStart_(configJson.c_str()));
+}
+
+std::string GoCore::Stop() { return TakeOwnedString(boxStop_()); }
 
 }  // namespace sovereign::service
