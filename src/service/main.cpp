@@ -31,6 +31,11 @@ class ServiceState {
   std::stop_source stopSource;
   SERVICE_STATUS_HANDLE statusHandle = nullptr;
   std::optional<sovereign::service::GoCore> goCore;
+
+  // Set on the last successful box_start; PBT_APMRESUMEAUTOMATIC replays it.
+  // Cleared on an explicit box_stop, so a resume after the user turned the
+  // box off on purpose does not silently turn it back on.
+  std::optional<std::string> lastConfig;
 };
 
 // GoCore is optional at this stage (P2 atom 1a proves the happy path); if
@@ -73,9 +78,11 @@ std::string HandlePipeRequest(const std::string& request,
         // object (not a pre-serialized string) — natural for a JSON-over-pipe
         // request. It is re-serialized here because GoCore's box_start
         // export takes the config as raw text, same as `sing-box run -c`.
-        const std::string error = goCore->Start(parsed.at("config").dump());
+        const std::string configJson = parsed.at("config").dump();
+        const std::string error = goCore->Start(configJson);
         if (error.empty()) {
           response["cmd"] = "box_started";
+          ServiceState::Instance().lastConfig = configJson;
         } else {
           response["cmd"] = "error";
           response["message"] = error;
@@ -89,6 +96,7 @@ std::string HandlePipeRequest(const std::string& request,
         const std::string error = goCore->Stop();
         if (error.empty()) {
           response["cmd"] = "box_stopped";
+          ServiceState::Instance().lastConfig.reset();
         } else {
           response["cmd"] = "error";
           response["message"] = error;
@@ -137,6 +145,28 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
           break;
         case PBT_APMRESUMEAUTOMATIC:
           OutputDebugStringW(L"sovereign-core: power PBT_APMRESUMEAUTOMATIC (resuming)\n");
+          // Always restart rather than probe whether the box survived sleep —
+          // wintun's adapter and the route table are not guaranteed to survive
+          // a suspend/resume cycle, and checking liveness first only adds a
+          // second failure mode. Known gap: this runs on the SCM control
+          // thread while a pipe box_start/box_stop (main thread) could be
+          // in flight at the same instant — GoCore's Go-side mutex keeps that
+          // memory-safe, but the two requests could still interleave in a
+          // confusing order. Accepted for 1d-2: a client racing a sleep/wake
+          // in that exact window is not a realistic scenario to design around
+          // here.
+          if (state.goCore && state.lastConfig) {
+            const std::string stopError = state.goCore->Stop();
+            if (!stopError.empty()) {
+              OutputDebugStringA(("sovereign-core: resume box_stop error: " + stopError + "\n").c_str());
+            }
+            const std::string startError = state.goCore->Start(*state.lastConfig);
+            if (startError.empty()) {
+              OutputDebugStringW(L"sovereign-core: resume box_start OK\n");
+            } else {
+              OutputDebugStringA(("sovereign-core: resume box_start error: " + startError + "\n").c_str());
+            }
+          }
           break;
         default:
           break;
