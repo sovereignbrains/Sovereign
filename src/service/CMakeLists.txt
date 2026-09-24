@@ -9,13 +9,40 @@ find_program(SOVEREIGN_GO_EXECUTABLE go REQUIRED)
 # Every .go file of the package: a change to any of them must rebuild the DLL.
 file(GLOB SOVEREIGN_GOCORE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/gocore/*.go")
 
+# gocore is built the way upstream builds its Windows release of the pinned
+# sing-box: the same build tags (release/DEFAULT_BUILD_TAGS_WINDOWS), the same
+# linker flags (release/LDFLAGS) and the version stamped in. Without the tags,
+# whole features are compiled out — REALITY needs with_utls, the gVisor TUN
+# stack with_gvisor, QUIC-based protocols with_quic… — and the box fails at
+# runtime with "… is not included in this build". Read from the vendored tree,
+# they stay pinned together with the sing-box version instead of drifting in
+# a copy here.
+set(SOVEREIGN_SINGBOX_DIR "${CMAKE_SOURCE_DIR}/vendor/sing-box")
+set(SOVEREIGN_SINGBOX_TAGS_FILE "${SOVEREIGN_SINGBOX_DIR}/release/DEFAULT_BUILD_TAGS_WINDOWS")
+set(SOVEREIGN_SINGBOX_LDFLAGS_FILE "${SOVEREIGN_SINGBOX_DIR}/release/LDFLAGS")
+set(SOVEREIGN_SINGBOX_VERSION_FILE "${CMAKE_SOURCE_DIR}/tools/codegen/sing-box.version")
+if (NOT EXISTS "${SOVEREIGN_SINGBOX_TAGS_FILE}")
+  message(FATAL_ERROR "vendor/sing-box is missing — fetch the pinned tag from tools/codegen/sing-box.version first")
+endif()
+file(READ "${SOVEREIGN_SINGBOX_TAGS_FILE}" SOVEREIGN_GOCORE_TAGS)
+string(STRIP "${SOVEREIGN_GOCORE_TAGS}" SOVEREIGN_GOCORE_TAGS)
+file(READ "${SOVEREIGN_SINGBOX_LDFLAGS_FILE}" SOVEREIGN_SINGBOX_LDFLAGS)
+string(STRIP "${SOVEREIGN_SINGBOX_LDFLAGS}" SOVEREIGN_SINGBOX_LDFLAGS)
+file(STRINGS "${SOVEREIGN_SINGBOX_VERSION_FILE}" SOVEREIGN_SINGBOX_TAG LIMIT_COUNT 1)
+string(REGEX REPLACE "^v" "" SOVEREIGN_SINGBOX_VERSION "${SOVEREIGN_SINGBOX_TAG}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${SOVEREIGN_SINGBOX_TAGS_FILE}" "${SOVEREIGN_SINGBOX_LDFLAGS_FILE}" "${SOVEREIGN_SINGBOX_VERSION_FILE}")
+
 add_custom_command(
   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/sovereign-gocore.dll"
   COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=1
-          ${SOVEREIGN_GO_EXECUTABLE} build -buildmode=c-shared
+          ${SOVEREIGN_GO_EXECUTABLE} build -buildmode=c-shared -trimpath
+          -tags "${SOVEREIGN_GOCORE_TAGS}"
+          "-ldflags=-X 'github.com/sagernet/sing-box/constant.Version=${SOVEREIGN_SINGBOX_VERSION}' ${SOVEREIGN_SINGBOX_LDFLAGS} -s -w -buildid="
           -o "${CMAKE_CURRENT_BINARY_DIR}/sovereign-gocore.dll" .
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/gocore"
   DEPENDS ${SOVEREIGN_GOCORE_SOURCES} "${CMAKE_SOURCE_DIR}/gocore/go.mod" "${CMAKE_SOURCE_DIR}/gocore/go.sum"
+          "${SOVEREIGN_SINGBOX_TAGS_FILE}" "${SOVEREIGN_SINGBOX_LDFLAGS_FILE}" "${SOVEREIGN_SINGBOX_VERSION_FILE}"
   COMMENT "Building sovereign-gocore.dll (Go c-shared)"
   VERBATIM
 )
