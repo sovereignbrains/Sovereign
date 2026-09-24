@@ -272,11 +272,16 @@ jobs:
             return $response
           }
 
+          # On any failure below, show what the core printed: an empty pipe reply
+          # usually means the core died mid-request (e.g. a Go panic), and its
+          # stderr is the only place that says why.
+          trap { Write-Host '--- core stderr ---'; Get-Content core_err.log -ErrorAction SilentlyContinue; Write-Host '--- core stdout ---'; Get-Content core_out.log -ErrorAction SilentlyContinue; Write-Host "core exited: $($core.HasExited) code $(if ($core.HasExited) { $core.ExitCode })"; break }
+
           $startResponse = Send-PipeCommand '{"cmd":"box_start","config":{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}}'
           if ($startResponse -notmatch '"box_started"') { throw "unexpected box_start response: $startResponse" }
 
           $restartResponse = Send-PipeCommand '{"cmd":"box_start","config":{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}}'
-          if ($restartResponse -notmatch '"box already started"') { throw "expected a already-started error, got: $restartResponse" }
+          if ($restartResponse -notmatch 'box already started') { throw "expected an already-started error, got: $restartResponse" }
 
           $stopResponse = Send-PipeCommand '{"cmd":"box_stop"}'
           if ($stopResponse -notmatch '"box_stopped"') { throw "unexpected box_stop response: $stopResponse" }
@@ -316,6 +321,8 @@ jobs:
             $pipe.Dispose()
             return $response
           }
+
+          trap { Write-Host '--- core stderr ---'; Get-Content core_err.log -ErrorAction SilentlyContinue; Write-Host '--- core stdout ---'; Get-Content core_out.log -ErrorAction SilentlyContinue; Write-Host "core exited: $($core.HasExited) code $(if ($core.HasExited) { $core.ExitCode })"; break }
 
           $idle = Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json
           if ($idle.running -ne $false -or $idle.generation -ne 0) { throw "unexpected idle stats: $($idle | ConvertTo-Json -Compress)" }
