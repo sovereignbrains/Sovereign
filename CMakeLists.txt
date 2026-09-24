@@ -54,3 +54,4 @@ add_subdirectory(src/tray)
 
 enable_testing()
 add_subdirectory(tests/golden)
+add_subdirectory(tests/unit)

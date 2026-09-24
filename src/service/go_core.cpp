@@ -3,8 +3,28 @@
 #include <wil/result.h>
 
 #include <cstdint>
+#include <utility>
 
 namespace sovereign::service {
+
+namespace {
+
+// GetProcAddress always returns FARPROC; casting it to the export's real
+// signature is the only way to call it and is inherent to the Win32 API
+// shape. The intermediate uintptr_t cast (rather than a direct
+// FARPROC->target reinterpret_cast) is deliberate: clang's
+// cast-function-type-mismatch diagnostic is a hard error here (not a
+// suppressible lint), and going through an integer breaks the pattern it
+// matches on.
+template <typename Fn>
+Fn ResolveExport(HMODULE module, const char* name) {
+  const FARPROC proc = GetProcAddress(module, name);
+  THROW_LAST_ERROR_IF(!proc);
+  return reinterpret_cast<Fn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(proc));
+}
+
+}  // namespace
 
 std::wstring ResolveGoCoreDllPath() {
   wchar_t path[MAX_PATH]{};
@@ -24,28 +44,37 @@ GoCore::GoCore(const std::wstring& dllPath) {
   module_.reset(LoadLibraryW(dllPath.c_str()));
   THROW_LAST_ERROR_IF(!module_);
 
-  // GetProcAddress always returns FARPROC; casting it to the export's real
-  // signature is the only way to call it and is inherent to the Win32 API
-  // shape. The intermediate uintptr_t cast (rather than a direct
-  // FARPROC->target reinterpret_cast) is deliberate: clang's
-  // cast-function-type-mismatch diagnostic is a hard error here (not a
-  // suppressible lint), and going through an integer breaks the pattern it
-  // matches on.
-  boxPing_ = reinterpret_cast<BoxPingFn>(  // NOLINT(performance-no-int-to-ptr)
-      reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_ping")));
-  THROW_LAST_ERROR_IF(!boxPing_);
+  boxPing_ = ResolveExport<BoxPingFn>(module_.get(), "box_ping");
+  boxStart_ = ResolveExport<BoxStartFn>(module_.get(), "box_start");
+  boxStop_ = ResolveExport<BoxStopFn>(module_.get(), "box_stop");
+  boxStats_ = ResolveExport<BoxStatsFn>(module_.get(), "box_stats");
+  boxSetLogCallback_ = ResolveExport<BoxSetLogCallbackFn>(module_.get(), "box_set_log_callback");
+  boxFree_ = ResolveExport<BoxFreeFn>(module_.get(), "box_free");
 
-  boxStart_ = reinterpret_cast<BoxStartFn>(  // NOLINT(performance-no-int-to-ptr)
-      reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_start")));
-  THROW_LAST_ERROR_IF(!boxStart_);
+  // Registered once for the object's lifetime; SetLogSink only swaps what
+  // OnLog forwards to, so installing a sink never has to cross into Go.
+  boxSetLogCallback_(&GoCore::OnLog, this);
+}
 
-  boxStop_ = reinterpret_cast<BoxStopFn>(  // NOLINT(performance-no-int-to-ptr)
-      reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_stop")));
-  THROW_LAST_ERROR_IF(!boxStop_);
+GoCore::~GoCore() { boxSetLogCallback_(nullptr, nullptr); }
 
-  boxFree_ = reinterpret_cast<BoxFreeFn>(  // NOLINT(performance-no-int-to-ptr)
-      reinterpret_cast<std::uintptr_t>(GetProcAddress(module_.get(), "box_free")));
-  THROW_LAST_ERROR_IF(!boxFree_);
+void __cdecl GoCore::OnLog(void* context, int level, const char* message) noexcept {
+  auto* self = static_cast<GoCore*>(context);
+  try {
+    const std::scoped_lock lock(self->sinkMutex_);
+    if (self->sink_) {
+      self->sink_(static_cast<LogLevel>(level), message);
+    }
+  } catch (...) {
+    // A sink failure must not unwind into Go's stack (undefined behavior
+    // across the cgo boundary); a lost log line is the lesser evil.
+    OutputDebugStringW(L"sovereign-core: log sink threw, line dropped\n");
+  }
+}
+
+void GoCore::SetLogSink(LogSink sink) {
+  const std::scoped_lock lock(sinkMutex_);
+  sink_ = std::move(sink);
 }
 
 std::string GoCore::TakeOwnedString(char* dllString) {
@@ -64,5 +93,12 @@ std::string GoCore::Start(const std::string& configJson) {
 }
 
 std::string GoCore::Stop() { return TakeOwnedString(boxStop_()); }
+
+CoreStats GoCore::Stats() {
+  CoreStats stats;
+  stats.running = boxStats_(&stats.uplinkBytes, &stats.downlinkBytes, &stats.activeConnections,
+                            &stats.generation) != 0;
+  return stats;
+}
 
 }  // namespace sovereign::service

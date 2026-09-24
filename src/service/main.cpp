@@ -8,12 +8,16 @@
 #include <format>
 #include <fstream>
 #include <iostream>
-#include <nlohmann/json.hpp>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 
+#include "control.h"
+#include "core.h"
 #include "go_core.h"
+#include "log_ring.h"
 #include "pipe_server.h"
 #include "protocol.h"
 
@@ -21,6 +25,9 @@ namespace {
 
 constexpr wchar_t kServiceName[] = L"SovereignCore";
 constexpr wchar_t kServiceDisplayName[] = L"Sovereign Core";
+
+// How many of the core's recent log lines the service keeps for the tray.
+constexpr std::size_t kCoreLogCapacity = 2000;
 
 // Живёт на весь процесс службы: ServiceCtrlHandler (обычный C-callback без
 // контекста) должен куда-то дотянуться, поэтому состояние остановки хранится
@@ -34,7 +41,14 @@ class ServiceState {
 
   std::stop_source stopSource;
   SERVICE_STATUS_HANDLE statusHandle = nullptr;
-  std::optional<sovereign::service::GoCore> goCore;
+
+  // Declared before `core` so it is destroyed after it: the core's log sink
+  // points into this ring, and ~GoCore is what guarantees no further calls.
+  sovereign::service::LogRing coreLog{kCoreLogCapacity};
+
+  // The engine behind the service (issue #8: an in-process ICore — GoCore
+  // today, NativeCore later). Null if it failed to load.
+  std::unique_ptr<sovereign::service::ICore> core;
 
   // Set on the last successful box_start; PBT_APMRESUMEAUTOMATIC replays it.
   // Cleared on an explicit box_stop, so a resume after the user turned the
@@ -42,79 +56,21 @@ class ServiceState {
   std::optional<std::string> lastConfig;
 };
 
-// GoCore is optional at this stage (P2 atom 1a proves the happy path); if
-// the DLL is missing or fails to load, the service still starts and the
-// pipe still answers everything except box_ping — a missing dev-time
-// artifact shouldn't take down the whole service.
-void TryLoadGoCore(ServiceState& state) {
+// The core is optional at this stage; if the DLL is missing or fails to
+// load, the service still starts and the pipe still answers everything
+// except the core commands — a missing dev-time artifact shouldn't take
+// down the whole service.
+void TryLoadCore(ServiceState& state) {
   try {
-    state.goCore.emplace(sovereign::service::ResolveGoCoreDllPath());
+    state.core = std::make_unique<sovereign::service::GoCore>(
+        sovereign::service::ResolveGoCoreDllPath());
+    state.core->SetLogSink(
+        [&log = state.coreLog](sovereign::service::LogLevel level, std::string_view message) {
+          log.Append(level, message);
+        });
   } catch (const wil::ResultException& e) {
     std::wcerr << L"GoCore недоступен: " << e.what() << L"\n";
   }
-}
-
-std::string HandlePipeRequest(const std::string& request,
-                               sovereign::service::GoCore* goCore) {
-  // P0: эхо с подтверждением, что процесс — служба. P1 добавит реальные
-  // команды (start/stop/stats) поверх кодоген-схемы конфига.
-  nlohmann::json response;
-  try {
-    const auto parsed = nlohmann::json::parse(request);
-    const std::string cmd = parsed.value("cmd", "");
-    if (cmd == "box_ping") {
-      if (goCore == nullptr) {
-        response["cmd"] = "error";
-        response["message"] = "gocore not loaded";
-      } else {
-        response["cmd"] = "box_pong";
-        response["reply"] = goCore->Ping();
-      }
-    } else if (cmd == "box_start") {
-      if (goCore == nullptr) {
-        response["cmd"] = "error";
-        response["message"] = "gocore not loaded";
-      } else if (!parsed.contains("config")) {
-        response["cmd"] = "error";
-        response["message"] = "missing config field";
-      } else {
-        // "config" carries a full sing-box config document as a nested JSON
-        // object (not a pre-serialized string) — natural for a JSON-over-pipe
-        // request. It is re-serialized here because GoCore's box_start
-        // export takes the config as raw text, same as `sing-box run -c`.
-        const std::string configJson = parsed.at("config").dump();
-        const std::string error = goCore->Start(configJson);
-        if (error.empty()) {
-          response["cmd"] = "box_started";
-          ServiceState::Instance().lastConfig = configJson;
-        } else {
-          response["cmd"] = "error";
-          response["message"] = error;
-        }
-      }
-    } else if (cmd == "box_stop") {
-      if (goCore == nullptr) {
-        response["cmd"] = "error";
-        response["message"] = "gocore not loaded";
-      } else {
-        const std::string error = goCore->Stop();
-        if (error.empty()) {
-          response["cmd"] = "box_stopped";
-          ServiceState::Instance().lastConfig.reset();
-        } else {
-          response["cmd"] = "error";
-          response["message"] = error;
-        }
-      }
-    } else {
-      response["cmd"] = "pong";
-      response["echo"] = parsed;
-    }
-  } catch (const nlohmann::json::parse_error&) {
-    response["cmd"] = "error";
-    response["message"] = "invalid json";
-  }
-  return response.dump();
 }
 
 void ReportStatus(SERVICE_STATUS_HANDLE handle, DWORD state,
@@ -176,15 +132,15 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
           // confusing order. Accepted for 1d-2: a client racing a sleep/wake
           // in that exact window is not a realistic scenario to design around
           // here.
-          if (state.goCore && state.lastConfig) {
-            const std::string stopError = state.goCore->Stop();
+          if (state.core && state.lastConfig) {
+            const std::string stopError = state.core->Stop();
             LogPowerEvent(stopError.empty() ? "power: resume box_stop OK"
                                              : "power: resume box_stop error: " + stopError);
-            const std::string startError = state.goCore->Start(*state.lastConfig);
+            const std::string startError = state.core->Start(*state.lastConfig);
             LogPowerEvent(startError.empty() ? "power: resume box_start OK"
                                               : "power: resume box_start error: " + startError);
           } else {
-            LogPowerEvent("power: resume — nothing to restart (no GoCore or no remembered config)");
+            LogPowerEvent("power: resume — nothing to restart (no core or no remembered config)");
           }
           break;
         default:
@@ -196,11 +152,25 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
   }
 }
 
-void RunPipeServer(const std::stop_token& stopToken, sovereign::service::GoCore* goCore) {
+void RunPipeServer(const std::stop_token& stopToken, ServiceState& state) {
+  sovereign::service::ControlHandler handler(state.core.get(), state.coreLog, state.lastConfig);
   sovereign::service::PipeServer server(
       sovereign::ipc::kPipeName,
-      [goCore](const std::string& request) { return HandlePipeRequest(request, goCore); });
+      [&handler](const std::string& request) { return handler.Handle(request); });
   server.Run(stopToken);
+}
+
+// Leaving a box running past the service's own shutdown would leave its TUN
+// adapter and auto_route routes behind for the rest of the session — the
+// machine's default route pointing at a dead interface. Stop it explicitly.
+void StopCoreOnShutdown(ServiceState& state) {
+  if (!state.core) {
+    return;
+  }
+  const std::string error = state.core->Stop();
+  if (!error.empty()) {
+    OutputDebugStringA(("sovereign-core: box_stop on shutdown failed: " + error + "\n").c_str());
+  }
 }
 
 void WINAPI ServiceMain(DWORD, LPWSTR*) {
@@ -212,10 +182,11 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
   }
 
   ReportStatus(state.statusHandle, SERVICE_START_PENDING, NO_ERROR, 3000);
-  TryLoadGoCore(state);
+  TryLoadCore(state);
   ReportStatus(state.statusHandle, SERVICE_RUNNING);
 
-  RunPipeServer(state.stopSource.get_token(), state.goCore ? &*state.goCore : nullptr);
+  RunPipeServer(state.stopSource.get_token(), state);
+  StopCoreOnShutdown(state);
 
   ReportStatus(state.statusHandle, SERVICE_STOPPED);
 }
@@ -263,11 +234,12 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
 void RunInConsole() {
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
   auto& state = ServiceState::Instance();
-  TryLoadGoCore(state);
+  TryLoadCore(state);
   std::wcout << L"sovereign core: pipe " << sovereign::ipc::kPipeName
-             << L", GoCore " << (state.goCore ? L"loaded" : L"NOT loaded")
+             << L", core " << (state.core ? L"loaded" : L"NOT loaded")
              << L", Ctrl+C для остановки.\n";
-  RunPipeServer(state.stopSource.get_token(), state.goCore ? &*state.goCore : nullptr);
+  RunPipeServer(state.stopSource.get_token(), state);
+  StopCoreOnShutdown(state);
 }
 
 }  // namespace

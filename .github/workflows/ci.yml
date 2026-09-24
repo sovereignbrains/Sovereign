@@ -288,6 +288,62 @@ jobs:
           if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report, cross-CRT free bug, etc.)" }
           Write-Host "OK: start=$startResponse restart=$restartResponse stop=$stopResponse"
 
+      - name: Smoke test — box_stats and box_logs (log callback) through GoCore under ASan
+        shell: pwsh
+        run: |
+          # box_stats: counters come from sing-box's own trafficcontrol.Manager
+          # attached in box_start; generation increments per successful start.
+          # box_logs: lines reach the service through box_set_log_callback —
+          # "sing-box started" is logged at info on every start, so no
+          # external traffic is needed to prove the callback path. log.output
+          # sends sing-box's console logging to a file so stderr stays empty
+          # (non-empty stderr is treated as an ASan report).
+          $core = Start-Process -FilePath "build/ci-asan/src/service/sovereign-core.exe" `
+            -ArgumentList "--run" -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput "core_out.log" -RedirectStandardError "core_err.log"
+          Start-Sleep -Milliseconds 800
+          if ($core.HasExited) { throw "sovereign-core exited early (exit code $($core.ExitCode))" }
+
+          function Send-PipeCommand([string]$json) {
+            $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", "sovereign-control", [System.IO.Pipes.PipeDirection]::InOut)
+            $pipe.Connect(5000)
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+            $pipe.Write($bytes, 0, $bytes.Length)
+            $pipe.Flush()
+            $buf = New-Object byte[] 4096
+            $n = $pipe.Read($buf, 0, $buf.Length)
+            $response = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
+            $pipe.Dispose()
+            return $response
+          }
+
+          $idle = Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json
+          if ($idle.running -ne $false -or $idle.generation -ne 0) { throw "unexpected idle stats: $($idle | ConvertTo-Json -Compress)" }
+
+          $config = '{"log":{"level":"info","output":"box.log"},"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":20990}],"outbounds":[{"type":"direct","tag":"direct"}]}'
+          $start = Send-PipeCommand ('{"cmd":"box_start","config":' + $config + '}')
+          if ($start -notmatch '"box_started"') { throw "unexpected box_start response: $start" }
+
+          $stats = Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json
+          if ($stats.running -ne $true -or $stats.generation -ne 1) { throw "unexpected running stats: $($stats | ConvertTo-Json -Compress)" }
+
+          $logs = Send-PipeCommand '{"cmd":"box_logs","since":0}' | ConvertFrom-Json
+          if (-not ($logs.entries | Where-Object { $_.message -match 'sing-box started' })) {
+            throw "log callback did not deliver 'sing-box started': $($logs | ConvertTo-Json -Compress -Depth 4)"
+          }
+
+          $stop = Send-PipeCommand '{"cmd":"box_stop"}'
+          if ($stop -notmatch '"box_stopped"') { throw "unexpected box_stop response: $stop" }
+          $after = Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json
+          if ($after.running -ne $false -or $after.generation -ne 1) { throw "unexpected stats after stop: $($after | ConvertTo-Json -Compress)" }
+
+          Start-Sleep -Milliseconds 300
+          Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
+
+          $stderr = Get-Content "core_err.log" -Raw -ErrorAction SilentlyContinue
+          if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report)" }
+          Write-Host "OK: $($logs.entries.Count) log lines, stats=$($stats | ConvertTo-Json -Compress)"
+
       - name: Smoke test — tray starts cleanly under ASan
         shell: pwsh
         run: |
@@ -334,4 +390,4 @@ jobs:
         run: cmake --preset ci
 
       - name: clang-tidy
-        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp
