@@ -25,13 +25,31 @@ if (SOVEREIGN_ENABLE_ASAN AND MSVC)
        "${SOVEREIGN_MSVC_BIN_DIR}/clang_rt.asan*dynamic-x86_64.dll")
 endif()
 
+# One copy of the ASan runtime per output directory, made by a single target
+# every executable in that directory depends on. A POST_BUILD copy per
+# executable raced when two of them sat in one directory (tests/unit): Ninja
+# linked both in parallel and one link failed with "permission denied" on the
+# DLL the other was copying at that moment (CI, d60f96a).
 function(sovereign_copy_asan_runtime target)
   if (SOVEREIGN_ENABLE_ASAN AND MSVC)
-    foreach(dll IN LISTS SOVEREIGN_ASAN_RUNTIME_DLLS)
-      add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:${target}>"
-        VERBATIM)
-    endforeach()
+    string(MAKE_C_IDENTIFIER "${CMAKE_CURRENT_BINARY_DIR}" dirId)
+    string(MD5 dirHash "${dirId}")
+    string(SUBSTRING "${dirHash}" 0 12 dirHash)
+    set(copyTarget "sovereign_asan_runtime_${dirHash}")
+    if (NOT TARGET ${copyTarget})
+      set(copies "")
+      foreach(dll IN LISTS SOVEREIGN_ASAN_RUNTIME_DLLS)
+        get_filename_component(dllName "${dll}" NAME)
+        add_custom_command(
+          OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${dllName}"
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "${CMAKE_CURRENT_BINARY_DIR}/${dllName}"
+          DEPENDS "${dll}"
+          VERBATIM)
+        list(APPEND copies "${CMAKE_CURRENT_BINARY_DIR}/${dllName}")
+      endforeach()
+      add_custom_target(${copyTarget} DEPENDS ${copies})
+    endif()
+    add_dependencies(${target} ${copyTarget})
   endif()
 endfunction()
 
