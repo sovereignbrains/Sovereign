@@ -76,22 +76,35 @@ bool WaitForClient(HANDLE pipe, HANDLE stopEvent) {
   return true;
 }
 
+// Reads one whole pipe message. In message mode a message longer than the
+// read buffer does not arrive in one ReadFile: the read completes with
+// ERROR_MORE_DATA and the rest has to be read on — without this loop any
+// request over kPipeBufferSize (a real sing-box config easily is) failed and
+// the client just saw the connection close.
 std::string ReadMessage(HANDLE pipe) {
   std::array<char, sovereign::ipc::kPipeBufferSize> buffer{};
-  OVERLAPPED overlapped{};
-  wil::unique_event_nothrow ioEvent;
-  THROW_IF_FAILED(ioEvent.create(wil::EventOptions::ManualReset));
-  overlapped.hEvent = ioEvent.get();
+  std::string message;
+  for (;;) {
+    OVERLAPPED overlapped{};
+    wil::unique_event_nothrow ioEvent;
+    THROW_IF_FAILED(ioEvent.create(wil::EventOptions::ManualReset));
+    overlapped.hEvent = ioEvent.get();
 
-  const BOOL immediate = ReadFile(pipe, buffer.data(),
-                                   static_cast<DWORD>(buffer.size()), nullptr,
-                                   &overlapped);
-  DWORD bytesRead = 0;
-  if (!immediate) {
-    THROW_LAST_ERROR_IF(GetLastError() != ERROR_IO_PENDING);
+    if (!ReadFile(pipe, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr, &overlapped)) {
+      const DWORD error = GetLastError();
+      THROW_LAST_ERROR_IF(error != ERROR_IO_PENDING && error != ERROR_MORE_DATA);
+    }
+    DWORD bytesRead = 0;
+    const BOOL complete = GetOverlappedResult(pipe, &overlapped, &bytesRead, TRUE);
+    const DWORD resultError = complete ? ERROR_SUCCESS : GetLastError();
+    message.append(buffer.data(), bytesRead);
+    if (complete) {
+      return message;
+    }
+    THROW_WIN32_IF(resultError, resultError != ERROR_MORE_DATA);
+    THROW_WIN32_IF(ERROR_MESSAGE_EXCEEDS_MAX_SIZE,
+                   message.size() > sovereign::ipc::kMaxMessageBytes);
   }
-  THROW_LAST_ERROR_IF(!GetOverlappedResult(pipe, &overlapped, &bytesRead, TRUE));
-  return std::string(buffer.data(), bytesRead);
 }
 
 void WriteMessage(HANDLE pipe, const std::string& message) {
