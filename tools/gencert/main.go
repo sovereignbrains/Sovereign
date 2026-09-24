@@ -3,14 +3,20 @@
 // test fixtures (anytls today, any other TLS-wrapped protocol later)
 // without committing private key material to the repo — dev/test tooling,
 // not part of Sovereign's own TLS code path.
+//
+// With -reality it instead prints a REALITY X25519 key pair in the exact
+// format `sing-box generate reality-keypair` uses (base64 RawURL,
+// `PrivateKey:`/`PublicKey:` lines), for local REALITY fixtures.
 package main
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -24,7 +30,16 @@ func main() {
 	host := flag.String("host", "127.0.0.1", "IP or DNS name the certificate is valid for")
 	certPath := flag.String("out-cert", "cert.pem", "output path for the PEM certificate")
 	keyPath := flag.String("out-key", "key.pem", "output path for the PEM private key")
+	reality := flag.Bool("reality", false, "print a REALITY X25519 key pair instead of writing a certificate")
 	flag.Parse()
+
+	if *reality {
+		if err := printRealityKeyPair(); err != nil {
+			fmt.Fprintln(os.Stderr, "gencert:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := run(*host, *certPath, *keyPath); err != nil {
 		fmt.Fprintln(os.Stderr, "gencert:", err)
@@ -80,4 +95,16 @@ func writePEM(path, blockType string, bytes []byte) error {
 	}
 	defer f.Close()
 	return pem.Encode(f, &pem.Block{Type: blockType, Bytes: bytes})
+}
+
+// X25519 clamps the scalar when it is used, so the raw random bytes are a
+// valid REALITY private key as-is — same as sing-box's wgtypes-based command.
+func printRealityKeyPair() error {
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate x25519 key: %w", err)
+	}
+	fmt.Println("PrivateKey: " + base64.RawURLEncoding.EncodeToString(key.Bytes()))
+	fmt.Println("PublicKey: " + base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()))
+	return nil
 }
