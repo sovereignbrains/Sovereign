@@ -14,12 +14,16 @@
 #include <windows.h>
 #include <iphlpapi.h>
 #include <shellapi.h>
+#include <shobjidl.h>
+
+#include <wil/com.h>
 
 #include <wil/resource.h>
 #include <wil/result.h>
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -32,6 +36,7 @@
 #include <utility>
 #include <vector>
 
+#include "app_rules.h"
 #include "fetch.h"
 #include "icons.h"
 #include "pipe_client.h"
@@ -43,6 +48,7 @@
 namespace {
 
 using sovereign::tray::Action;
+using sovereign::tray::AppsMode;
 using sovereign::tray::Display;
 using sovereign::tray::TraySettings;
 using sovereign::tray::TrayModel;
@@ -55,6 +61,12 @@ constexpr UINT kMenuOpenFolder = 2;
 constexpr UINT kMenuExit = 3;
 constexpr UINT kMenuImport = 4;
 constexpr UINT kMenuRefresh = 5;
+constexpr UINT kMenuModeExclude = 6;
+constexpr UINT kMenuModeInclude = 7;
+constexpr UINT kMenuAddExe = 8;
+constexpr UINT kMenuRemoveApp = 100;   // + index in the list
+constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
+constexpr std::size_t kMenuMaxItems = 250;
 
 // What the subscription server sees: Sovereign runs the official sing-box core
 // (no Mieru), so servers that pick a format by User-Agent - packetlab's does -
@@ -119,6 +131,14 @@ struct View {
   std::wstring noticeTitle;
   std::wstring noticeText;
   bool noticeIsError = false;
+  AppsMode appsMode = AppsMode::Exclude;
+  std::vector<std::string> apps;
+};
+
+// A new per-app setup from the menu.
+struct AppsChange {
+  AppsMode mode = AppsMode::Exclude;
+  std::vector<std::string> list;
 };
 
 std::wstring StatusLine(const View& v) {
@@ -150,10 +170,11 @@ struct Shared {
   std::optional<bool> pendingWant;
   std::optional<std::string> pendingImport;  // a new subscription URL (UTF-8)
   bool pendingRefresh = false;
+  std::optional<AppsChange> pendingApps;
   View view;
   HWND window = nullptr;
 
-  bool HasRequests() const { return pendingWant || pendingImport || pendingRefresh; }
+  bool HasRequests() const { return pendingWant || pendingImport || pendingRefresh || pendingApps; }
 };
 
 Shared& State() {
@@ -201,8 +222,8 @@ std::optional<std::wstring> ForeignSingTun() {
   return std::nullopt;
 }
 
-std::string StartBox() {
-  const auto config = sovereign::tray::LoadConfig();
+// `config` is the effective one: config.json with the per-app rules applied.
+std::string StartBox(const std::optional<std::string>& config) {
   if (!config) {
     return "нет конфига: вставь ссылку-подписку (меню) или положи config.json в %LOCALAPPDATA%\\Sovereign";
   }
@@ -222,12 +243,11 @@ std::string StartBox() {
   return ServiceCall(request, "box_started");
 }
 
-// The hash box_stats reports for config.json, were it running: the service
-// hashes the config as nlohmann dumps it (objects with sorted keys), so the
-// same dump of the same file gives the same hash. Empty when there is no
-// usable config.json - then nothing is enforced.
-std::string ExpectedConfigHash() {
-  const auto config = sovereign::tray::LoadConfig();
+// The hash box_stats reports for the effective config, were it running: the
+// service hashes the config as nlohmann dumps it (objects with sorted keys),
+// so the same dump gives the same hash. Empty when there is no usable
+// config.json - then nothing is enforced.
+std::string ExpectedConfigHash(const std::optional<std::string>& config) {
   if (!config) {
     return {};
   }
@@ -257,9 +277,9 @@ std::optional<sovereign::tray::Stats> PollStats() {
   };
 }
 
-void Execute(TrayModel& model, Action action) {
+void Execute(TrayModel& model, Action action, const std::optional<std::string>& config) {
   if (action == Action::Start) {
-    model.OnStartResult(StartBox(), TrayModel::Clock::now());
+    model.OnStartResult(StartBox(config), TrayModel::Clock::now());
   } else if (action == Action::Stop) {
     model.OnStopResult(StopBox());
   }
@@ -275,17 +295,19 @@ class Worker {
     while (!stop.stop_requested()) {
       std::optional<bool> want;
       std::optional<std::string> import;
+      std::optional<AppsChange> apps;
       bool refresh = false;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
+        apps = std::exchange(shared.pendingApps, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
         refresh = std::exchange(shared.pendingRefresh, false);
       }
       if (want) {
         settings_.wantOn = *want;
         Save();
-        Execute(model_, model_.SetWantOn(*want, TrayModel::Clock::now()));
+        Execute(model_, model_.SetWantOn(*want, TrayModel::Clock::now()), EffectiveConfig());
       }
       if (import) {
         settings_.subscriptionUrl = *import;
@@ -295,8 +317,14 @@ class Worker {
       } else if (refresh || RefreshDue()) {
         Refresh();
       }
-      model_.SetExpectedConfig(ExpectedConfigHash());
-      Execute(model_, model_.OnPoll(PollStats(), TrayModel::Clock::now()));
+      if (apps) {
+        settings_.appsMode = apps->mode;
+        settings_.apps = std::move(apps->list);
+        Save();  // the effective config changes: the model restarts the box
+      }
+      const auto config = EffectiveConfig();
+      model_.SetExpectedConfig(ExpectedConfigHash(config));
+      Execute(model_, model_.OnPoll(PollStats(), TrayModel::Clock::now()), config);
       Publish();
 
       std::unique_lock lock(shared.mutex);
@@ -305,6 +333,15 @@ class Worker {
   }
 
  private:
+  // config.json with the per-app rules applied - what the box must run.
+  std::optional<std::string> EffectiveConfig() const {
+    const auto config = sovereign::tray::LoadConfig();
+    if (!config) {
+      return std::nullopt;
+    }
+    return sovereign::tray::ApplyAppRules(*config, settings_.appsMode, settings_.apps);
+  }
+
   void Save() {
     try {
       sovereign::tray::SaveSettings(settings_);
@@ -393,6 +430,8 @@ class Worker {
       v.noticeTitle = noticeTitle_;
       v.noticeText = noticeText_;
       v.noticeIsError = noticeIsError_;
+      v.appsMode = settings_.appsMode;
+      v.apps = settings_.apps;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -518,6 +557,114 @@ void RequestRefresh() {
   Wake();
 }
 
+void RequestApps(AppsChange change) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingApps = std::move(change);
+  }
+  Wake();
+}
+
+bool SameName(const std::string& a, const std::string& b) {
+  return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+// Exe names of the programs with a visible window - what "add from running"
+// offers - sorted, without duplicates and without the ones already listed.
+std::vector<std::string> RunningApps(const std::vector<std::string>& listed) {
+  std::vector<std::string> names;
+  EnumWindows(
+      [](HWND w, LPARAM out) -> BOOL {
+        if (!IsWindowVisible(w) || GetWindowTextLengthW(w) == 0 || GetWindow(w, GW_OWNER) != nullptr) {
+          return TRUE;
+        }
+        DWORD pid = 0;
+        GetWindowThreadProcessId(w, &pid);
+        const wil::unique_handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+        if (!process || pid == GetCurrentProcessId()) {
+          return TRUE;
+        }
+        wchar_t path[MAX_PATH]{};
+        DWORD size = MAX_PATH;
+        if (QueryFullProcessImageNameW(process.get(), 0, path, &size)) {
+          const std::wstring full(path, size);
+          // EnumWindows hands its context back as an LPARAM - the cast is the API's shape.
+          reinterpret_cast<std::vector<std::string>*>(out)->push_back(  // NOLINT(performance-no-int-to-ptr)
+              Narrow(full.substr(full.find_last_of(L'\\') + 1)));
+        }
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&names));
+  std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
+    return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_LESS_THAN;
+  });
+  names.erase(std::unique(names.begin(), names.end(), SameName), names.end());
+  std::erase_if(names, [&](const std::string& n) {
+    return std::any_of(listed.begin(), listed.end(), [&](const std::string& l) { return SameName(n, l); });
+  });
+  if (names.size() > kMenuMaxItems) {
+    names.resize(kMenuMaxItems);
+  }
+  return names;
+}
+
+// "Add exe...": the exe name of a file the user picks (the file dialog is
+// just a convenient way to spell it right; only the name is kept).
+std::optional<std::string> PickExe(HWND window) {
+  try {
+    const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
+    const COMDLG_FILTERSPEC filter{L"Программы", L"*.exe"};
+    THROW_IF_FAILED(dialog->SetFileTypes(1, &filter));
+    THROW_IF_FAILED(dialog->SetTitle(L"Приложение для правила Sovereign"));
+    const HRESULT shown = dialog->Show(window);
+    if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+      return std::nullopt;
+    }
+    THROW_IF_FAILED(shown);
+    wil::com_ptr<IShellItem> item;
+    THROW_IF_FAILED(dialog->GetResult(&item));
+    wil::unique_cotaskmem_string name;
+    THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &name));
+    const std::wstring full(name.get());
+    return Narrow(full.substr(full.find_last_of(L'\\') + 1));
+  } catch (...) {
+    LOG_CAUGHT_EXCEPTION_MSG("the file dialog failed");
+    return std::nullopt;
+  }
+}
+
+void AppendAppsMenu(HMENU parent, const View& view, const std::vector<std::string>& running) {
+  HMENU apps = CreatePopupMenu();
+  if (apps == nullptr) {
+    return;
+  }
+  const bool exclude = view.appsMode == AppsMode::Exclude;
+  AppendMenuW(apps, MF_STRING | (exclude ? MF_CHECKED : 0), kMenuModeExclude, L"Все через VPN, кроме списка");
+  AppendMenuW(apps, MF_STRING | (exclude ? 0 : MF_CHECKED), kMenuModeInclude, L"Только список через VPN");
+  AppendMenuW(apps, MF_SEPARATOR, 0, nullptr);
+  if (view.apps.empty()) {
+    AppendMenuW(apps, MF_STRING | MF_GRAYED, 0, L"список пуст — всё через VPN");
+  }
+  for (std::size_t i = 0; i < view.apps.size() && i < kMenuMaxItems; ++i) {
+    AppendMenuW(apps, MF_STRING, kMenuRemoveApp + static_cast<UINT>(i), (Widen(view.apps[i]) + L"   ✕").c_str());
+  }
+  AppendMenuW(apps, MF_SEPARATOR, 0, nullptr);
+  if (HMENU add = CreatePopupMenu()) {
+    for (std::size_t i = 0; i < running.size(); ++i) {
+      AppendMenuW(add, MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i]).c_str());
+    }
+    if (running.empty()) {
+      AppendMenuW(add, MF_STRING | MF_GRAYED, 0, L"нет подходящих окон");
+    }
+    AppendMenuW(apps, MF_POPUP, reinterpret_cast<UINT_PTR>(add), L"Добавить из запущенных");
+  }
+  AppendMenuW(apps, MF_STRING, kMenuAddExe, L"Добавить exe…");
+  // Destroying the parent menu destroys the attached submenus.
+  AppendMenuW(parent, MF_POPUP, reinterpret_cast<UINT_PTR>(apps),
+              view.apps.empty() ? L"Приложения" : std::format(L"Приложения ({})", view.apps.size()).c_str());
+}
+
 void ShowMenu(HWND window) {
   View view;
   {
@@ -534,6 +681,8 @@ void ShowMenu(HWND window) {
   AppendMenuW(menu.get(), MF_STRING, kMenuToggle, view.wantOn ? L"Выключить" : L"Включить");
   AppendMenuW(menu.get(), MF_STRING, kMenuImport, L"Вставить ссылку-подписку из буфера");
   AppendMenuW(menu.get(), MF_STRING | (view.hasSubscription ? 0 : MF_GRAYED), kMenuRefresh, L"Обновить подписку");
+  const std::vector<std::string> running = RunningApps(view.apps);
+  AppendAppsMenu(menu.get(), view, running);
   AppendMenuW(menu.get(), MF_STRING, kMenuOpenFolder, L"Открыть папку настроек");
   AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu.get(), MF_STRING, kMenuExit, L"Выход (соединение остаётся)");
@@ -547,7 +696,32 @@ void ShowMenu(HWND window) {
       TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, window, nullptr));
   PostMessageW(window, WM_NULL, 0, 0);
 
+  if (command >= kMenuRemoveApp && command < kMenuRemoveApp + view.apps.size()) {
+    AppsChange change{view.appsMode, view.apps};
+    change.list.erase(change.list.begin() + (command - kMenuRemoveApp));
+    RequestApps(std::move(change));
+    return;
+  }
+  if (command >= kMenuAddRunning && command < kMenuAddRunning + running.size()) {
+    AppsChange change{view.appsMode, view.apps};
+    change.list.push_back(running[command - kMenuAddRunning]);
+    RequestApps(std::move(change));
+    return;
+  }
   switch (command) {
+    case kMenuModeExclude:
+    case kMenuModeInclude:
+      RequestApps({command == kMenuModeInclude ? AppsMode::Include : AppsMode::Exclude, view.apps});
+      break;
+    case kMenuAddExe:
+      if (const auto exe = PickExe(window)) {
+        if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, *exe); })) {
+          AppsChange change{view.appsMode, view.apps};
+          change.list.push_back(*exe);
+          RequestApps(std::move(change));
+        }
+      }
+      break;
     case kMenuToggle:
       RequestToggle();
       break;
@@ -613,6 +787,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
+  // The file dialog ("add exe") is COM, on this thread.
+  const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
   // One tray per session: a second one would fight the first over the box.
   const wil::unique_mutex_nothrow single(CreateMutexW(nullptr, FALSE, L"Local\\SovereignTray"));
   if (!single || GetLastError() == ERROR_ALREADY_EXISTS) {

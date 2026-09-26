@@ -72,6 +72,16 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("updateHours"); v != json.end() && v->is_number_integer()) {
     settings.updateHours = std::clamp(v->get<int>(), 1, 24 * 7);
   }
+  if (const auto v = json.find("appsMode"); v != json.end() && v->is_string()) {
+    settings.appsMode = ParseAppsMode(v->get<std::string>());
+  }
+  if (const auto v = json.find("apps"); v != json.end() && v->is_array()) {
+    for (const auto& app : *v) {
+      if (app.is_string() && !app.get<std::string>().empty()) {
+        settings.apps.push_back(app.get<std::string>());
+      }
+    }
+  }
   return settings;
 }
 
@@ -81,6 +91,8 @@ void SaveSettings(const TraySettings& settings) {
   json["subscriptionUrl"] = settings.subscriptionUrl;
   json["lastRefresh"] = settings.lastRefresh;
   json["updateHours"] = settings.updateHours;
+  json["appsMode"] = std::string(AppsModeName(settings.appsMode));
+  json["apps"] = settings.apps;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }
 

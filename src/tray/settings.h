@@ -4,6 +4,9 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
+
+#include "app_rules.h"
 
 namespace sovereign::tray {
 
@@ -12,7 +15,8 @@ namespace sovereign::tray {
 // Everything lives in %LOCALAPPDATA%\Sovereign, which only this user (and
 // SYSTEM/admins) can read - it holds a config with passwords and keys.
 //
-//   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours"}
+//   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours",
+//                 "appsMode", "apps"}
 //   config.json  the sing-box config box_start sends: written by the
 //                subscription refresh, or by hand when there's no subscription
 
@@ -23,6 +27,8 @@ struct TraySettings {
   std::string subscriptionUrl;       // UTF-8; empty = none, config.json is by hand
   std::int64_t lastRefresh = 0;      // unix seconds of the last successful refresh
   int updateHours = 12;              // from Profile-Update-Interval, else the default
+  AppsMode appsMode = AppsMode::Exclude;  // per-app routing (app_rules.h)
+  std::vector<std::string> apps;          // exe names, as sing-box's process_name
 };
 
 // A missing or unreadable tray.json gives the defaults: a broken settings file
