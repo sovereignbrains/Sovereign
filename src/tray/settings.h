@@ -16,7 +16,7 @@ namespace sovereign::tray {
 // SYSTEM/admins) can read - it holds a config with passwords and keys.
 //
 //   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours",
-//                 "appsMode", "apps"}
+//                 "appsMode", "apps", "protocol"}
 //   config.json  the sing-box config box_start sends: written by the
 //                subscription refresh, or by hand when there's no subscription
 
@@ -29,6 +29,7 @@ struct TraySettings {
   int updateHours = 12;              // from Profile-Update-Interval, else the default
   AppsMode appsMode = AppsMode::Exclude;  // per-app routing (app_rules.h)
   std::vector<std::string> apps;          // exe names, as sing-box's process_name
+  std::string protocol;  // the proxy selector's default to use; empty = the config's (protocol_choice.h)
 };
 
 // A missing or unreadable tray.json gives the defaults: a broken settings file

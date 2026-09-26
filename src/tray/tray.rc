@@ -1,0 +1,6 @@
+// The app icon (assets/sovereign.ico, built by tools/icon/make_ico.ps1):
+// Explorer shows it for the exe; icons.cpp puts the state dot on it for the
+// tray; the flyout draws it in its header.
+#include "resource.h"
+
+IDI_SOVEREIGN ICON "../../assets/sovereign.ico"

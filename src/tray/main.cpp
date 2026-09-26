@@ -33,11 +33,13 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "app_rules.h"
 #include "fetch.h"
+#include "protocol_choice.h"
 #include "flyout.h"
 #include "icons.h"
 #include "pipe_client.h"
@@ -57,10 +59,6 @@ using sovereign::tray::TrayModel;
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kViewChangedMessage = WM_APP + 2;
 constexpr UINT kTrayIconId = 1;
-constexpr UINT kMenuModeExclude = 6;
-constexpr UINT kMenuModeInclude = 7;
-constexpr UINT kMenuAddExe = 8;
-constexpr UINT kMenuRemoveApp = 100;   // + index in the list
 constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
 constexpr std::size_t kMenuMaxItems = 250;
 
@@ -129,9 +127,11 @@ struct View {
   bool noticeIsError = false;
   AppsMode appsMode = AppsMode::Exclude;
   std::vector<std::string> apps;
+  std::vector<std::string> protocols;  // the config selector's options
+  int protocol = -1;                   // the one in use
 };
 
-// A new per-app setup from the menu.
+// A new per-app setup from the flyout.
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
   std::vector<std::string> list;
@@ -157,10 +157,13 @@ struct Shared {
   std::optional<std::string> pendingImport;  // a new subscription URL (UTF-8)
   bool pendingRefresh = false;
   std::optional<AppsChange> pendingApps;
+  std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   View view;
   HWND window = nullptr;
 
-  bool HasRequests() const { return pendingWant || pendingImport || pendingRefresh || pendingApps; }
+  bool HasRequests() const {
+    return pendingWant || pendingImport || pendingRefresh || pendingApps || pendingProtocol;
+  }
 };
 
 Shared& State() {
@@ -282,11 +285,13 @@ class Worker {
       std::optional<bool> want;
       std::optional<std::string> import;
       std::optional<AppsChange> apps;
+      std::optional<std::string> protocol;
       bool refresh = false;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
         apps = std::exchange(shared.pendingApps, std::nullopt);
+        protocol = std::exchange(shared.pendingProtocol, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
         refresh = std::exchange(shared.pendingRefresh, false);
       }
@@ -308,6 +313,10 @@ class Worker {
         settings_.apps = std::move(apps->list);
         Save();  // the effective config changes: the model restarts the box
       }
+      if (protocol) {
+        settings_.protocol = *protocol;
+        Save();  // likewise
+      }
       const auto config = EffectiveConfig();
       model_.SetExpectedConfig(ExpectedConfigHash(config));
       Execute(model_, model_.OnPoll(PollStats(), TrayModel::Clock::now()), config);
@@ -319,13 +328,34 @@ class Worker {
   }
 
  private:
-  // config.json with the per-app rules applied - what the box must run.
+  // config.json with the protocol pick and the per-app rules applied - what
+  // the box must run.
   std::optional<std::string> EffectiveConfig() const {
     const auto config = sovereign::tray::LoadConfig();
     if (!config) {
       return std::nullopt;
     }
-    return sovereign::tray::ApplyAppRules(*config, settings_.appsMode, settings_.apps);
+    return sovereign::tray::ApplyAppRules(sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol),
+                                          settings_.appsMode, settings_.apps);
+  }
+
+  // The selector's options and which one the box uses: the user's pick if
+  // the config still has it, else the config's default.
+  std::pair<std::vector<std::string>, int> Protocols() const {
+    const auto config = sovereign::tray::LoadConfig();
+    if (!config) {
+      return {{}, -1};
+    }
+    const auto choices = sovereign::tray::FindProtocolChoices(*config);
+    const auto find = [&](const std::string& tag) {
+      const auto it = std::find(choices.options.begin(), choices.options.end(), tag);
+      return it == choices.options.end() ? -1 : static_cast<int>(it - choices.options.begin());
+    };
+    int current = settings_.protocol.empty() ? -1 : find(settings_.protocol);
+    if (current < 0) {
+      current = find(choices.configDefault);
+    }
+    return {choices.options, current};
   }
 
   void Save() {
@@ -399,6 +429,7 @@ class Worker {
 
   void Publish() {
     auto& shared = State();
+    auto protocols = Protocols();  // reads config.json: outside the lock
     HWND window = nullptr;
     {
       const std::scoped_lock lock(shared.mutex);
@@ -418,6 +449,7 @@ class Worker {
       v.noticeIsError = noticeIsError_;
       v.appsMode = settings_.appsMode;
       v.apps = settings_.apps;
+      std::tie(v.protocols, v.protocol) = protocols;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -620,72 +652,58 @@ std::optional<std::string> PickExe(HWND window) {
   }
 }
 
-// The apps menu the flyout's "Приложения" row opens: the mode, the list (a
-// click removes), "add from running", "add exe…".
-void FillAppsMenu(HMENU menu, const View& view, const std::vector<std::string>& running) {
-  const bool exclude = view.appsMode == AppsMode::Exclude;
-  AppendMenuW(menu, MF_STRING | (exclude ? MF_CHECKED : 0), kMenuModeExclude, L"Все через VPN, кроме списка");
-  AppendMenuW(menu, MF_STRING | (exclude ? 0 : MF_CHECKED), kMenuModeInclude, L"Только список через VPN");
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  if (view.apps.empty()) {
-    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"список пуст — всё через VPN");
-  }
-  for (std::size_t i = 0; i < view.apps.size() && i < kMenuMaxItems; ++i) {
-    AppendMenuW(menu, MF_STRING, kMenuRemoveApp + static_cast<UINT>(i), (Widen(view.apps[i]) + L"   ✕").c_str());
-  }
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  // Attached submenus are destroyed with the menu.
-  if (HMENU add = CreatePopupMenu()) {
-    for (std::size_t i = 0; i < running.size(); ++i) {
-      AppendMenuW(add, MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i]).c_str());
-    }
-    if (running.empty()) {
-      AppendMenuW(add, MF_STRING | MF_GRAYED, 0, L"нет подходящих окон");
-    }
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(add), L"Добавить из запущенных");
-  }
-  AppendMenuW(menu, MF_STRING, kMenuAddExe, L"Добавить exe…");
-}
-
 View CurrentView() {
   const std::scoped_lock lock(State().mutex);
   return State().view;
 }
 
-void ShowAppsMenu(HWND window, POINT at) {
+// "Из запущенных": a menu of the programs with a window, opened where the
+// flyout's button was; the pick is added to the list.
+void AddFromRunning(HWND window, POINT at) {
   const View view = CurrentView();
   const std::vector<std::string> running = RunningApps(view.apps);
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
     return;
   }
-  FillAppsMenu(menu.get(), view, running);
+  for (std::size_t i = 0; i < running.size(); ++i) {
+    AppendMenuW(menu.get(), MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i]).c_str());
+  }
+  if (running.empty()) {
+    AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"нет подходящих окон");
+  }
   // Without the foreground switch the menu doesn't close on an outside click
   // (documented TrackPopupMenu behavior for notification-area UI).
   SetForegroundWindow(window);
   const auto command = static_cast<UINT>(
-      TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, at.x, at.y, 0, window, nullptr));
+      TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN, at.x, at.y, 0, window,
+                     nullptr));
   PostMessageW(window, WM_NULL, 0, 0);
-
-  if (command >= kMenuRemoveApp && command < kMenuRemoveApp + view.apps.size()) {
-    AppsChange change{view.appsMode, view.apps};
-    change.list.erase(change.list.begin() + (command - kMenuRemoveApp));
-    RequestApps(std::move(change));
-  } else if (command >= kMenuAddRunning && command < kMenuAddRunning + running.size()) {
+  if (command >= kMenuAddRunning && command < kMenuAddRunning + running.size()) {
     AppsChange change{view.appsMode, view.apps};
     change.list.push_back(running[command - kMenuAddRunning]);
     RequestApps(std::move(change));
-  } else if (command == kMenuModeExclude || command == kMenuModeInclude) {
-    RequestApps({command == kMenuModeInclude ? AppsMode::Include : AppsMode::Exclude, view.apps});
-  } else if (command == kMenuAddExe) {
-    if (const auto exe = PickExe(window)) {
-      if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, *exe); })) {
-        AppsChange change{view.appsMode, view.apps};
-        change.list.push_back(*exe);
-        RequestApps(std::move(change));
-      }
+  }
+}
+
+void AddExe(HWND window) {
+  const View view = CurrentView();
+  if (const auto exe = PickExe(window)) {
+    if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, *exe); })) {
+      AppsChange change{view.appsMode, view.apps};
+      change.list.push_back(*exe);
+      RequestApps(std::move(change));
     }
   }
+}
+
+void RequestProtocol(std::string tag) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingProtocol = std::move(tag);
+  }
+  Wake();
 }
 
 // What the flyout shows, from the worker's view.
@@ -702,9 +720,14 @@ sovereign::tray::FlyoutContent FlyoutFrom(const View& v) {
   } else {
     c.subscription = v.lastRefresh ? LocalTime(v.lastRefresh) : L"ещё не загружена";
   }
-  const wchar_t* mode = v.appsMode == AppsMode::Exclude ? L"кроме списка" : L"только список";
-  c.apps = v.apps.empty() ? std::wstring(L"Приложения · всё через VPN")
-                          : std::format(L"Приложения ({}) · {}", v.apps.size(), mode);
+  c.appsInclude = v.appsMode == AppsMode::Include;
+  for (const std::string& app : v.apps) {
+    c.apps.push_back(Widen(app));
+  }
+  for (const std::string& p : v.protocols) {
+    c.protocols.push_back(Widen(p));
+  }
+  c.protocol = v.protocol;
   return c;
 }
 
@@ -726,8 +749,9 @@ RECT TrayIconRect(HWND window) {
   return rect;
 }
 
-void OnFlyoutCommand(HWND window, sovereign::tray::FlyoutCommand command, POINT anchor) {
+void OnFlyoutCommand(HWND window, sovereign::tray::FlyoutCommand command, const sovereign::tray::FlyoutArgs& args) {
   using sovereign::tray::FlyoutCommand;
+  const View view = CurrentView();
   switch (command) {
     case FlyoutCommand::Toggle:
       RequestToggle();
@@ -738,8 +762,26 @@ void OnFlyoutCommand(HWND window, sovereign::tray::FlyoutCommand command, POINT 
     case FlyoutCommand::RefreshSubscription:
       RequestRefresh();
       break;
-    case FlyoutCommand::Apps:
-      ShowAppsMenu(window, anchor);
+    case FlyoutCommand::SetAppsMode:
+      RequestApps({args.index == 1 ? AppsMode::Include : AppsMode::Exclude, view.apps});
+      break;
+    case FlyoutCommand::RemoveApp:
+      if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.apps.size()) {
+        AppsChange change{view.appsMode, view.apps};
+        change.list.erase(change.list.begin() + args.index);
+        RequestApps(std::move(change));
+      }
+      break;
+    case FlyoutCommand::AddRunning:
+      AddFromRunning(window, args.anchor);
+      break;
+    case FlyoutCommand::AddExe:
+      AddExe(window);
+      break;
+    case FlyoutCommand::SetProtocol:
+      if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.protocols.size()) {
+        RequestProtocol(view.protocols[static_cast<std::size_t>(args.index)]);
+      }
       break;
     case FlyoutCommand::OpenFolder:
       try {
@@ -835,8 +877,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     State().view.wantOn = settings.wantOn;
   }
 
-  sovereign::tray::Flyout flyout(instance, [window](sovereign::tray::FlyoutCommand command, POINT anchor) {
-    OnFlyoutCommand(window, command, anchor);
+  sovereign::tray::Flyout flyout(instance, [window](sovereign::tray::FlyoutCommand command,
+                                                   const sovereign::tray::FlyoutArgs& args) {
+    OnFlyoutCommand(window, command, args);
   });
   g_flyout = &flyout;
 

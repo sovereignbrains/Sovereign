@@ -82,6 +82,9 @@ TraySettings LoadSettings() {
       }
     }
   }
+  if (const auto v = json.find("protocol"); v != json.end() && v->is_string()) {
+    settings.protocol = v->get<std::string>();
+  }
   return settings;
 }
 
@@ -93,6 +96,7 @@ void SaveSettings(const TraySettings& settings) {
   json["updateHours"] = settings.updateHours;
   json["appsMode"] = std::string(AppsModeName(settings.appsMode));
   json["apps"] = settings.apps;
+  json["protocol"] = settings.protocol;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }
 
