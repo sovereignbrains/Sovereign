@@ -3,7 +3,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <string_view>
 #include <utility>
 
 namespace sovereign::service {
@@ -72,25 +74,56 @@ Json LogsResponse(const LogRing& log, std::uint64_t since) {
 }  // namespace
 
 ControlHandler::ControlHandler(ICore* core, const LogRing& coreLog,
-                               std::optional<std::string>& lastConfig)
-    : core_(core), coreLog_(coreLog), lastConfig_(lastConfig) {}
+                               std::optional<std::string>& lastConfig, CommandObserver observer)
+    : core_(core), coreLog_(coreLog), lastConfig_(lastConfig), observer_(std::move(observer)) {}
 
 std::string ControlHandler::Handle(const std::string& request) {
+  const auto started = std::chrono::steady_clock::now();
+  Outcome outcome;
+  std::string response = Dispatch(request, outcome);
+  if (observer_) {
+    observer_(CommandRecord{
+        .cmd = outcome.cmd,
+        .requestBytes = request.size(),
+        .error = outcome.error,
+        .duration = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started),
+    });
+  }
+  return response;
+}
+
+std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcome) {
+  const auto fail = [&outcome](std::string message) {
+    outcome.error = std::move(message);
+    return Dump(Error(outcome.error));
+  };
+
   Json parsed;
   try {
     parsed = Json::parse(request);
   } catch (const Json::parse_error&) {
-    return Dump(Error("invalid json"));
+    return fail("invalid json");
   }
   if (!parsed.is_object()) {
-    return Dump(Error("request must be a json object"));
+    return fail("request must be a json object");
   }
 
+  // outcome.cmd only ever points at these literals, never at request text.
   const std::string cmd = parsed.value("cmd", "");
+  for (const std::string_view known : {"box_ping", "box_start", "box_stop", "box_stats", "box_logs"}) {
+    if (cmd == known) {
+      outcome.cmd = known;
+    }
+  }
+  if (outcome.cmd == "invalid") {
+    outcome.cmd = "echo";
+  }
+
   const bool isCoreCommand = cmd == "box_ping" || cmd == "box_start" || cmd == "box_stop" ||
                              cmd == "box_stats";
   if (isCoreCommand && core_ == nullptr) {
-    return Dump(Error("gocore not loaded"));
+    return fail("gocore not loaded");
   }
 
   if (cmd == "box_ping") {
@@ -102,7 +135,7 @@ std::string ControlHandler::Handle(const std::string& request) {
 
   if (cmd == "box_start") {
     if (!parsed.contains("config")) {
-      return Dump(Error("missing config field"));
+      return fail("missing config field");
     }
     // "config" carries a full sing-box config document as a nested JSON
     // object (not a pre-serialized string) — natural for a JSON-over-pipe
@@ -111,7 +144,7 @@ std::string ControlHandler::Handle(const std::string& request) {
     const std::string configJson = parsed.at("config").dump();
     const std::string error = core_->Start(configJson);
     if (!error.empty()) {
-      return Dump(Error(error));
+      return fail(error);
     }
     lastConfig_ = configJson;
     Json response;
@@ -122,7 +155,7 @@ std::string ControlHandler::Handle(const std::string& request) {
   if (cmd == "box_stop") {
     const std::string error = core_->Stop();
     if (!error.empty()) {
-      return Dump(Error(error));
+      return fail(error);
     }
     lastConfig_.reset();
     Json response;
@@ -139,7 +172,7 @@ std::string ControlHandler::Handle(const std::string& request) {
     // (with whatever was logged) even when no core is loaded.
     const Json since = parsed.value("since", Json(0));
     if (!since.is_number_unsigned() && !(since.is_number_integer() && since.get<std::int64_t>() >= 0)) {
-      return Dump(Error("since must be a non-negative integer"));
+      return fail("since must be a non-negative integer");
     }
     return Dump(LogsResponse(coreLog_, since.get<std::uint64_t>()));
   }

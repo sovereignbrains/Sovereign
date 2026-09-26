@@ -153,10 +153,10 @@ void PipeServer::Run(const std::stop_token& stopToken) {
       // клиент успеет прочитать ответ (клиент увидит EOF/0 байт).
       FlushFileBuffers(pipe.get());
     } catch (...) {
-      // Один клиент не должен ронять сервер целиком; соединение просто
-      // закрывается ниже через DisconnectNamedPipe. OutputDebugString — не
-      // std::cerr, потому что под SCM у процесса нет консоли.
-      OutputDebugStringW(L"sovereign-core: pipe client request failed\n");
+      // One bad client must not take the server down; the instance is reset
+      // below by DisconnectNamedPipe. WIL reports it to ETW (trace.h, keyword
+      // kFailures) with the HRESULT - there is no console under SCM.
+      LOG_CAUGHT_EXCEPTION_MSG("pipe client request failed");
     }
 
     DisconnectNamedPipe(pipe.get());

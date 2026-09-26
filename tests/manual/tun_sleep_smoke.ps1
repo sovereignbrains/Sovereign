@@ -17,8 +17,9 @@
     3. before sleep: default route through our TUN, exit IP = the proxy's
     4. arm a wake timer (SetWaitableTimer, fResume) and SetSuspendState
     5. after wake: poll until traffic flows again through the TUN (AC5),
-       check adapter + default route (AC4) and the service's power-events log
-       (suspend -> resume -> box_stop OK -> box_start OK)
+       check adapter + default route (AC4) and the service's ETW power events,
+       recorded by this script's own session (suspend -> resume -> restart_stop
+       -> restart_start, none failed)
     6. box_stop, stop SovereignCore, restart sing-box-daemon, check the
        machine's own internet is back
 
@@ -48,6 +49,10 @@ $logDir = "C:\ProgramData\Sovereign"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $transcript = Join-Path $logDir "sleep-test-$stamp.log"
 $resultFile = Join-Path $logDir "sleep-test-$stamp.result.json"
+$sovtrace = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "tools\trace\sovtrace.ps1"
+$traceSession = "Sovereign-SleepTest"
+$traceFile = Join-Path $logDir "sleep-test-$stamp.etl"
+$traceStarted = $false
 Start-Transcript -Path $transcript | Out-Null
 $result = [ordered]@{ started = (Get-Date).ToString("s"); checks = [ordered]@{} }
 function Step([string]$m) { Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $m) }
@@ -129,7 +134,10 @@ try {
     Start-Sleep 2
   }
 
-  # 2. Our box.
+  # 2. Our box. The service's power events are ETW (src/service/trace.h): record
+  # them into this run's own file, decoded after the wake.
+  & $sovtrace start -Name $traceSession -Path $traceFile -Keywords default
+  $traceStarted = $true
   if ((Get-Service SovereignCore).Status -ne "Running") { Start-Service SovereignCore; Start-Sleep 1 }
   else { Send-PipeCommand '{"cmd":"box_stop"}' | Out-Null }   # a box left over from an aborted run
   $config = @{
@@ -225,12 +233,13 @@ try {
   Check "after: DNS through the TUN" ([bool]$dns) "$($dns.IPAddress)"
   $genAfter = (Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json).generation
   Check "box was restarted on resume (generation changed)" ($genAfter -ne $genBefore) "generation $genBefore -> $genAfter"
-  $power = Get-Content (Join-Path $logDir "power-events.log") -ErrorAction SilentlyContinue |
-    Where-Object { $_ -match '^\[(.+?)\]' -and [datetime]::SpecifyKind([datetime]$Matches[1], "Utc") -ge $suspendAt.ToUniversalTime().AddSeconds(-5) }   # the service logs UTC
-  $power | ForEach-Object { Write-Host "    $_" }
-  $seq = ($power -join "`n")
-  Check "power log: suspend -> resume -> box_stop OK -> box_start OK" `
-    ($seq -match 'PBT_APMSUSPEND[\s\S]*PBT_APMRESUMEAUTOMATIC[\s\S]*resume box_stop OK[\s\S]*resume box_start OK') ""
+  & $sovtrace stop -Name $traceSession
+  $traceStarted = $false
+  $power = @(& $sovtrace dump -Path $traceFile -AsObject | Where-Object { $_.Event -in 'Power', 'PowerFailed' })
+  $power | ForEach-Object { Write-Host ("    {0:HH:mm:ss} {1} {2} {3}" -f $_.Time, $_.Event, $_.Fields.Action, $_.Fields.Error) }
+  $seq = ($power | ForEach-Object { "$($_.Event):$($_.Fields.Action)" }) -join ' '
+  Check "power events: suspend -> resume -> restart_stop -> restart_start, none failed" `
+    ($seq -match 'Power:suspend Power:resume Power:restart_stop Power:restart_start' -and $seq -notmatch 'PowerFailed') $seq
 } catch {
   Write-Host "ERROR: $_"
   $result.error = "$_"
@@ -239,6 +248,7 @@ try {
   try { [Sov.Power]::SetThreadExecutionState([uint32]0x80000000L) | Out-Null } catch { Write-Host "execution state: $_" }   # back to normal sleep rules
   # Every step on its own: whatever fails, the production client must come back
   # (25.09.2026: one throwing line here left sing-box-daemon stopped).
+  if ($traceStarted) { try { & $sovtrace stop -Name $traceSession } catch { Write-Host "trace stop: $_" } }
   try { Send-PipeCommand '{"cmd":"box_stop"}' | Out-Null } catch { Write-Host "box_stop: $_" }
   try { Stop-Service SovereignCore -Force -ErrorAction Stop } catch { Write-Host "stop SovereignCore: $_" }
   if ($prodWasRunning) {

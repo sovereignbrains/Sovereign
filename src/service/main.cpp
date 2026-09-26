@@ -3,10 +3,6 @@
 #include <wil/resource.h>
 #include <wil/result.h>
 
-#include <chrono>
-#include <filesystem>
-#include <format>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -20,6 +16,9 @@
 #include "log_ring.h"
 #include "pipe_server.h"
 #include "protocol.h"
+#include "trace.h"
+
+namespace trace = sovereign::service::trace;
 
 namespace {
 
@@ -64,12 +63,15 @@ void TryLoadCore(ServiceState& state) {
   try {
     state.core = std::make_unique<sovereign::service::GoCore>(
         sovereign::service::ResolveGoCoreDllPath());
+    // The ring feeds the tray (box_logs); ETW keeps them after the fact.
     state.core->SetLogSink(
         [&log = state.coreLog](sovereign::service::LogLevel level, std::string_view message) {
           log.Append(level, message);
+          trace::CoreLog(level, message);
         });
+    trace::CoreLoaded();
   } catch (const wil::ResultException& e) {
-    std::wcerr << L"GoCore недоступен: " << e.what() << L"\n";
+    trace::CoreLoadFailed(e.GetErrorCode(), e.what());
   }
 }
 
@@ -86,26 +88,6 @@ void ReportStatus(SERVICE_STATUS_HANDLE handle, DWORD state,
   SetServiceStatus(handle, &status);
 }
 
-// OutputDebugStringW needs a live listener (DebugView) attached at the exact
-// moment the message is emitted — useless for proving what happened while
-// the machine was asleep with nobody watching. A plain file survives that;
-// %ProgramData% is writable by the SYSTEM service and, unlike a restricted
-// install directory, still readable by a non-elevated session afterward.
-void LogPowerEvent(const std::string& message) {
-  const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-  const std::string line = std::format("[{:%Y-%m-%d %H:%M:%S}] {}\n", now, message);
-  OutputDebugStringA(line.c_str());
-  try {
-    std::filesystem::create_directories(L"C:\\ProgramData\\Sovereign");
-    std::ofstream log("C:\\ProgramData\\Sovereign\\power-events.log", std::ios::app);
-    log << line;
-  } catch (...) {
-    // Best-effort: a logging failure must not take the power-event path down,
-    // but still surface it somewhere a live DebugView session would catch.
-    OutputDebugStringA("sovereign-core: power-events.log write failed\n");
-  }
-}
-
 DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) {
   auto& state = ServiceState::Instance();
   switch (control) {
@@ -117,11 +99,13 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
       return NO_ERROR;
     case SERVICE_CONTROL_POWEREVENT:
       switch (eventType) {
+        // Events, not a file here: the AutoLogger session (sovereign-core
+        // --install) records them while nobody is watching the sleep.
         case PBT_APMSUSPEND:
-          LogPowerEvent("power: PBT_APMSUSPEND (going to sleep)");
+          trace::Power("suspend");
           break;
         case PBT_APMRESUMEAUTOMATIC:
-          LogPowerEvent("power: PBT_APMRESUMEAUTOMATIC (resuming)");
+          trace::Power("resume");
           // Always restart rather than probe whether the box survived sleep —
           // wintun's adapter and the route table are not guaranteed to survive
           // a suspend/resume cycle, and checking liveness first only adds a
@@ -133,14 +117,10 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
           // in that exact window is not a realistic scenario to design around
           // here.
           if (state.core && state.lastConfig) {
-            const std::string stopError = state.core->Stop();
-            LogPowerEvent(stopError.empty() ? "power: resume box_stop OK"
-                                             : "power: resume box_stop error: " + stopError);
-            const std::string startError = state.core->Start(*state.lastConfig);
-            LogPowerEvent(startError.empty() ? "power: resume box_start OK"
-                                              : "power: resume box_start error: " + startError);
+            trace::Power("restart_stop", state.core->Stop());
+            trace::Power("restart_start", state.core->Start(*state.lastConfig));
           } else {
-            LogPowerEvent("power: resume — nothing to restart (no core or no remembered config)");
+            trace::Power("restart_skipped");  // no core, or no remembered config
           }
           break;
         default:
@@ -153,7 +133,9 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
 }
 
 void RunPipeServer(const std::stop_token& stopToken, ServiceState& state) {
-  sovereign::service::ControlHandler handler(state.core.get(), state.coreLog, state.lastConfig);
+  sovereign::service::ControlHandler handler(
+      state.core.get(), state.coreLog, state.lastConfig,
+      [](const sovereign::service::CommandRecord& record) { trace::Command(record); });
   sovereign::service::PipeServer server(
       sovereign::ipc::kPipeName,
       [&handler](const std::string& request) { return handler.Handle(request); });
@@ -169,7 +151,7 @@ void StopCoreOnShutdown(ServiceState& state) {
   }
   const std::string error = state.core->Stop();
   if (!error.empty()) {
-    OutputDebugStringA(("sovereign-core: box_stop on shutdown failed: " + error + "\n").c_str());
+    trace::ShutdownStopFailed(error);
   }
 }
 
@@ -182,12 +164,16 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
   }
 
   ReportStatus(state.statusHandle, SERVICE_START_PENDING, NO_ERROR, 3000);
+  trace::ProcessState("service", "starting");
   TryLoadCore(state);
   ReportStatus(state.statusHandle, SERVICE_RUNNING);
+  trace::ProcessState("service", "running");
 
   RunPipeServer(state.stopSource.get_token(), state);
+  trace::ProcessState("service", "stopping");
   StopCoreOnShutdown(state);
 
+  trace::ProcessState("service", "stopped");
   ReportStatus(state.statusHandle, SERVICE_STOPPED);
 }
 
@@ -234,17 +220,22 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
 void RunInConsole() {
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
   auto& state = ServiceState::Instance();
+  trace::ProcessState("console", "starting");
   TryLoadCore(state);
   std::wcout << L"sovereign core: pipe " << sovereign::ipc::kPipeName
              << L", core " << (state.core ? L"loaded" : L"NOT loaded")
              << L", Ctrl+C для остановки.\n";
+  trace::ProcessState("console", "running");
   RunPipeServer(state.stopSource.get_token(), state);
+  trace::ProcessState("console", "stopping");
   StopCoreOnShutdown(state);
+  trace::ProcessState("console", "stopped");
 }
 
 }  // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
+  const trace::ProviderRegistration tracing;
   const std::wstring arg = (argc > 1) ? argv[1] : L"";
 
   try {

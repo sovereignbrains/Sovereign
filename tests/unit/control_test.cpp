@@ -110,6 +110,61 @@ void TestNoCoreLoaded() {
   CHECK(logs.value("cmd", "") == "box_logs" && logs["entries"].size() == 1);
 }
 
+// What reaches ETW about each request (CommandRecord): the command's name,
+// size, error and duration - and nothing taken from the request itself, since
+// box_start carries passwords and keys and unknown commands are echoed.
+void TestCommandRecords() {
+  struct Seen {
+    std::string cmd;
+    std::size_t bytes = 0;
+    std::string error;
+  };
+  std::vector<Seen> seen;
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  ControlHandler handler(&core, log, lastConfig, [&seen](const sovereign::service::CommandRecord& r) {
+    seen.push_back({std::string(r.cmd), r.requestBytes, std::string(r.error)});
+  });
+
+  const std::string secret = "hunter2-secret-password";
+  const std::string start =
+      R"({"cmd":"box_start","config":{"outbounds":[{"type":"anytls","password":")" + secret + R"("}]}})";
+  handler.Handle(start);
+  core.startError = "bad password " + secret;  // a core error echoing config text is still reported
+  handler.Handle(R"({"cmd":"box_stop"})");
+  core.running = false;
+  handler.Handle(start);
+  handler.Handle(R"({"cmd":")" + secret + R"(","x":1})");
+  handler.Handle("not json");
+  handler.Handle("[1,2]");
+
+  CHECK(seen.size() == 6);
+  if (seen.size() != 6) {
+    return;
+  }
+  CHECK(seen[0].cmd == "box_start" && seen[0].bytes == start.size() && seen[0].error.empty());
+  CHECK(seen[1].cmd == "box_stop" && seen[1].error.empty());
+  CHECK(seen[2].cmd == "box_start" && seen[2].error == "bad password " + secret);
+  CHECK(seen[3].cmd == "echo" && seen[3].error.empty());  // unknown name is not recorded
+  CHECK(seen[4].cmd == "invalid" && seen[4].error == "invalid json");
+  CHECK(seen[5].cmd == "invalid" && seen[5].error == "request must be a json object");
+  // The config itself never lands in a record; only a core error message can
+  // carry what the core chose to put in it (seen[2]).
+  for (std::size_t i = 0; i < seen.size(); ++i) {
+    CHECK(seen[i].cmd.find(secret) == std::string::npos);
+    CHECK(i == 2 || seen[i].error.find(secret) == std::string::npos);
+  }
+
+  // No core loaded: core commands are still named, with the error.
+  seen.clear();
+  ControlHandler noCore(nullptr, log, lastConfig, [&seen](const sovereign::service::CommandRecord& r) {
+    seen.push_back({std::string(r.cmd), r.requestBytes, std::string(r.error)});
+  });
+  noCore.Handle(R"({"cmd":"box_ping"})");
+  CHECK(seen.size() == 1 && seen[0].cmd == "box_ping" && seen[0].error == "gocore not loaded");
+}
+
 void TestLifecycleAndLastConfig() {
   LogRing log(10);
   std::optional<std::string> lastConfig;
@@ -222,6 +277,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestEcho();
     TestNoCoreLoaded();
     TestLifecycleAndLastConfig();
+    TestCommandRecords();
     TestLogsPaging();
     TestLogsSurviveBadUtf8();
     TestReaderBehindRingDrop();

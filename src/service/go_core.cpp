@@ -67,8 +67,9 @@ void __cdecl GoCore::OnLog(void* context, int level, const char* message) noexce
     }
   } catch (...) {
     // A sink failure must not unwind into Go's stack (undefined behavior
-    // across the cgo boundary); a lost log line is the lesser evil.
-    OutputDebugStringW(L"sovereign-core: log sink threw, line dropped\n");
+    // across the cgo boundary); a lost log line is the lesser evil. WIL
+    // reports it (to ETW in the service, see trace.h).
+    LOG_CAUGHT_EXCEPTION_MSG("log sink threw, line dropped");
   }
 }
 

@@ -73,9 +73,13 @@ jobs:
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure
 
-      - name: Smoke test - real GoCore (the ASan job can't host the Go runtime, issue #9)
+      # Real GoCore (the ASan job can't host the Go runtime, issue #9), recorded by an ETW
+      # session: trace_smoke.ps1 runs core_smoke.ps1 -Mode gocore inside it and checks the
+      # decoded events, including that a config's password reaches none of them. Needs
+      # admin for the session - GitHub's Windows runners are elevated.
+      - name: Smoke test - real GoCore + ETW events
         shell: pwsh
-        run: pwsh tests/smoke/core_smoke.ps1 -Exe build/ci/src/service/sovereign-core.exe -Mode gocore
+        run: pwsh tests/smoke/trace_smoke.ps1 -Exe build/ci/src/service/sovereign-core.exe
 
   analyze:
     runs-on: windows-latest
@@ -262,4 +266,4 @@ jobs:
         run: cmake --preset ci
 
       - name: clang-tidy
-        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/trace.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp
