@@ -5,6 +5,7 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "app_rules.h"
@@ -17,14 +18,14 @@ using sovereign::tray::AppsMode;
 using sovereign::tray::ApplyAppRules;
 
 // The shape packetlab's subscription has (sub/packetlab-sub.py).
-const std::string kSubscription = R"({
+constexpr std::string_view kSubscription = R"({
   "outbounds": [{"type":"selector","tag":"proxy","outbounds":["a"]},{"type":"anytls","tag":"a"},{"type":"direct","tag":"direct"}],
   "route": {"rules": [{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"},
                       {"ip_is_private":true,"outbound":"direct"},{"protocol":"quic","action":"reject"}],
             "final": "proxy"}
 })";
 
-json Apply(const std::string& config, AppsMode mode, const std::vector<std::string>& apps) {
+json Apply(std::string_view config, AppsMode mode, const std::vector<std::string>& apps) {
   return json::parse(ApplyAppRules(config, mode, apps));
 }
 
