@@ -89,10 +89,19 @@ Display TrayModel::GetDisplay() const {
 }
 
 Action TrayModel::Decide(Clock::time_point now) {
-  if (wantOn_ && serviceUp_ && !startInFlight_ && last_ && !last_->running &&
-      (!retryAt_ || now >= *retryAt_)) {
-    startInFlight_ = true;
-    return Action::Start;
+  if (!wantOn_ || !serviceUp_ || startInFlight_ || !last_) {
+    return Action::None;
+  }
+  if (!last_->running) {
+    if (!retryAt_ || now >= *retryAt_) {
+      startInFlight_ = true;
+      return Action::Start;
+    }
+    return Action::None;
+  }
+  if (!expectedConfig_.empty() && last_->configSha256 != expectedConfig_ && restartedFor_ != expectedConfig_) {
+    restartedFor_ = expectedConfig_;
+    return Action::Stop;  // the next poll starts it with the current config
   }
   return Action::None;
 }

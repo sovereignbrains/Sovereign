@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace sovereign::tray {
 
@@ -23,6 +24,7 @@ struct Stats {
   std::int64_t downlinkBytes = 0;
   std::int64_t connections = 0;
   std::int64_t generation = 0;
+  std::string configSha256;  // of the config the box runs; empty if unknown
 };
 
 enum class Action : std::uint8_t { None, Start, Stop };
@@ -36,6 +38,12 @@ enum class Action : std::uint8_t { None, Start, Stop };
 // machine rebooted and the tray just started, or the previous start failed -
 // the model asks for a start again, failed starts no more often than
 // kRetryAfter. "Off" stops the box once and then leaves it alone.
+//
+// While on, the box must run the tray's config: when the service reports a
+// different config hash (config.json changed - a subscription refresh, or while
+// the tray wasn't running) the model stops the box, and the next poll starts
+// it with the current config. Once per expected config: if the hash still
+// differs after that, it doesn't loop.
 class TrayModel {
  public:
   using Clock = std::chrono::steady_clock;
@@ -45,6 +53,10 @@ class TrayModel {
 
   // The user's toggle. Returns the action to carry out right away.
   Action SetWantOn(bool on, Clock::time_point now);
+
+  // The hash of the config a start would send now (empty: none/unknown - no
+  // enforcement). See Sha256Hex in src/common/sha256.h.
+  void SetExpectedConfig(std::string sha256) { expectedConfig_ = std::move(sha256); }
   bool WantOn() const { return wantOn_; }
 
   // A box_stats result (nullopt: the service didn't answer). Returns the
@@ -76,6 +88,8 @@ class TrayModel {
   double downRate_ = 0;
   double upRate_ = 0;
   std::string lastError_;
+  std::string expectedConfig_;
+  std::string restartedFor_;  // the expected config a mismatch restart was made for
 };
 
 }  // namespace sovereign::tray

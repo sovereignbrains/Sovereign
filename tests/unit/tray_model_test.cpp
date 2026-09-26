@@ -5,6 +5,7 @@
 #include <exception>
 #include <iostream>
 #include <optional>
+#include <string>
 
 #include "check.h"
 #include "tray_model.h"
@@ -108,6 +109,40 @@ void TestAlreadyStartedElsewhereCountsAsOn() {
   CHECK(m.LastError().empty());
 }
 
+Stats RunningWith(const std::string& configSha256) {
+  Stats s = Running(0, 0);
+  s.configSha256 = configSha256;
+  return s;
+}
+
+void TestRestartsOnConfigMismatchOnce() {
+  TrayModel m(true);
+  m.SetExpectedConfig("new");
+  CHECK(m.OnPoll(RunningWith("old"), t0) == Action::Stop);  // config.json changed
+  m.OnStopResult("");
+  CHECK(m.GetDisplay() == Display::Starting);
+  CHECK(m.OnPoll(kStopped, t0 + 1s) == Action::Start);      // started with the new one
+  m.OnStartResult("", t0 + 1s);
+  // The service still reports something else (a hashing disagreement):
+  // no restart loop.
+  CHECK(m.OnPoll(RunningWith("old"), t0 + 2s) == Action::None);
+  CHECK(m.OnPoll(RunningWith("old"), t0 + 3s) == Action::None);
+  // Another config: enforced again, once.
+  m.SetExpectedConfig("newer");
+  CHECK(m.OnPoll(RunningWith("old"), t0 + 4s) == Action::Stop);
+}
+
+void TestMatchingOrUnknownConfigLeftAlone() {
+  TrayModel m(true);
+  m.SetExpectedConfig("same");
+  CHECK(m.OnPoll(RunningWith("same"), t0) == Action::None);
+  m.SetExpectedConfig("");  // no usable config.json: nothing to enforce
+  CHECK(m.OnPoll(RunningWith("other"), t0 + 1s) == Action::None);
+  TrayModel off(false);
+  off.SetExpectedConfig("new");
+  CHECK(off.OnPoll(RunningWith("old"), t0) == Action::None);  // off: not ours to manage
+}
+
 void TestStartsOffAndStaysOff() {
   TrayModel m(false);
   CHECK(m.OnPoll(kStopped, t0) == Action::None);
@@ -126,6 +161,8 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestOffWhileServiceDownDoesNothing();
     TestAlreadyStartedElsewhereCountsAsOn();
     TestStartsOffAndStaysOff();
+    TestRestartsOnConfigMismatchOnce();
+    TestMatchingOrUnknownConfigLeftAlone();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

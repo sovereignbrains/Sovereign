@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "sha256.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -164,7 +166,14 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
 
   if (cmd == "box_stats") {
-    return Dump(StatsResponse(core_->Stats()));
+    Json response = StatsResponse(core_->Stats());
+    // Which config the box runs, without the config itself (it holds keys):
+    // the tray compares it with its own config.json and restarts the box on a
+    // mismatch - e.g. config.json changed while the tray wasn't running.
+    if (lastConfig_) {
+      response["config_sha256"] = Sha256Hex(*lastConfig_);
+    }
+    return Dump(response);
   }
 
   if (cmd == "box_logs") {

@@ -15,6 +15,7 @@
 #include "control.h"
 #include "core.h"
 #include "log_ring.h"
+#include "sha256.h"
 
 namespace {
 
@@ -110,6 +111,12 @@ void TestNoCoreLoaded() {
   CHECK(logs.value("cmd", "") == "box_logs" && logs["entries"].size() == 1);
 }
 
+void TestSha256KnownVectors() {
+  // FIPS 180-2 examples.
+  CHECK(sovereign::Sha256Hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  CHECK(sovereign::Sha256Hex("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+}
+
 // What reaches ETW about each request (CommandRecord): the command's name,
 // size, error and duration - and nothing taken from the request itself, since
 // box_start carries passwords and keys and unknown commands are echoed.
@@ -194,9 +201,14 @@ void TestLifecycleAndLastConfig() {
   CHECK(stats["uplink"] == 1234 && stats["downlink"] == 5678);
   CHECK(stats["connections"] == 3 && stats["generation"] == 7);
 
+  // The running config is named by its hash (the tray compares it with its own).
+  CHECK(stats.value("config_sha256", "") == sovereign::Sha256Hex(core.startedWith));
+
   CHECK(Send(handler, R"({"cmd":"box_stop"})").value("cmd", "") == "box_stopped");
   CHECK(!lastConfig.has_value());
-  CHECK(Send(handler, R"({"cmd":"box_stats"})")["running"] == false);
+  const json stopped = Send(handler, R"({"cmd":"box_stats"})");
+  CHECK(stopped["running"] == false);
+  CHECK(!stopped.contains("config_sha256"));
 
   // A failing stop keeps the config: the box may well still be running.
   core.running = true;
@@ -278,6 +290,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestNoCoreLoaded();
     TestLifecycleAndLastConfig();
     TestCommandRecords();
+    TestSha256KnownVectors();
     TestLogsPaging();
     TestLogsSurviveBadUtf8();
     TestReaderBehindRingDrop();

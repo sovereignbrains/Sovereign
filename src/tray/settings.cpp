@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -55,11 +56,21 @@ TraySettings LoadSettings() {
     return settings;
   }
   const auto json = nlohmann::json::parse(*text, nullptr, /*allow_exceptions=*/false);
-  if (json.is_object()) {
-    const auto wantOn = json.find("wantOn");
-    if (wantOn != json.end() && wantOn->is_boolean()) {
-      settings.wantOn = wantOn->get<bool>();
-    }
+  if (!json.is_object()) {
+    return settings;
+  }
+  // Field by field: one wrong type doesn't cost the others.
+  if (const auto v = json.find("wantOn"); v != json.end() && v->is_boolean()) {
+    settings.wantOn = v->get<bool>();
+  }
+  if (const auto v = json.find("subscriptionUrl"); v != json.end() && v->is_string()) {
+    settings.subscriptionUrl = v->get<std::string>();
+  }
+  if (const auto v = json.find("lastRefresh"); v != json.end() && v->is_number_integer()) {
+    settings.lastRefresh = v->get<std::int64_t>();
+  }
+  if (const auto v = json.find("updateHours"); v != json.end() && v->is_number_integer()) {
+    settings.updateHours = std::clamp(v->get<int>(), 1, 24 * 7);
   }
   return settings;
 }
@@ -67,9 +78,14 @@ TraySettings LoadSettings() {
 void SaveSettings(const TraySettings& settings) {
   nlohmann::json json;
   json["wantOn"] = settings.wantOn;
+  json["subscriptionUrl"] = settings.subscriptionUrl;
+  json["lastRefresh"] = settings.lastRefresh;
+  json["updateHours"] = settings.updateHours;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }
 
 std::optional<std::string> LoadConfig() { return ReadText(DataDir() / L"config.json"); }
+
+void SaveConfig(const std::string& text) { WriteTextAtomically(DataDir() / L"config.json", text); }
 
 }  // namespace sovereign::tray
