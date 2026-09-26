@@ -81,6 +81,12 @@ jobs:
         shell: pwsh
         run: pwsh tests/smoke/trace_smoke.ps1 -Exe build/ci/src/service/sovereign-core.exe
 
+      # The flight recorder: --install registers the AutoLogger and starts it, the real
+      # service runs under SCM, the recorder's file is decoded, --uninstall cleans up.
+      - name: Smoke test - ETW flight recorder (install, service, uninstall)
+        shell: pwsh
+        run: pwsh tests/smoke/autologger_smoke.ps1 -Exe build/ci/src/service/sovereign-core.exe
+
   analyze:
     runs-on: windows-latest
     steps:
@@ -266,4 +272,4 @@ jobs:
         run: cmake --preset ci
 
       - name: clang-tidy
-        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/trace.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/trace.cpp src/service/autologger.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp

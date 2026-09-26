@@ -77,6 +77,8 @@ add_executable(sovereign-core
   pipe_server.h
   trace.cpp
   trace.h
+  autologger.cpp
+  autologger.h
 )
 
 target_link_libraries(sovereign-core PRIVATE sovereign_gocore_host sovereign_service_lib sovereign_common advapi32)

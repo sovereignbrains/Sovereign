@@ -24,6 +24,9 @@
 
 namespace sovereign::service::trace {
 
+// The provider's GUID (see the top of this file) - for sessions that enable it.
+inline constexpr GUID kProviderId{0x356e995a, 0x3c2d, 0x5ae3, {0xfa, 0xd1, 0x41, 0x0e, 0xe2, 0x4d, 0x60, 0x9d}};
+
 // Keywords (bit mask a session enables). Values are part of the tooling
 // contract: sovtrace.ps1 and the AutoLogger registry key use them.
 inline constexpr std::uint64_t kLifecycle = 0x1;     // service/console start and stop, core load

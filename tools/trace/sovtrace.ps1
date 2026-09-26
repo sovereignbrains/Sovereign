@@ -5,8 +5,13 @@
 .DESCRIPTION
   start   Starts an ad-hoc ETW session writing Sovereign.Core to an .etl file (needs admin).
   stop    Stops it (the file is complete only after this).
+  flush   Flushes a running session's buffers to its file (needs admin); default -Name is
+          the flight recorder, Sovereign-Core (src/service/autologger.h).
   dump    Prints the events of an .etl file, one per line, oldest first. With -AsObject
           it returns objects (Time, Level, Event, Keywords, ProcessId, Fields) for scripts.
+          Without -Path: the newest flight-recorder file in %ProgramData%\Sovereign\Logs
+          (read from a copy, so the running session keeps writing; flush first to see
+          the last second).
 
   Decoding goes through tracerpt's XML output: it understands TraceLogging's
   self-describing events; Get-WinEvent reads the file but drops their fields.
@@ -21,9 +26,9 @@
   pwsh tools/trace/sovtrace.ps1 dump -Path C:\temp\sov.etl
 #>
 param(
-  [Parameter(Mandatory, Position = 0)][ValidateSet('start', 'stop', 'dump')][string]$Action,
+  [Parameter(Mandatory, Position = 0)][ValidateSet('start', 'stop', 'flush', 'dump')][string]$Action,
   [string]$Path,
-  [string]$Name = 'Sovereign-AdHoc',
+  [string]$Name,
   [string]$Keywords = 'default',
   [ValidateRange(1, 5)][int]$Level = 5,
   [switch]$AsObject
@@ -37,7 +42,12 @@ function Invoke-Native([string]$exe, [string[]]$arguments) {
   if ($LASTEXITCODE -ne 0) { throw "$exe $($arguments -join ' ') failed ($LASTEXITCODE): $($output -join ' ')" }
 }
 
+if (-not $Name) { $Name = if ($Action -eq 'flush') { 'Sovereign-Core' } else { 'Sovereign-AdHoc' } }
+
 switch ($Action) {
+  'flush' {
+    Invoke-Native logman @('update', $Name, '-fd', '-ets')
+  }
   'start' {
     if (-not $Path) { throw 'start needs -Path <file.etl>' }
     $mask = switch ($Keywords) { 'default' { '0x2f' } 'all' { '0xffffffffffffffff' } default { $Keywords } }
@@ -48,7 +58,15 @@ switch ($Action) {
     Invoke-Native logman @('stop', $Name, '-ets')
   }
   'dump' {
-    if (-not $Path) { throw 'dump needs -Path <file.etl>' }
+    $copy = $null
+    if (-not $Path) {
+      $logs = Join-Path $env:ProgramData 'Sovereign\Logs'
+      $newest = Get-ChildItem $logs -Filter 'sovereign.etl*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+      if (-not $newest) { throw "no flight-recorder files in $logs (is the service installed with --install?)" }
+      $copy = Join-Path ([IO.Path]::GetTempPath()) ("sovtrace-{0}.etl" -f [guid]::NewGuid())
+      Copy-Item $newest.FullName $copy
+      $Path = $copy
+    }
     $xmlPath = Join-Path ([IO.Path]::GetTempPath()) ("sovtrace-{0}.xml" -f [guid]::NewGuid())
     try {
       Invoke-Native tracerpt @($Path, '-of', 'XML', '-lr', '-o', $xmlPath, '-y')
@@ -77,6 +95,7 @@ switch ($Action) {
       }
     } finally {
       Remove-Item $xmlPath -ErrorAction SilentlyContinue
+      if ($copy) { Remove-Item $copy -ErrorAction SilentlyContinue }
     }
   }
 }

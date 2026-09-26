@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "autologger.h"
 #include "control.h"
 #include "core.h"
 #include "go_core.h"
@@ -191,11 +192,18 @@ void InstallService() {
       SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
       quotedPath.c_str(), nullptr, nullptr, nullptr, nullptr, nullptr));
   THROW_LAST_ERROR_IF(!service);
-
   std::wcout << L"Служба " << kServiceName << L" установлена.\n";
+
+  sovereign::service::InstallAutoLogger();
+  std::wcout << L"ETW flight recorder " << sovereign::service::kAutoLoggerName
+             << L" -> %ProgramData%\\Sovereign\\Logs\\sovereign.etl (tools/trace/sovtrace.ps1).\n";
 }
 
 void UninstallService() {
+  // First, so a service that's already gone doesn't leave the session behind.
+  // The recorded .etl files stay.
+  sovereign::service::UninstallAutoLogger();
+
   wil::unique_schandle scm(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT));
   THROW_LAST_ERROR_IF(!scm);
 
