@@ -7,6 +7,12 @@
 // config as nlohmann::json::dump() writes it - so equal configs give equal
 // hashes. Links bcrypt.lib (#pragma below).
 
+// This header brings windows.h into files that never had it (control.cpp):
+// without NOMINMAX its min/max macros break std::max there - which the CI's
+// clang-tidy hit (2fdc41b) even though the build defines NOMINMAX globally.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <bcrypt.h>
 
