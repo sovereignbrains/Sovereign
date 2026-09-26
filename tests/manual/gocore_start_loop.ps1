@@ -19,6 +19,13 @@
 
   Failed runs keep their out-/err- logs in %TEMP%\gocore-start-loop.
 
+  Root cause (issue #9, 26.09.2026): ASan's CreateThread interceptor unwinds the
+  caller's stack with RtlCaptureStackBackTrace, which assumes the TEB stack; Go
+  calls CreateThread while running on a stack it allocated itself, so _chkstk
+  probes the TEB stack's guard page and the exception can't be dispatched. No
+  WER dump is written - run the core under cdb (sxe gp) to catch it. CI no longer
+  hosts the real DLL in the ASan job; this script stays as the reproduction.
+
 .EXAMPLE
   pwsh tests/manual/gocore_start_loop.ps1 -N 160 -Exe build/ci-asan/src/service/sovereign-core.exe
 #>

@@ -73,6 +73,10 @@ jobs:
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure
 
+      - name: Smoke test - real GoCore (the ASan job can't host the Go runtime, issue #9)
+        shell: pwsh
+        run: pwsh tests/smoke/core_smoke.ps1 -Exe build/ci/src/service/sovereign-core.exe -Mode gocore
+
   analyze:
     runs-on: windows-latest
     steps:
@@ -191,174 +195,21 @@ jobs:
       - name: Build
         run: cmake --build --preset ci-asan
 
-      - name: Test (golden tests under ASan)
+      - name: Test (golden and unit tests under ASan)
         run: ctest --test-dir build/ci-asan --output-on-failure
 
-      - name: Smoke test — core pipe round-trip under ASan
+      # The ASan build never hosts the real sovereign-gocore.dll: ASan's
+      # CreateThread interceptor unwinds the caller's stack assuming it runs on
+      # its TEB stack, the Go runtime runs on stacks it allocates itself, and the
+      # process dies at random (0x80000001 or Go's exit 2) - diagnosis with the
+      # dump in issue #9. GoCore's C++ side stays under ASan through
+      # unit-go-core (a stub DLL with the same C ABI, run by ctest above); the
+      # real DLL is smoke-tested in the build job.
+      - name: Smoke test - core without GoCore under ASan
         shell: pwsh
         run: |
-          $core = Start-Process -FilePath "build/ci-asan/src/service/sovereign-core.exe" `
-            -ArgumentList "--run" -PassThru -WindowStyle Hidden `
-            -RedirectStandardOutput "core_out.log" -RedirectStandardError "core_err.log"
-          Start-Sleep -Milliseconds 800
-          if ($core.HasExited) { throw "sovereign-core exited early (exit code $($core.ExitCode))" }
-
-          $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", "sovereign-control", [System.IO.Pipes.PipeDirection]::InOut)
-          $pipe.Connect(5000)
-          $bytes = [System.Text.Encoding]::UTF8.GetBytes('{"cmd":"ping","from":"ci-asan"}')
-          $pipe.Write($bytes, 0, $bytes.Length)
-          $pipe.Flush()
-          $buf = New-Object byte[] 4096
-          $n = $pipe.Read($buf, 0, $buf.Length)
-          $response = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
-          $pipe.Dispose()
-
-          Start-Sleep -Milliseconds 300
-          Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
-
-          $stderr = Get-Content "core_err.log" -Raw -ErrorAction SilentlyContinue
-          if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report)" }
-          if ($response -notmatch '"cmd":"pong"') { throw "unexpected pipe response: $response" }
-          Write-Host "OK: $response"
-
-      - name: Smoke test — box_ping through GoCore under ASan
-        shell: pwsh
-        run: |
-          $core = Start-Process -FilePath "build/ci-asan/src/service/sovereign-core.exe" `
-            -ArgumentList "--run" -PassThru -WindowStyle Hidden `
-            -RedirectStandardOutput "core_out.log" -RedirectStandardError "core_err.log"
-          Start-Sleep -Milliseconds 800
-          if ($core.HasExited) { throw "sovereign-core exited early (exit code $($core.ExitCode))" }
-
-          $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", "sovereign-control", [System.IO.Pipes.PipeDirection]::InOut)
-          $pipe.Connect(5000)
-          $bytes = [System.Text.Encoding]::UTF8.GetBytes('{"cmd":"box_ping"}')
-          $pipe.Write($bytes, 0, $bytes.Length)
-          $pipe.Flush()
-          $buf = New-Object byte[] 4096
-          $n = $pipe.Read($buf, 0, $buf.Length)
-          $response = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
-          $pipe.Dispose()
-
-          Start-Sleep -Milliseconds 300
-          Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
-
-          $stderr = Get-Content "core_err.log" -Raw -ErrorAction SilentlyContinue
-          if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report, cross-CRT free bug, etc.)" }
-          if ($response -notmatch '"cmd":"box_pong"') { throw "unexpected pipe response: $response" }
-          Write-Host "OK: $response"
-
-      - name: Smoke test — box_start/box_stop through GoCore under ASan
-        shell: pwsh
-        run: |
-          # A minimal config (one direct outbound, no inbounds/TLS/certs) is
-          # enough to exercise box_start's real path — sing-box option
-          # parsing, box.New, box.Start — and box_stop's box.Close, without
-          # the cost of standing up a real anytls server. The anytls
-          # outbound itself, with real traffic through it, is proven by
-          # tests/manual/anytls_traffic_smoke.ps1 (needs two live sing-box
-          # instances and a TCP proxy round-trip, more than a CI smoke test
-          # should cost on every push).
-          # log.disabled is set because this step treats non-empty stderr as
-          # an ASan report (matching the other smoke tests below) — a real
-          # box instance logs its own startup lines to stderr otherwise.
-          $core = Start-Process -FilePath "build/ci-asan/src/service/sovereign-core.exe" `
-            -ArgumentList "--run" -PassThru -WindowStyle Hidden `
-            -RedirectStandardOutput "core_out.log" -RedirectStandardError "core_err.log"
-          Start-Sleep -Milliseconds 800
-          if ($core.HasExited) { throw "sovereign-core exited early (exit code $($core.ExitCode))" }
-
-          function Send-PipeCommand([string]$json) {
-            $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", "sovereign-control", [System.IO.Pipes.PipeDirection]::InOut)
-            $pipe.Connect(5000)
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-            $pipe.Write($bytes, 0, $bytes.Length)
-            $pipe.Flush()
-            $buf = New-Object byte[] 4096
-            $n = $pipe.Read($buf, 0, $buf.Length)
-            $response = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
-            $pipe.Dispose()
-            return $response
-          }
-
-          # On any failure below, show what the core printed: an empty pipe reply
-          # usually means the core died mid-request (e.g. a Go panic), and its
-          # stderr is the only place that says why.
-          trap { Write-Host '--- core stderr ---'; Get-Content core_err.log -ErrorAction SilentlyContinue; Write-Host '--- core stdout ---'; Get-Content core_out.log -ErrorAction SilentlyContinue; Write-Host "core exited: $($core.HasExited) code $(if ($core.HasExited) { $core.ExitCode })"; break }
-
-          $startResponse = Send-PipeCommand '{"cmd":"box_start","config":{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}}'
-          if ($startResponse -notmatch '"box_started"') { throw "unexpected box_start response: $startResponse" }
-
-          $restartResponse = Send-PipeCommand '{"cmd":"box_start","config":{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}}'
-          if ($restartResponse -notmatch 'box already started') { throw "expected an already-started error, got: $restartResponse" }
-
-          $stopResponse = Send-PipeCommand '{"cmd":"box_stop"}'
-          if ($stopResponse -notmatch '"box_stopped"') { throw "unexpected box_stop response: $stopResponse" }
-
-          Start-Sleep -Milliseconds 300
-          Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
-
-          $stderr = Get-Content "core_err.log" -Raw -ErrorAction SilentlyContinue
-          if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report, cross-CRT free bug, etc.)" }
-          Write-Host "OK: start=$startResponse restart=$restartResponse stop=$stopResponse"
-
-      - name: Smoke test — box_stats and box_logs (log callback) through GoCore under ASan
-        shell: pwsh
-        run: |
-          # box_stats: counters come from sing-box's own trafficcontrol.Manager
-          # attached in box_start; generation increments per successful start.
-          # box_logs: lines reach the service through box_set_log_callback —
-          # "sing-box started" is logged at info on every start, so no
-          # external traffic is needed to prove the callback path. log.output
-          # sends sing-box's console logging to a file so stderr stays empty
-          # (non-empty stderr is treated as an ASan report).
-          $core = Start-Process -FilePath "build/ci-asan/src/service/sovereign-core.exe" `
-            -ArgumentList "--run" -PassThru -WindowStyle Hidden `
-            -RedirectStandardOutput "core_out.log" -RedirectStandardError "core_err.log"
-          Start-Sleep -Milliseconds 800
-          if ($core.HasExited) { throw "sovereign-core exited early (exit code $($core.ExitCode))" }
-
-          function Send-PipeCommand([string]$json) {
-            $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", "sovereign-control", [System.IO.Pipes.PipeDirection]::InOut)
-            $pipe.Connect(5000)
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-            $pipe.Write($bytes, 0, $bytes.Length)
-            $pipe.Flush()
-            $buf = New-Object byte[] 4096
-            $n = $pipe.Read($buf, 0, $buf.Length)
-            $response = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
-            $pipe.Dispose()
-            return $response
-          }
-
-          trap { Write-Host '--- core stderr ---'; Get-Content core_err.log -ErrorAction SilentlyContinue; Write-Host '--- core stdout ---'; Get-Content core_out.log -ErrorAction SilentlyContinue; Write-Host "core exited: $($core.HasExited) code $(if ($core.HasExited) { $core.ExitCode })"; break }
-
-          $idle = Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json
-          if ($idle.running -ne $false -or $idle.generation -ne 0) { throw "unexpected idle stats: $($idle | ConvertTo-Json -Compress)" }
-
-          $config = '{"log":{"level":"info","output":"box.log"},"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":20990}],"outbounds":[{"type":"direct","tag":"direct"}]}'
-          $start = Send-PipeCommand ('{"cmd":"box_start","config":' + $config + '}')
-          if ($start -notmatch '"box_started"') { throw "unexpected box_start response: $start" }
-
-          $stats = Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json
-          if ($stats.running -ne $true -or $stats.generation -ne 1) { throw "unexpected running stats: $($stats | ConvertTo-Json -Compress)" }
-
-          $logs = Send-PipeCommand '{"cmd":"box_logs","since":0}' | ConvertFrom-Json
-          if (-not ($logs.entries | Where-Object { $_.message -match 'sing-box started' })) {
-            throw "log callback did not deliver 'sing-box started': $($logs | ConvertTo-Json -Compress -Depth 4)"
-          }
-
-          $stop = Send-PipeCommand '{"cmd":"box_stop"}'
-          if ($stop -notmatch '"box_stopped"') { throw "unexpected box_stop response: $stop" }
-          $after = Send-PipeCommand '{"cmd":"box_stats"}' | ConvertFrom-Json
-          if ($after.running -ne $false -or $after.generation -ne 1) { throw "unexpected stats after stop: $($after | ConvertTo-Json -Compress)" }
-
-          Start-Sleep -Milliseconds 300
-          Stop-Process -Id $core.Id -Force -ErrorAction SilentlyContinue
-
-          $stderr = Get-Content "core_err.log" -Raw -ErrorAction SilentlyContinue
-          if ($stderr) { Write-Host $stderr; throw "sovereign-core stderr non-empty (possible ASan report)" }
-          Write-Host "OK: $($logs.entries.Count) log lines, stats=$($stats | ConvertTo-Json -Compress)"
+          Remove-Item build/ci-asan/src/service/sovereign-gocore.dll
+          pwsh tests/smoke/core_smoke.ps1 -Exe build/ci-asan/src/service/sovereign-core.exe -Mode nocore
 
       - name: Smoke test — tray starts cleanly under ASan
         shell: pwsh
@@ -411,4 +262,4 @@ jobs:
         run: cmake --preset ci
 
       - name: clang-tidy
-        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp

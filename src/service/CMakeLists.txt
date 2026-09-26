@@ -61,15 +61,23 @@ add_library(sovereign_service_lib STATIC
 target_include_directories(sovereign_service_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_service_lib PUBLIC sovereign_common)
 
+# GoCore - the C++ side of the bridge to sovereign-gocore.dll. A library of
+# its own so tests/unit can drive it against gocore-stub.dll under ASan: the
+# real DLL's Go runtime can't live in an ASan process (issue #9).
+add_library(sovereign_gocore_host STATIC
+  go_core.cpp
+  go_core.h
+)
+target_include_directories(sovereign_gocore_host PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(sovereign_gocore_host PUBLIC sovereign_service_lib sovereign_common)
+
 add_executable(sovereign-core
   main.cpp
   pipe_server.cpp
   pipe_server.h
-  go_core.cpp
-  go_core.h
 )
 
-target_link_libraries(sovereign-core PRIVATE sovereign_service_lib sovereign_common advapi32)
+target_link_libraries(sovereign-core PRIVATE sovereign_gocore_host sovereign_service_lib sovereign_common advapi32)
 sovereign_copy_asan_runtime(sovereign-core)
 
 add_dependencies(sovereign-core sovereign_gocore_dll)
