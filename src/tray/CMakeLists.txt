@@ -15,6 +15,8 @@ add_executable(sovereign-tray WIN32
   main.cpp
   fetch.cpp
   fetch.h
+  flyout.cpp
+  flyout.h
   icons.cpp
   icons.h
   pipe_client.cpp
@@ -30,5 +32,5 @@ string(REGEX REPLACE "^v" "" SOVEREIGN_TRAY_SINGBOX_VERSION "${SOVEREIGN_TRAY_SI
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tools/codegen/sing-box.version")
 target_compile_definitions(sovereign-tray PRIVATE "SOVEREIGN_SINGBOX_VERSION_W=L\"${SOVEREIGN_TRAY_SINGBOX_VERSION}\"")
 
-target_link_libraries(sovereign-tray PRIVATE sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid)
+target_link_libraries(sovereign-tray PRIVATE sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid d2d1 dwrite dwmapi shcore)
 sovereign_copy_asan_runtime(sovereign-tray)

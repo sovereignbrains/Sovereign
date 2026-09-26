@@ -8,8 +8,6 @@
 
 namespace sovereign::tray {
 
-namespace {
-
 COLORREF StateColor(Display display) {
   switch (display) {
     case Display::ServiceDown: return RGB(150, 150, 150);
@@ -20,8 +18,6 @@ COLORREF StateColor(Display display) {
   }
   return RGB(150, 150, 150);
 }
-
-}  // namespace
 
 wil::unique_hicon MakeStateIcon(Display display) {
   const int size = GetSystemMetrics(SM_CXSMICON);

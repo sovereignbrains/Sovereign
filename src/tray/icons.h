@@ -13,4 +13,7 @@ namespace sovereign::tray {
 //   ServiceDown grey, Off dark grey, Starting amber, On green, Error red.
 wil::unique_hicon MakeStateIcon(Display display);
 
+// The state's color (the icon's, and the flyout's status dot).
+COLORREF StateColor(Display display);
+
 }  // namespace sovereign::tray

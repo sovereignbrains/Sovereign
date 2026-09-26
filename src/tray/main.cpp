@@ -38,6 +38,7 @@
 
 #include "app_rules.h"
 #include "fetch.h"
+#include "flyout.h"
 #include "icons.h"
 #include "pipe_client.h"
 #include "settings.h"
@@ -56,11 +57,6 @@ using sovereign::tray::TrayModel;
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kViewChangedMessage = WM_APP + 2;
 constexpr UINT kTrayIconId = 1;
-constexpr UINT kMenuToggle = 1;
-constexpr UINT kMenuOpenFolder = 2;
-constexpr UINT kMenuExit = 3;
-constexpr UINT kMenuImport = 4;
-constexpr UINT kMenuRefresh = 5;
 constexpr UINT kMenuModeExclude = 6;
 constexpr UINT kMenuModeInclude = 7;
 constexpr UINT kMenuAddExe = 8;
@@ -151,16 +147,6 @@ std::wstring StatusLine(const View& v) {
     case Display::Error: return L"ошибка: " + Widen(v.error);
   }
   return {};
-}
-
-std::wstring SubscriptionLine(const View& v) {
-  if (!v.hasSubscription) {
-    return L"подписки нет (config.json вручную)";
-  }
-  if (!v.subscriptionError.empty()) {
-    return L"подписка: ошибка — " + Widen(v.subscriptionError);
-  }
-  return v.lastRefresh ? L"подписка обновлена " + LocalTime(v.lastRefresh) : L"подписка: ещё не загружена";
 }
 
 // Requests from the UI thread to the worker, and the view back.
@@ -634,22 +620,21 @@ std::optional<std::string> PickExe(HWND window) {
   }
 }
 
-void AppendAppsMenu(HMENU parent, const View& view, const std::vector<std::string>& running) {
-  HMENU apps = CreatePopupMenu();
-  if (apps == nullptr) {
-    return;
-  }
+// The apps menu the flyout's "Приложения" row opens: the mode, the list (a
+// click removes), "add from running", "add exe…".
+void FillAppsMenu(HMENU menu, const View& view, const std::vector<std::string>& running) {
   const bool exclude = view.appsMode == AppsMode::Exclude;
-  AppendMenuW(apps, MF_STRING | (exclude ? MF_CHECKED : 0), kMenuModeExclude, L"Все через VPN, кроме списка");
-  AppendMenuW(apps, MF_STRING | (exclude ? 0 : MF_CHECKED), kMenuModeInclude, L"Только список через VPN");
-  AppendMenuW(apps, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING | (exclude ? MF_CHECKED : 0), kMenuModeExclude, L"Все через VPN, кроме списка");
+  AppendMenuW(menu, MF_STRING | (exclude ? 0 : MF_CHECKED), kMenuModeInclude, L"Только список через VPN");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   if (view.apps.empty()) {
-    AppendMenuW(apps, MF_STRING | MF_GRAYED, 0, L"список пуст — всё через VPN");
+    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"список пуст — всё через VPN");
   }
   for (std::size_t i = 0; i < view.apps.size() && i < kMenuMaxItems; ++i) {
-    AppendMenuW(apps, MF_STRING, kMenuRemoveApp + static_cast<UINT>(i), (Widen(view.apps[i]) + L"   ✕").c_str());
+    AppendMenuW(menu, MF_STRING, kMenuRemoveApp + static_cast<UINT>(i), (Widen(view.apps[i]) + L"   ✕").c_str());
   }
-  AppendMenuW(apps, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  // Attached submenus are destroyed with the menu.
   if (HMENU add = CreatePopupMenu()) {
     for (std::size_t i = 0; i < running.size(); ++i) {
       AppendMenuW(add, MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i]).c_str());
@@ -657,91 +642,114 @@ void AppendAppsMenu(HMENU parent, const View& view, const std::vector<std::strin
     if (running.empty()) {
       AppendMenuW(add, MF_STRING | MF_GRAYED, 0, L"нет подходящих окон");
     }
-    AppendMenuW(apps, MF_POPUP, reinterpret_cast<UINT_PTR>(add), L"Добавить из запущенных");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(add), L"Добавить из запущенных");
   }
-  AppendMenuW(apps, MF_STRING, kMenuAddExe, L"Добавить exe…");
-  // Destroying the parent menu destroys the attached submenus.
-  AppendMenuW(parent, MF_POPUP, reinterpret_cast<UINT_PTR>(apps),
-              view.apps.empty() ? L"Приложения" : std::format(L"Приложения ({})", view.apps.size()).c_str());
+  AppendMenuW(menu, MF_STRING, kMenuAddExe, L"Добавить exe…");
 }
 
-void ShowMenu(HWND window) {
-  View view;
-  {
-    const std::scoped_lock lock(State().mutex);
-    view = State().view;
-  }
+View CurrentView() {
+  const std::scoped_lock lock(State().mutex);
+  return State().view;
+}
+
+void ShowAppsMenu(HWND window, POINT at) {
+  const View view = CurrentView();
+  const std::vector<std::string> running = RunningApps(view.apps);
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
     return;
   }
-  AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, StatusLine(view).c_str());
-  AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, SubscriptionLine(view).c_str());
-  AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu.get(), MF_STRING, kMenuToggle, view.wantOn ? L"Выключить" : L"Включить");
-  AppendMenuW(menu.get(), MF_STRING, kMenuImport, L"Вставить ссылку-подписку из буфера");
-  AppendMenuW(menu.get(), MF_STRING | (view.hasSubscription ? 0 : MF_GRAYED), kMenuRefresh, L"Обновить подписку");
-  const std::vector<std::string> running = RunningApps(view.apps);
-  AppendAppsMenu(menu.get(), view, running);
-  AppendMenuW(menu.get(), MF_STRING, kMenuOpenFolder, L"Открыть папку настроек");
-  AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu.get(), MF_STRING, kMenuExit, L"Выход (соединение остаётся)");
-
-  POINT cursor{};
-  GetCursorPos(&cursor);
+  FillAppsMenu(menu.get(), view, running);
   // Without the foreground switch the menu doesn't close on an outside click
-  // (documented TrackPopupMenu behavior for notification icons).
+  // (documented TrackPopupMenu behavior for notification-area UI).
   SetForegroundWindow(window);
   const auto command = static_cast<UINT>(
-      TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, window, nullptr));
+      TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, at.x, at.y, 0, window, nullptr));
   PostMessageW(window, WM_NULL, 0, 0);
 
   if (command >= kMenuRemoveApp && command < kMenuRemoveApp + view.apps.size()) {
     AppsChange change{view.appsMode, view.apps};
     change.list.erase(change.list.begin() + (command - kMenuRemoveApp));
     RequestApps(std::move(change));
-    return;
-  }
-  if (command >= kMenuAddRunning && command < kMenuAddRunning + running.size()) {
+  } else if (command >= kMenuAddRunning && command < kMenuAddRunning + running.size()) {
     AppsChange change{view.appsMode, view.apps};
     change.list.push_back(running[command - kMenuAddRunning]);
     RequestApps(std::move(change));
-    return;
-  }
-  switch (command) {
-    case kMenuModeExclude:
-    case kMenuModeInclude:
-      RequestApps({command == kMenuModeInclude ? AppsMode::Include : AppsMode::Exclude, view.apps});
-      break;
-    case kMenuAddExe:
-      if (const auto exe = PickExe(window)) {
-        if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, *exe); })) {
-          AppsChange change{view.appsMode, view.apps};
-          change.list.push_back(*exe);
-          RequestApps(std::move(change));
-        }
+  } else if (command == kMenuModeExclude || command == kMenuModeInclude) {
+    RequestApps({command == kMenuModeInclude ? AppsMode::Include : AppsMode::Exclude, view.apps});
+  } else if (command == kMenuAddExe) {
+    if (const auto exe = PickExe(window)) {
+      if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, *exe); })) {
+        AppsChange change{view.appsMode, view.apps};
+        change.list.push_back(*exe);
+        RequestApps(std::move(change));
       }
-      break;
-    case kMenuToggle:
+    }
+  }
+}
+
+// What the flyout shows, from the worker's view.
+sovereign::tray::FlyoutContent FlyoutFrom(const View& v) {
+  sovereign::tray::FlyoutContent c;
+  c.status = StatusLine(v);
+  c.statusDot = sovereign::tray::StateColor(v.display);
+  c.on = v.wantOn;
+  c.hasSubscription = v.hasSubscription;
+  if (!v.hasSubscription) {
+    c.subscription = L"нет";
+  } else if (!v.subscriptionError.empty()) {
+    c.subscription = L"ошибка: " + Widen(v.subscriptionError);
+  } else {
+    c.subscription = v.lastRefresh ? LocalTime(v.lastRefresh) : L"ещё не загружена";
+  }
+  const wchar_t* mode = v.appsMode == AppsMode::Exclude ? L"кроме списка" : L"только список";
+  c.apps = v.apps.empty() ? std::wstring(L"Приложения · всё через VPN")
+                          : std::format(L"Приложения ({}) · {}", v.apps.size(), mode);
+  return c;
+}
+
+sovereign::tray::Flyout* g_flyout = nullptr;
+
+// The tray icon's rectangle on screen (the flyout opens next to it); the
+// cursor if the shell can't tell.
+RECT TrayIconRect(HWND window) {
+  NOTIFYICONIDENTIFIER id{};
+  id.cbSize = sizeof id;
+  id.hWnd = window;
+  id.uID = kTrayIconId;
+  RECT rect{};
+  if (FAILED(Shell_NotifyIconGetRect(&id, &rect))) {
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    rect = {cursor.x, cursor.y, cursor.x + 1, cursor.y + 1};
+  }
+  return rect;
+}
+
+void OnFlyoutCommand(HWND window, sovereign::tray::FlyoutCommand command, POINT anchor) {
+  using sovereign::tray::FlyoutCommand;
+  switch (command) {
+    case FlyoutCommand::Toggle:
       RequestToggle();
       break;
-    case kMenuImport:
+    case FlyoutCommand::PasteSubscription:
       RequestImport(window);
       break;
-    case kMenuRefresh:
+    case FlyoutCommand::RefreshSubscription:
       RequestRefresh();
       break;
-    case kMenuOpenFolder:
+    case FlyoutCommand::Apps:
+      ShowAppsMenu(window, anchor);
+      break;
+    case FlyoutCommand::OpenFolder:
       try {
         ShellExecuteW(nullptr, L"open", sovereign::tray::DataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
       } catch (...) {
         LOG_CAUGHT_EXCEPTION();
       }
       break;
-    case kMenuExit:
+    case FlyoutCommand::Exit:
       DestroyWindow(window);
-      break;
-    default:
       break;
   }
 }
@@ -759,24 +767,26 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       g_trayIcon = &icon;
       return 0;
     }
-    case kViewChangedMessage:
+    case kViewChangedMessage: {
+      const View view = CurrentView();
       if (g_trayIcon != nullptr) {
-        View view;
-        {
-          const std::scoped_lock lock(State().mutex);
-          view = State().view;
-        }
         g_trayIcon->Update(view);
       }
+      if (g_flyout != nullptr) {
+        g_flyout->Update(FlyoutFrom(view));
+      }
       return 0;
+    }
     case kTrayCallbackMessage:
-      if (lParam == WM_LBUTTONUP) {
-        RequestToggle();
-      } else if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
-        ShowMenu(window);
+      // Either button opens the panel, like the system's own tray flyouts.
+      if ((lParam == WM_LBUTTONUP || lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) && g_flyout != nullptr) {
+        g_flyout->Toggle(TrayIconRect(window), FlyoutFrom(CurrentView()));
       }
       return 0;
     case WM_DESTROY:
+      if (g_flyout != nullptr) {
+        g_flyout->Hide();
+      }
       PostQuitMessage(0);
       return 0;
     default:
@@ -787,6 +797,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
+  // Sharp at any scaling: the flyout sizes itself for its monitor's DPI.
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   // The file dialog ("add exe") is COM, on this thread.
   const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
@@ -823,6 +835,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     State().view.wantOn = settings.wantOn;
   }
 
+  sovereign::tray::Flyout flyout(instance, [window](sovereign::tray::FlyoutCommand command, POINT anchor) {
+    OnFlyoutCommand(window, command, anchor);
+  });
+  g_flyout = &flyout;
+
   int exitCode = 0;
   {
     Worker worker(std::move(settings));
@@ -835,5 +852,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     exitCode = static_cast<int>(msg.wParam);
     thread.request_stop();
   }  // joins the worker before its state goes away
+  g_flyout = nullptr;
   return exitCode;
 }
