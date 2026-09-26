@@ -137,7 +137,9 @@ struct Flyout::Impl {
     wc.style = CS_DROPSHADOW;
     wc.lpfnWndProc = &Impl::WindowProc;
     wc.hInstance = instance;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    // IDC_ARROW (32512) spelled out: the macro goes through the UNICODE-dependent
+    // MAKEINTRESOURCE, which the CI's clang won't match with LoadCursorW.
+    wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     wc.lpszClassName = kClassName;
     RegisterClassW(&wc);  // already registered is fine
     window.reset(CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, kClassName, L"Sovereign", WS_POPUP, 0, 0, 1, 1,
