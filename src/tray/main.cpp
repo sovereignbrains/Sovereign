@@ -206,7 +206,9 @@ enum class ConfigChoice : std::uint8_t {
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
   std::vector<std::string> list;
-  std::map<std::string, std::string> paths;  // exe paths learned while adding (icons)
+  // Exe paths learned while adding (icons), name to path. A vector: MSVC's
+  // debug std::map allocates when moved, so its move could throw.
+  std::vector<std::pair<std::string, std::string>> paths;
 };
 
 // How often the worker looks among running processes for listed apps whose
@@ -414,7 +416,9 @@ class Worker {
       if (apps) {
         settings_.appsMode = apps->mode;
         settings_.apps = std::move(apps->list);
-        settings_.appPaths.merge(apps->paths);
+        for (auto& [name, path] : apps->paths) {
+          sovereign::tray::SetAppPath(settings_, name, std::move(path));
+        }
         std::erase_if(settings_.appPaths, [&](const auto& entry) {
           return std::find(settings_.apps.begin(), settings_.apps.end(), entry.first) == settings_.apps.end();
         });
@@ -787,7 +791,7 @@ class Worker {
     lastPathLookup_ = now;
     std::vector<std::wstring> missing;
     for (const std::string& app : settings_.apps) {
-      if (!settings_.appPaths.contains(app)) {
+      if (sovereign::tray::AppPath(settings_, app) == nullptr) {
         missing.push_back(Widen(app));
       }
     }
@@ -812,7 +816,7 @@ class Worker {
       wchar_t path[MAX_PATH]{};
       DWORD size = MAX_PATH;
       if (process && QueryFullProcessImageNameW(process.get(), 0, path, &size)) {
-        settings_.appPaths[Narrow(*match)] = Narrow(std::wstring(path, size));
+        sovereign::tray::SetAppPath(settings_, Narrow(*match), Narrow(std::wstring(path, size)));
         missing.erase(match);
         found = true;
       }
@@ -854,8 +858,8 @@ class Worker {
       v.apps = settings_.apps;
       v.appPaths.clear();
       for (const std::string& app : settings_.apps) {
-        const auto path = settings_.appPaths.find(app);
-        v.appPaths.push_back(path == settings_.appPaths.end() ? std::string() : path->second);
+        const std::string* path = sovereign::tray::AppPath(settings_, app);
+        v.appPaths.push_back(path != nullptr ? *path : std::string());
       }
       std::tie(v.protocols, v.protocol) = protocols;
       v.delays.clear();

@@ -51,6 +51,22 @@ std::filesystem::path DataDir() {
   return dir;
 }
 
+const std::string* AppPath(const TraySettings& settings, const std::string& app) {
+  const auto it = std::find_if(settings.appPaths.begin(), settings.appPaths.end(),
+                               [&](const auto& entry) { return entry.first == app; });
+  return it == settings.appPaths.end() ? nullptr : &it->second;
+}
+
+void SetAppPath(TraySettings& settings, const std::string& app, std::string path) {
+  const auto it = std::find_if(settings.appPaths.begin(), settings.appPaths.end(),
+                               [&](const auto& entry) { return entry.first == app; });
+  if (it != settings.appPaths.end()) {
+    it->second = std::move(path);
+  } else {
+    settings.appPaths.emplace_back(app, std::move(path));
+  }
+}
+
 TraySettings LoadSettings() {
   TraySettings settings;
   const auto text = ReadText(DataDir() / L"tray.json");
@@ -87,7 +103,7 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("appPaths"); v != json.end() && v->is_object()) {
     for (const auto& [name, path] : v->items()) {
       if (path.is_string() && !path.get<std::string>().empty()) {
-        settings.appPaths[name] = path.get<std::string>();
+        SetAppPath(settings, name, path.get<std::string>());
       }
     }
   }
@@ -105,7 +121,10 @@ void SaveSettings(const TraySettings& settings) {
   json["updateHours"] = settings.updateHours;
   json["appsMode"] = std::string(AppsModeName(settings.appsMode));
   json["apps"] = settings.apps;
-  json["appPaths"] = settings.appPaths;
+  json["appPaths"] = nlohmann::json::object();
+  for (const auto& [app, path] : settings.appPaths) {
+    json["appPaths"][app] = path;
+  }
   json["protocol"] = settings.protocol;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }

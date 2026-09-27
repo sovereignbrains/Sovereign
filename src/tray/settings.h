@@ -3,9 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app_rules.h"
@@ -41,10 +41,15 @@ struct TraySettings {
   AppsMode appsMode = AppsMode::Exclude;  // per-app routing (app_rules.h)
   std::vector<std::string> apps;          // exe names, as sing-box's process_name
   // Where a listed app's exe was last seen, by its name in `apps`: only for
-  // its icon in the window - the rule matches the name wherever it runs.
-  std::map<std::string, std::string> appPaths;
+  // its icon in the window - the rule matches the name wherever it runs. Not
+  // a std::map: MSVC's debug map allocates when moved, and settings move.
+  std::vector<std::pair<std::string, std::string>> appPaths;
   std::string protocol;  // the proxy selector's default to use; empty = the config's (protocol_choice.h)
 };
+
+// An app's remembered exe path, or null; and setting one (replacing).
+const std::string* AppPath(const TraySettings& settings, const std::string& app);
+void SetAppPath(TraySettings& settings, const std::string& app, std::string path);
 
 // A missing or unreadable tray.json gives the defaults: a broken settings file
 // must not keep the tray from starting.
