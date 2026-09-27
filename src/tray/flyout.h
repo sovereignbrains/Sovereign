@@ -1,5 +1,11 @@
 #pragma once
 
+// windows.h's min/max macros break std::min/max: the CI's clang-tidy doesn't see
+// the build's global NOMINMAX (see src/common/sha256.h), so every header that
+// pulls windows.h in sets it itself.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <cstdint>
