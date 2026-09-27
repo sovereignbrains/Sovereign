@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -78,7 +79,7 @@ enum class Target : std::uint8_t { None, Command, OpenApps, OpenProtocols, BackT
 struct Item {
   Kind kind = Kind::Label;
   D2D1_RECT_F rect{};
-  const wchar_t* glyph = nullptr;
+  std::wstring_view glyph;  // empty: none (never a null pointer - /analyze)
   std::wstring text;
   Target target = Target::None;
   FlyoutCommand command = FlyoutCommand::Toggle;
@@ -108,7 +109,7 @@ Item Command(Kind kind, D2D1_RECT_F rect, const wchar_t* glyph, std::wstring tex
   Item i;
   i.kind = kind;
   i.rect = rect;
-  i.glyph = glyph;
+  i.glyph = glyph != nullptr ? std::wstring_view(glyph) : std::wstring_view();
   i.text = std::move(text);
   i.target = Target::Command;
   i.command = command;
@@ -120,7 +121,7 @@ Item Link(Kind kind, D2D1_RECT_F rect, const wchar_t* glyph, std::wstring text, 
   Item i;
   i.kind = kind;
   i.rect = rect;
-  i.glyph = glyph;
+  i.glyph = glyph != nullptr ? std::wstring_view(glyph) : std::wstring_view();
   i.text = std::move(text);
   i.target = target;
   return i;
@@ -130,7 +131,7 @@ Item Text(D2D1_RECT_F rect, const wchar_t* glyph, std::wstring text, bool enable
   Item i;
   i.kind = Kind::Label;
   i.rect = rect;
-  i.glyph = glyph;
+  i.glyph = glyph != nullptr ? std::wstring_view(glyph) : std::wstring_view();
   i.text = std::move(text);
   i.enabled = enabled;
   return i;
@@ -580,8 +581,8 @@ struct Flyout::Impl {
       return;
     }
 
-    const auto text = [&](const std::wstring& s, IDWriteTextFormat* f, D2D1_RECT_F r, ID2D1Brush* b) {
-      t->DrawText(s.c_str(), static_cast<UINT32>(s.size()), f, r, b, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    const auto text = [&](std::wstring_view s, IDWriteTextFormat* f, D2D1_RECT_F r, ID2D1Brush* b) {
+      t->DrawText(s.data(), static_cast<UINT32>(s.size()), f, r, b, D2D1_DRAW_TEXT_OPTIONS_CLIP);
     };
     const float right = kWidth - kPad;
 
@@ -610,7 +611,7 @@ struct Flyout::Impl {
       }
       ID2D1Brush* ink = it.enabled ? primary.get() : secondary.get();
       const D2D1_RECT_F glyphBox{r.left + 6, r.top, r.left + 34, r.bottom};
-      const D2D1_RECT_F textBox{r.left + (it.glyph != nullptr ? 42.0f : 8.0f), r.top, r.right - 8, r.bottom};
+      const D2D1_RECT_F textBox{r.left + (it.glyph.empty() ? 8.0f : 42.0f), r.top, r.right - 8, r.bottom};
       switch (it.kind) {
         case Kind::Toggle: {
           text(it.glyph, glyph.get(), glyphBox, primary.get());
@@ -634,7 +635,7 @@ struct Flyout::Impl {
           text(kGlyphChevron, glyph.get(), {r.right - 30, r.top, r.right - 6, r.bottom}, secondary.get());
           break;
         case Kind::Label:
-          if (it.glyph != nullptr) {
+          if (!it.glyph.empty()) {
             text(it.glyph, glyph.get(), glyphBox, ink);
           }
           text(it.text, it.enabled ? body.get() : caption.get(), textBox, ink);
