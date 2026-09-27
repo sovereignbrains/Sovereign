@@ -9,6 +9,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <objbase.h>
 
 #include <wil/resource.h>
 #include <wil/result.h>
