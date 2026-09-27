@@ -1,6 +1,6 @@
 // ClientHello parsing and canonicalization (src/conformance/client_hello.h)
 // against real captures of the pinned reference sing-box: argv[1] is the
-// fixtures directory (tools/conformance/capture.py wrote it).
+// fixtures directory (conformance-harness --record ... --save wrote it).
 
 #include <cstdint>
 #include <exception>
