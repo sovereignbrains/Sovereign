@@ -29,13 +29,14 @@ void TestVersions() {
   CHECK(InstallerName({0, 2, 0}) == "Sovereign-Setup-0.2.0.exe");
 }
 
-const std::string kBase = "https://github.com/sovereignbrains/Sovereign/releases/download/v0.2.0/";
+// Where the v0.2.0 files live (a function: a static std::string may throw at startup).
+std::string Base() { return "https://github.com/sovereignbrains/Sovereign/releases/download/v0.2.0/"; }
 
 std::string ReleaseJson(const std::string& extra, const std::string& tag = "v0.2.0") {
   return R"({"tag_name":")" + tag + R"(","html_url":"https://github.com/sovereignbrains/Sovereign/releases/tag/v0.2.0",)" +
          extra + R"("assets":[)" + R"({"name":"Sovereign-Setup-0.2.0.exe","size":31457280,"browser_download_url":")" +
-         kBase + R"(Sovereign-Setup-0.2.0.exe"},)" +
-         R"({"name":"Sovereign-Setup-0.2.0.exe.sha256","size":90,"browser_download_url":")" + kBase +
+         Base() + R"(Sovereign-Setup-0.2.0.exe"},)" +
+         R"({"name":"Sovereign-Setup-0.2.0.exe.sha256","size":90,"browser_download_url":")" + Base() +
          R"(Sovereign-Setup-0.2.0.exe.sha256"}]})";
 }
 
@@ -44,8 +45,8 @@ void TestLatestRelease() {
   CHECK(release.has_value());
   if (release) {
     CHECK((release->version == Version{0, 2, 0}));
-    CHECK(release->installerUrl == kBase + "Sovereign-Setup-0.2.0.exe");
-    CHECK(release->checksumUrl == kBase + "Sovereign-Setup-0.2.0.exe.sha256");
+    CHECK(release->installerUrl == Base() + "Sovereign-Setup-0.2.0.exe");
+    CHECK(release->checksumUrl == Base() + "Sovereign-Setup-0.2.0.exe.sha256");
     CHECK(release->installerSize == 31457280);
   }
   CHECK(!ParseLatestRelease(ReleaseJson(R"("draft":true,)")));
@@ -57,8 +58,8 @@ void TestLatestRelease() {
   CHECK(!IsReleaseAssetUrl("https://evil.example/Sovereign-Setup-0.2.0.exe"));
   CHECK(!IsReleaseAssetUrl("http://github.com/sovereignbrains/Sovereign/releases/download/v0.2.0/x.exe"));
   CHECK(!IsReleaseAssetUrl("https://github.com/someone/Sovereign/releases/download/v0.2.0/x.exe"));
-  CHECK(!IsReleaseAssetUrl(kBase + "a b.exe"));
-  CHECK(IsReleaseAssetUrl(kBase + "Sovereign-Setup-0.2.0.exe"));
+  CHECK(!IsReleaseAssetUrl(Base() + "a b.exe"));
+  CHECK(IsReleaseAssetUrl(Base() + "Sovereign-Setup-0.2.0.exe"));
   CHECK(!ParseLatestRelease("not json"));
   CHECK(!ParseLatestRelease(R"({"tag_name":"v0.2.0","assets":{}})"));
   CHECK(!ParseLatestRelease(R"({"message":"API rate limit exceeded"})"));
