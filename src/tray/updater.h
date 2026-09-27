@@ -1,6 +1,6 @@
 #pragma once
 
-// windows.h's min/max macros break std::min/max (see flyout.h).
+// windows.h's min/max macros break std::min/max.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif

@@ -28,11 +28,9 @@ add_library(sovereign_tray_lib STATIC
 target_include_directories(sovereign_tray_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_lib PUBLIC sovereign_common)
 
-# The windows: the flyout and the main window, drawn with Direct2D - linked by
+# The window, drawn with Direct2D - linked by
 # the tray and by tests/ui's snapshot tool.
 add_library(sovereign_tray_ui STATIC
-  flyout.cpp
-  flyout.h
   main_window.cpp
   main_window.h
   icons.cpp

@@ -39,21 +39,20 @@ constexpr wchar_t kClassName[] = L"SovereignMainWindow";
 
 // Layout, in DIPs (1/96 inch): render targets work in DIPs at the window's
 // DPI, so nothing below is scaled by hand.
-constexpr float kDefaultWidth = 980;
-constexpr float kDefaultHeight = 660;
-constexpr float kMinWidth = 760;
-constexpr float kMinHeight = 520;
-constexpr float kRail = 232;           // the navigation rail
-constexpr float kPadX = 36;            // the page's side margins
-constexpr float kTop = 26;             // the page title's top
-constexpr float kMaxPage = 820;        // wider windows keep the page at this
-constexpr float kNavRow = 40;
-constexpr float kRow = 48;             // a list or settings row
+constexpr float kDefaultWidth = 400;
+constexpr float kDefaultHeight = 620;
+constexpr float kMinWidth = 360;
+constexpr float kMinHeight = 440;
+constexpr float kPad = 16;         // the page's margins
+constexpr float kMaxPage = 560;    // wider windows keep the page at this, centered
+constexpr float kRow = 44;         // a list row
+constexpr float kLinkRow = 56;     // a row that opens a page: a title and a line under it
 constexpr float kButton = 34;
-constexpr float kGap = 16;             // between cards
+constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
-constexpr std::size_t kHistory = 120;  // graph points: two minutes at a poll a second
+constexpr float kPower = 76;       // the on/off button's diameter
+constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
 // The log page: a line's height, and how many lines it keeps (the tray keeps
 // no more either).
@@ -65,10 +64,9 @@ constexpr UINT_PTR kCopiedTimer = 1;
 constexpr UINT kCopiedMs = 1500;
 
 // Segoe Fluent Icons (Windows 11; the same code points in Segoe MDL2 Assets).
-constexpr const wchar_t* kGlyphHome = L"\xE80F";
-constexpr const wchar_t* kGlyphGlobe = L"\xE774";
 constexpr const wchar_t* kGlyphSync = L"\xE895";
-constexpr const wchar_t* kGlyphApps = L"\xE71D";
+constexpr const wchar_t* kGlyphBack = L"\xE72B";
+constexpr const wchar_t* kGlyphChevron = L"\xE76C";
 constexpr const wchar_t* kGlyphLog = L"\xE8A5";
 constexpr const wchar_t* kGlyphSettings = L"\xE713";
 constexpr const wchar_t* kGlyphPower = L"\xE7E8";
@@ -87,17 +85,7 @@ constexpr const wchar_t* kGlyphStopwatch = L"\xE916";
 constexpr const wchar_t* kGlyphDownload = L"\xE896";
 constexpr const wchar_t* kGlyphUndo = L"\xE7A7";
 
-struct PageInfo {
-  const wchar_t* glyph;
-  const wchar_t* name;
-};
-constexpr PageInfo kPages[kUiPageCount] = {
-    {kGlyphHome, L"Обзор"},       {kGlyphGlobe, L"Протокол"}, {kGlyphSync, L"Подписка"},
-    {kGlyphApps, L"Приложения"},  {kGlyphLog, L"Журнал"},     {kGlyphSettings, L"Настройки"},
-};
-
 enum class Kind : std::uint8_t {
-  Nav,           // a navigation rail entry
   Card,          // a rounded panel behind other items
   Divider,       // a line across a card
   Title,         // the page's title
@@ -105,22 +93,22 @@ enum class Kind : std::uint8_t {
   Text,          // one line
   Muted,         // one line, secondary
   Wrap,          // wrapped paragraph, secondary
+  Caption,       // wrapped paragraph, secondary, small
   ErrorText,     // wrapped paragraph with a warning glyph, red
   Field,         // a label on the left, a value on the right
-  Power,         // the overview's big on/off button
-  StateText,     // the overview's state, large, with a wrapped detail
-  Stat,          // a small card: caption and a large value
-  Graph,         // the speed graph
+  Power,         // the overview's on/off button
+  StateText,     // the overview's state and, under it, a wrapped detail
+  Link,          // a row that opens a page: title, a line under it, a glyph on the right
+  Banner,        // a one-line call to action in the accent color
   Button,        // a normal button
   AccentButton,  // the page's main action
   DangerButton,  // quit
-  IconButton,    // a square button with a glyph
+  IconButton,    // a square button with a glyph; `checked`: a dot on it (something new there)
   Switch,        // a row with a toggle switch
   Choice,        // a pickable row with a radio mark
   Segment,       // half of a two-way switch
   AppRow,        // a program in the per-app list
   LogBox,        // the log's lines
-  RailStatus,    // the rail's bottom: state dot and speed
 };
 
 enum class ItemAction : std::uint8_t { None, Command, Page, CopyLogs };
@@ -214,26 +202,50 @@ std::wstring CurrentProtocol(const UiContent& c) {
   return {};
 }
 
+// The overview's lines under the state: which server and how fast, or what
+// to do about it.
 std::wstring StateDetail(const UiContent& c) {
   switch (c.display) {
     case Display::ServiceDown:
       return L"sovereign-core не отвечает. Установи службу от администратора: sovereign-core.exe --install";
     case Display::Off:
-      return c.hasSubscription || !c.protocols.empty() ? L"Нажми на кнопку, чтобы подключиться."
-                                                       : L"Сначала добавь подписку: скопируй ссылку и нажми «Вставить».";
+      return c.hasSubscription || !c.protocols.empty() ? L"Нажми, чтобы подключиться."
+                                                       : L"Сначала добавь подписку.";
     case Display::Starting: return L"Запускается ядро sing-box…";
     case Display::On: {
-      std::wstring protocol = CurrentProtocol(c);
-      if (!protocol.empty() && static_cast<std::size_t>(c.protocol) < c.delays.size() &&
+      std::wstring server = CurrentProtocol(c);
+      if (!server.empty() && static_cast<std::size_t>(c.protocol) < c.delays.size() &&
           c.delays[static_cast<std::size_t>(c.protocol)].state == UiDelay::State::Ok) {
-        protocol += std::format(L" ({} мс)", c.delays[static_cast<std::size_t>(c.protocol)].ms);
+        server += std::format(L" · {} мс", c.delays[static_cast<std::size_t>(c.protocol)].ms);
       }
-      return (protocol.empty() ? std::wstring() : L"Протокол: " + protocol + L" · ") +
-             std::format(L"соединений: {}", c.connections);
+      return (server.empty() ? std::wstring() : server + L"\n") +
+             std::format(L"↓ {}   ↑ {}\nсоединений: {}", FormatRate(c.down), FormatRate(c.up), c.connections);
     }
     case Display::Error: return c.error.empty() ? std::wstring(L"ядро не запустилось") : c.error;
   }
   return {};
+}
+
+// The subscription's line on the overview.
+std::wstring SubscriptionLine(const UiContent& c) {
+  if (!c.hasSubscription) {
+    return L"нет — вставь ссылку";
+  }
+  std::wstring line = c.subscriptionHost.empty() ? std::wstring(L"подписка") : c.subscriptionHost;
+  if (c.subscriptionWaiting) {
+    return line + L" · новая версия ждёт";
+  }
+  if (!c.subscriptionError.empty()) {
+    return line + L" · ошибка обновления";
+  }
+  return line + L" · " + c.subscription;
+}
+
+std::wstring AppsLine(const UiContent& c) {
+  if (c.apps.empty()) {
+    return c.appsInclude ? L"только список — он пуст" : L"всё через VPN";
+  }
+  return std::format(L"{} {}", c.appsInclude ? L"только" : L"всё, кроме", c.apps.size());
 }
 
 std::wstring UpdateStatus(const UiContent& c) {
@@ -260,12 +272,10 @@ class Painter {
                                         reinterpret_cast<IUnknown**>(dwrite_.put())));
     wic_ = wil::CoCreateInstanceNoThrow<IWICImagingFactory>(CLSID_WICImagingFactory);
     THROW_IF_FAILED(dwrite_->CreateEllipsisTrimmingSign(MakeFormat(kText, 14).get(), ellipsis_.put()));
-    title_ = MakeFormat(kDisplay, 26, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    state_ = MakeFormat(kDisplay, 24, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    value_ = MakeFormat(kDisplay, 21, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    title_ = MakeFormat(kDisplay, 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    state_ = MakeFormat(kDisplay, 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     delay_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     delay_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    brand_ = MakeFormat(kDisplay, 17, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     heading_ = MakeFormat(kText, 15, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     body_ = MakeFormat(kText, 14);
     caption_ = MakeFormat(kText, 12.5f);
@@ -277,7 +287,7 @@ class Painter {
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    glyphBig_ = MakeFormat(glyphs.c_str(), 40);
+    glyphBig_ = MakeFormat(glyphs.c_str(), 30);
     glyphBig_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   }
 
@@ -288,25 +298,22 @@ class Painter {
   Layout Build(const UiContent& c, UiPage page, float width, float height, float& scroll, bool copied,
                bool selection) const {
     Layout l;
-    BuildRail(l, c, page, height);
-
-    const float pageWidth = std::min(kMaxPage, std::max(320.0f, width - kRail - 2 * kPadX));
-    const float x0 = kRail + kPadX;
+    const float pageWidth = std::min(kMaxPage, std::max(280.0f, width - 2 * kPad));
+    const float x0 = std::max(kPad, (width - pageWidth) / 2);
     const float x1 = x0 + pageWidth;
     l.viewTop = 0;
     l.viewBottom = height;
     const std::size_t first = l.items.size();
 
-    float y = kTop;
+    float y = kPad;
     switch (page) {
       case UiPage::Overview: y = Overview(l, c, x0, x1, y); break;
-      case UiPage::Protocol: y = Protocols(l, c, x0, x1, y); break;
       case UiPage::Subscription: y = Subscription(l, c, x0, x1, y); break;
       case UiPage::Apps: y = Apps(l, c, x0, x1, y); break;
       case UiPage::Logs: y = Logs(l, x0, x1, y, height, copied, selection); break;
       case UiPage::Settings: y = Settings(l, c, x0, x1, y); break;
     }
-    l.contentHeight = y + kPadX;
+    l.contentHeight = y + kPad;
 
     scroll = std::clamp(scroll, 0.0f, std::max(0.0f, l.contentHeight - height));
     l.scroll = scroll;
@@ -321,9 +328,8 @@ class Painter {
     return l;
   }
 
-  // Draws a layout; `mark` is the app icon for the rail (may be null).
-  void Draw(ID2D1RenderTarget* t, const Layout& l, const UiContent& c, const Interaction& in, ID2D1Bitmap* mark,
-            const LogView& log) const {
+  // Draws a layout.
+  void Draw(ID2D1RenderTarget* t, const Layout& l, const UiContent& c, const Interaction& in, const LogView& log) const {
     wil::com_ptr<ID2D1SolidColorBrush> brush;
     if (FAILED(t->CreateSolidColorBrush(Rgb(0, 0, 0), brush.put()))) {
       return;
@@ -331,20 +337,12 @@ class Painter {
     Canvas k{t, brush.get()};
     const D2D1_SIZE_F size = t->GetSize();
     t->Clear(FromColorRef(ui::kWindowColor));
-    k.Fill({0, 0, kRail, size.height}, FromColorRef(ui::kPanelColor));
-    k.Line({kRail - 0.5f, 0}, {kRail - 0.5f, size.height}, Rgb(255, 255, 255, 0.06f));
-
-    // The rail's header.
-    if (mark != nullptr) {
-      t->DrawBitmap(mark, {20, 20, 52, 52});
-    }
-    k.Text(L"Sovereign", brand_.get(), {62, 20, kRail - 12, 52}, FromColorRef(ui::kPrimaryText));
 
     bool clipped = false;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
       if (it.scrolls && !clipped) {
-        t->PushAxisAlignedClip({kRail, l.viewTop, size.width, l.viewBottom}, D2D1_ANTIALIAS_MODE_ALIASED);
+        t->PushAxisAlignedClip({0, l.viewTop, size.width, l.viewBottom}, D2D1_ANTIALIAS_MODE_ALIASED);
         clipped = true;
       }
       if (it.rect.bottom < l.viewTop || it.rect.top > l.viewBottom) {
@@ -370,25 +368,6 @@ class Painter {
       }
       t->PopAxisAlignedClip();
     }
-  }
-
-  // The app icon as a bitmap of `target` at `dip` DIPs.
-  wil::com_ptr<ID2D1Bitmap> Mark(ID2D1RenderTarget* target, float dip, float dpi) const {
-    wil::com_ptr<ID2D1Bitmap> bitmap;
-    if (!wic_) {
-      return bitmap;
-    }
-    const wil::unique_hicon icon = LoadAppIcon(static_cast<int>(std::lround(dip * dpi / 96.0f)));
-    wil::com_ptr<IWICBitmap> source;
-    wil::com_ptr<IWICFormatConverter> converter;
-    if (!icon || FAILED(wic_->CreateBitmapFromHICON(icon.get(), source.put())) ||
-        FAILED(wic_->CreateFormatConverter(converter.put())) ||
-        FAILED(converter->Initialize(source.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0,
-                                     WICBitmapPaletteTypeCustom))) {
-      return bitmap;
-    }
-    target->CreateBitmapFromWicBitmap(converter.get(), nullptr, bitmap.put());
-    return bitmap;
   }
 
   IWICImagingFactory* Wic() const { return wic_.get(); }
@@ -459,144 +438,132 @@ class Painter {
 
   /* ---- layout ---- */
 
-  static void BuildRail(Layout& l, const UiContent& c, UiPage page, float height) {
-    float y = 76;
-    for (int p = 0; p < kUiPageCount; ++p) {
-      const auto& info = kPages[static_cast<std::size_t>(p)];
-      Item nav = Make(Kind::Nav, {10, y, kRail - 10, y + kNavRow}, info.name, info.glyph);
-      nav.action = ItemAction::Page;
-      nav.index = p;
-      nav.checked = static_cast<int>(page) == p;
-      nav.scrolls = false;
-      l.items.push_back(std::move(nav));
-      y += kNavRow + 4;
-    }
-    Item status = Make(Kind::RailStatus, {20, height - 64, kRail - 16, height - 18}, StateTitle(c));
-    status.detail = c.display == Display::On ? L"↓ " + FormatRate(c.down) + L"   ↑ " + FormatRate(c.up) : std::wstring();
-    status.scrolls = false;
-    l.items.push_back(std::move(status));
-  }
-
+  // A page's top: back to the overview, the title, and a wrapped subtitle.
   float PageTitle(Layout& l, const wchar_t* title, const wchar_t* subtitle, float x0, float x1, float y) const {
-    l.items.push_back(Make(Kind::Title, {x0, y, x1, y + 40}, title));
-    y += 44;
+    Item back = Make(Kind::IconButton, {x0 - 6, y, x0 + 30, y + 36}, L"Назад", kGlyphBack);
+    back.action = ItemAction::Page;
+    back.index = static_cast<int>(UiPage::Overview);
+    l.items.push_back(std::move(back));
+    l.items.push_back(Make(Kind::Title, {x0 + 38, y, x1, y + 36}, title));
+    y += 36 + 8;
     if (subtitle != nullptr) {
-      const float h = TextHeight(subtitle, wrap_.get(), x1 - x0);
-      l.items.push_back(Make(Kind::Wrap, {x0, y, x1, y + h}, subtitle));
+      const float h = TextHeight(subtitle, captionWrap_.get(), x1 - x0);
+      l.items.push_back(Make(Kind::Caption, {x0, y, x1, y + h}, subtitle));
       y += h;
     }
-    return y + 20;
+    return y + 14;
   }
 
   float Paragraph(Layout& l, Kind kind, const std::wstring& text, float x0, float x1, float y) const {
     const float indent = kind == Kind::ErrorText ? 28.0f : 0.0f;
-    const float h = std::max(20.0f, TextHeight(text, wrap_.get(), x1 - x0 - indent));
+    const float h =
+        std::max(20.0f, TextHeight(text, kind == Kind::Caption ? captionWrap_.get() : wrap_.get(), x1 - x0 - indent));
     l.items.push_back(Make(kind, {x0, y, x1, y + h}, text, kind == Kind::ErrorText ? kGlyphWarning : nullptr));
     return y + h;
   }
 
+  // The one screen for every day: the state and the switch, what needs a
+  // click (an update, a subscription waiting), the servers with their
+  // latency, and rows into the rest.
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Обзор", nullptr, x0, x1, y);
-
-    // The state: the power button and what it means.
+    // The state: the switch, what it means, the log and the settings.
     const std::wstring detail = StateDetail(c);
-    const float textLeft = x0 + 24 + 120 + 24;
-    const float detailHeight = TextHeight(detail, wrap_.get(), x1 - 24 - textLeft);
-    const float heroHeight = std::max(168.0f, 72 + detailHeight + 32);
+    const float textLeft = x0 + 16 + kPower + 16;
+    const float detailHeight = TextHeight(detail, captionWrap_.get(), x1 - 16 - textLeft);
+    const float heroHeight = std::max(16 + kPower + 16, 50 + detailHeight + 16);
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + heroHeight}));
     const float cy = y + heroHeight / 2;
-    Item power = CommandItem(Kind::Power, {x0 + 24, cy - 60, x0 + 144, cy + 60}, {}, kGlyphPower, UiCommand::Toggle);
+    Item power = CommandItem(Kind::Power, {x0 + 16, cy - kPower / 2, x0 + 16 + kPower, cy + kPower / 2}, {}, kGlyphPower,
+                             UiCommand::Toggle);
     power.checked = c.on;
     l.items.push_back(std::move(power));
-    const float textTop = cy - (40 + 8 + detailHeight) / 2;
-    Item state = Make(Kind::StateText, {textLeft, textTop, x1 - 24, textTop + 40 + 8 + detailHeight}, StateTitle(c));
+    Item state = Make(Kind::StateText, {textLeft, y + 14, x1 - 16, y + heroHeight - 12}, StateTitle(c));
     state.detail = detail;
     l.items.push_back(std::move(state));
+    Item logs = Make(Kind::IconButton, {x1 - 80, y + 8, x1 - 44, y + 44}, L"Журнал", kGlyphLog);
+    logs.action = ItemAction::Page;
+    logs.index = static_cast<int>(UiPage::Logs);
+    l.items.push_back(std::move(logs));
+    Item settings = Make(Kind::IconButton, {x1 - 44, y + 8, x1 - 8, y + 44}, L"Настройки", kGlyphSettings);
+    settings.action = ItemAction::Page;
+    settings.index = static_cast<int>(UiPage::Settings);
+    settings.checked = c.update == UiUpdate::Available;
+    l.items.push_back(std::move(settings));
     y += heroHeight + kGap;
 
-    // A new version: one click away.
+    // What waits for a click: one line each.
     if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
-      l.items.push_back(Make(Kind::Text, {x0 + 20, y + 10, x1 - 260, y + 34}, L"Доступна версия " + c.updateVersion));
-      l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 34, x1 - 260, y + 56},
-                             c.updateError.empty() ? std::wstring(L"Скачается с GitHub и установится сама.")
-                                                   : L"Не удалось: " + c.updateError));
-      Item update = CommandItem(Kind::AccentButton, {x1 - 236, y + 15, x1 - 20, y + 15 + kButton},
-                                c.update == UiUpdate::Downloading ? L"Скачиваю…" : L"Обновить", kGlyphDownload,
-                                UiCommand::InstallUpdate);
+      Item update = CommandItem(Kind::Banner, {x0, y, x1, y + 40},
+                                c.update == UiUpdate::Downloading ? L"Скачиваю версию " + c.updateVersion + L"…"
+                                : c.updateError.empty()           ? L"Доступна версия " + c.updateVersion + L" — обновить"
+                                                                  : L"Обновление не удалось — повторить",
+                                kGlyphDownload, UiCommand::InstallUpdate);
       update.enabled = c.update == UiUpdate::Available;
       l.items.push_back(std::move(update));
-      y += 64 + kGap;
+      y += 40 + 8;
     }
-
-    // A newer subscription waits for the user's choice (the subscription page).
     if (c.subscriptionWaiting) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
-      l.items.push_back(Make(Kind::Text, {x0 + 20, y + 10, x1 - 260, y + 34}, L"Пришла новая версия подписки"));
-      l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 34, x1 - 260, y + 56}, L"В конфиге твои правки — выбери, что оставить."));
-      Item choose = Make(Kind::Button, {x1 - 236, y + 15, x1 - 20, y + 15 + kButton}, L"Выбрать", kGlyphSync);
-      choose.action = ItemAction::Page;
-      choose.index = static_cast<int>(UiPage::Subscription);
-      l.items.push_back(std::move(choose));
-      y += 64 + kGap;
+      Item waiting = Make(Kind::Banner, {x0, y, x1, y + 40}, L"Новая версия подписки — выбрать", kGlyphSync);
+      waiting.action = ItemAction::Page;
+      waiting.index = static_cast<int>(UiPage::Subscription);
+      l.items.push_back(std::move(waiting));
+      y += 40 + 8;
+    }
+    if (y > l.items.front().rect.bottom + kGap) {
+      y += kGap - 8;
     }
 
-    // Nothing to connect with yet: the way to fix that comes first.
-    if (!c.hasSubscription && c.protocols.empty()) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 76}));
-      l.items.push_back(Make(Kind::Text, {x0 + 20, y + 14, x1 - 260, y + 38}, L"Нет подписки"));
-      l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 38, x1 - 260, y + 62}, L"Скопируй ссылку на подписку в буфер обмена."));
-      l.items.push_back(CommandItem(Kind::AccentButton, {x1 - 236, y + 21, x1 - 20, y + 21 + kButton},
-                                    L"Вставить из буфера", kGlyphPaste, UiCommand::PasteSubscription));
-      y += 76 + kGap;
-    }
+    y = Servers(l, c, x0, x1, y) + kGap;
 
-    // Speed and connections.
-    const float cell = (x1 - x0 - 2 * kGap) / 3;
-    const auto stat = [&](int n, const wchar_t* caption, std::wstring value) {
-      const float left = x0 + static_cast<float>(n) * (cell + kGap);
-      Item s = Make(Kind::Stat, {left, y, left + cell, y + 84}, caption);
-      s.detail = std::move(value);
-      s.index = n;
-      l.items.push_back(std::move(s));
-    };
-    const bool on = c.display == Display::On;
-    stat(0, L"Загрузка", on ? FormatRate(c.down) : L"—");
-    stat(1, L"Отдача", on ? FormatRate(c.up) : L"—");
-    stat(2, L"Соединения", on ? std::to_wstring(c.connections) : L"—");
-    y += 84 + kGap;
-
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 232}));
-    l.items.push_back(Make(Kind::Heading, {x0 + 20, y + 12, x1 - 20, y + 40}, L"Скорость за 2 минуты"));
-    l.items.push_back(Make(Kind::Graph, {x0 + 20, y + 48, x1 - 20, y + 216}));
-    y += 232;
-
-    return y;
+    // Into the rest.
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 2 * kLinkRow}));
+    Item refresh = CommandItem(Kind::IconButton, {x1 - 44, y + 10, x1 - 8, y + 46}, L"Обновить подписку", kGlyphRefresh,
+                               UiCommand::RefreshSubscription);
+    refresh.enabled = c.hasSubscription;
+    l.items.push_back(std::move(refresh));  // before its row: the row's rectangle doesn't reach it, but first wins
+    Item subscription = Make(Kind::Link, {x0 + 4, y + 4, x1 - 48, y + kLinkRow - 4}, L"Подписка");
+    subscription.detail = SubscriptionLine(c);
+    subscription.action = ItemAction::Page;
+    subscription.index = static_cast<int>(UiPage::Subscription);
+    l.items.push_back(std::move(subscription));
+    l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kLinkRow, x1 - 16, y + kLinkRow + 1}));
+    Item apps = Make(Kind::Link, {x0 + 4, y + kLinkRow + 4, x1 - 4, y + 2 * kLinkRow - 4}, L"Приложения", kGlyphChevron);
+    apps.detail = AppsLine(c);
+    apps.action = ItemAction::Page;
+    apps.index = static_cast<int>(UiPage::Apps);
+    l.items.push_back(std::move(apps));
+    return y + 2 * kLinkRow;
   }
 
-  float Protocols(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Протокол", L"Через какой выход подписки идёт трафик. Выбор сохраняется и переживает обновление подписки, пока выход с таким именем в ней есть.",
-                  x0, x1, y);
-    if (c.protocols.empty()) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
-      l.items.push_back(Make(Kind::Muted, {x0 + 20, y, x1 - 20, y + 64},
-                             c.hasSubscription ? L"В конфиге подписки нет выбора протокола." : L"Нет подписки — нечего выбирать."));
-      return y + 64;
+  // The servers of the subscription's selector, with their latency; or how to
+  // get some.
+  float Servers(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    if (!c.hasSubscription && c.protocols.empty()) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 108}));
+      l.items.push_back(Make(Kind::Text, {x0 + 16, y + 12, x1 - 16, y + 36}, L"Нет подписки"));
+      l.items.push_back(Make(Kind::Muted, {x0 + 16, y + 36, x1 - 16, y + 56}, L"Скопируй ссылку на неё (https://…)."));
+      l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, y + 64, x1 - 16, y + 64 + kButton},
+                                    L"Вставить из буфера", kGlyphPaste, UiCommand::PasteSubscription));
+      return y + 108;
     }
-    // The latency test: a button and a line on how it went.
-    Item test = CommandItem(Kind::Button, {x0, y, x0 + 236, y + kButton},
-                            c.delaysTesting ? L"Проверяю…" : L"Проверить задержку", kGlyphStopwatch,
+    if (c.protocols.empty()) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
+      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56}, L"В конфиге нет выбора сервера."));
+      return y + 56;
+    }
+    // The heading and the latency test.
+    std::wstring heading = L"Серверы";
+    if (c.delaysTesting) {
+      heading += L" · проверяю задержку…";
+    } else if (!c.delayError.empty()) {
+      heading += L" · " + c.delayError;
+    }
+    l.items.push_back(Make(Kind::Muted, {x0 + 4, y, x1 - 44, y + 32}, std::move(heading)));
+    Item test = CommandItem(Kind::IconButton, {x1 - 36, y - 2, x1, y + 34}, L"Проверить задержку", kGlyphStopwatch,
                             UiCommand::TestDelays);
     test.enabled = c.canTestDelays && !c.delaysTesting;
     l.items.push_back(std::move(test));
-    std::wstring note = L"Запрос через каждый сервер; меньше — лучше.";
-    if (!c.canTestDelays) {
-      note = L"Задержку можно проверить, когда подключение включено.";
-    } else if (!c.delayError.empty()) {
-      note = L"Не удалось: " + c.delayError;
-    }
-    l.items.push_back(Make(Kind::Muted, {x0 + 252, y, x1, y + kButton}, std::move(note)));
-    y += kButton + 12;
+    y += 36;
 
     const float h = static_cast<float>(c.protocols.size()) * kRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
@@ -605,9 +572,8 @@ class Painter {
       if (i > 0) {
         l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
       }
-      Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 4, x1 - 4, top + kRow - 4}, c.protocols[i], nullptr,
+      Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kRow - 3}, c.protocols[i], nullptr,
                                 UiCommand::SetProtocol, static_cast<int>(i));
-      choice.detail = c.protocols[i] == L"auto" ? L"лучший по задержке" : L"";
       choice.checked = static_cast<int>(i) == c.protocol;
       l.items.push_back(std::move(choice));
     }
@@ -615,7 +581,7 @@ class Painter {
   }
 
   float Subscription(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Подписка", L"Конфиг sing-box с сервера подписки. Скопируй ссылку (https://…) и нажми «Вставить» — Sovereign скачает конфиг и дальше будет обновлять его сам.",
+    y = PageTitle(l, L"Подписка", L"Конфиг sing-box с сервера подписки. Скопируй ссылку (https://…) и нажми «Вставить» — дальше Sovereign обновляет его сам.",
                   x0, x1, y);
     std::wstring state;
     if (!c.hasSubscription) {
@@ -640,7 +606,7 @@ class Painter {
       if (i > 0) {
         l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
       }
-      Item field = Make(Kind::Field, {x0 + 20, top, x1 - 20, top + kRow}, fields[i].first);
+      Item field = Make(Kind::Field, {x0 + 16, top, x1 - 16, top + kRow}, fields[i].first);
       field.detail = fields[i].second;
       l.items.push_back(std::move(field));
     }
@@ -664,31 +630,31 @@ class Painter {
                     x0, x1, y) + kGap;
     }
 
-    l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x0 + 260, y + kButton}, L"Вставить ссылку из буфера",
+    const float mid = (x0 + x1) / 2;
+    l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Вставить ссылку из буфера",
                                   kGlyphPaste, UiCommand::PasteSubscription));
-    Item refresh = CommandItem(Kind::Button, {x0 + 272, y, x0 + 452, y + kButton}, L"Обновить сейчас", kGlyphRefresh,
+    y += kButton + 8;
+    const bool revert = c.hasSubscription && (c.configEdited || c.subscriptionWaiting);
+    Item refresh = CommandItem(Kind::Button, {x0, y, revert ? mid - 4 : x1, y + kButton}, L"Обновить", kGlyphRefresh,
                                UiCommand::RefreshSubscription);
     refresh.enabled = c.hasSubscription;
     l.items.push_back(std::move(refresh));
-    y += kButton;
-    if (c.hasSubscription && (c.configEdited || c.subscriptionWaiting)) {
-      y += 12;
-      l.items.push_back(CommandItem(Kind::Button, {x0, y, x0 + 260, y + kButton}, L"Вернуть как в подписке", kGlyphUndo,
+    if (revert) {
+      l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
                                     UiCommand::RevertConfig));
-      y += kButton;
     }
-    return y;
+    return y + kButton;
   }
 
   // A newer subscription met the user's edits: the three ways on.
   float Waiting(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    const float left = x0 + 20;
-    const float right = x1 - 20;
+    const float left = x0 + 16;
+    const float right = x1 - 16;
     const wchar_t* explain = L"В конфиге есть твои правки, поэтому он не заменён сам — пока работает прежний. "
                              L"Перенести: твои правки лягут поверх новой версии. Что бы ты ни выбрал, "
                              L"прежний конфиг сохранится в папке history.";
     const float textHeight = TextHeight(explain, wrap_.get(), right - left);
-    const bool inRow = right - left >= 3 * 180 + 2 * 12;
+    const bool inRow = right - left >= 3 * 150 + 2 * 12;
     const float buttons = inRow ? kButton : 3 * kButton + 2 * 8;
     const std::wstring& error = c.choiceError;
     const float errorHeight = error.empty() ? 0 : TextHeight(error, wrap_.get(), right - left - 28) + 12;
@@ -736,7 +702,7 @@ class Painter {
 
     if (c.apps.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
-      l.items.push_back(Make(Kind::Muted, {x0 + 20, y, x1 - 20, y + 64},
+      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 64},
                              c.appsInclude ? L"Список пуст — через VPN не идёт ничего." : L"Список пуст — всё идёт через VPN."));
       y += 64;
     } else {
@@ -756,58 +722,50 @@ class Painter {
       y += h;
     }
     y += kGap;
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, x0 + 236, y + kButton}, L"Добавить из запущенных", kGlyphAdd,
+    const float half = (x0 + x1) / 2;
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, half - 4, y + kButton}, L"Из запущенных", kGlyphAdd,
                                   UiCommand::AddRunning));
     l.items.push_back(
-        CommandItem(Kind::Button, {x0 + 248, y, x0 + 420, y + kButton}, L"Выбрать exe…", kGlyphFile, UiCommand::AddExe));
+        CommandItem(Kind::Button, {half + 4, y, x1, y + kButton}, L"Файл exe…", kGlyphFile, UiCommand::AddExe));
     return y + kButton;
   }
 
   float Logs(Layout& l, float x0, float x1, float y, float height, bool copied, bool selection) const {
-    l.items.push_back(Make(Kind::Title, {x0, y, x1 - 240, y + 40}, L"Журнал"));
+    const float titleTop = y;
+    y = PageTitle(l, L"Журнал", L"Выделение — мышью, с Shift — диапазон; Ctrl+A — всё, Ctrl+C — копировать.", x0, x1, y);
     std::wstring label = selection ? L"Копировать выделенное" : L"Копировать всё";
     if (copied) {
       label = L"Скопировано";
     }
-    Item copy = Make(Kind::Button, {x1 - 230, y + 3, x1, y + 3 + kButton}, std::move(label), copied ? kGlyphCheck : kGlyphCopy);
+    // In the title's row, on the right.
+    Item copy = Make(Kind::Button, {x1 - 196, titleTop + 1, x1, titleTop + 1 + kButton}, std::move(label),
+                     copied ? kGlyphCheck : kGlyphCopy);
     copy.action = ItemAction::CopyLogs;
     l.items.push_back(std::move(copy));
-    y += 44 + 4;
-    l.items.push_back(Make(Kind::Muted, {x0, y, x1, y + 20},
-                           L"Выделение — мышью (с Shift — диапазон), Ctrl+A — всё, Ctrl+C — скопировать."));
-    y += 20 + 10;
     // Fills the window: the lines scroll inside, the page doesn't.
-    const float bottom = std::max(y + 120, height - kPadX);
+    const float bottom = std::max(y + 120, height - kPad);
     l.items.push_back(Make(Kind::Card, {x0, y, x1, bottom}));
     l.items.push_back(Make(Kind::LogBox, {x0, y, x1, bottom}));
     l.logBox = D2D1_RECT_F{x0 + 1, y + 8, x1 - 1, bottom - 8};
-    return bottom - kPadX + 1;  // exactly the view: nothing to scroll
+    return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Настройки", nullptr, x0, x1, y);
 
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 72}));
-    Item autostart = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 68}, L"Запуск при входе в Windows", nullptr,
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 68}));
+    Item autostart = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 64}, L"Запуск при входе в Windows", nullptr,
                                  UiCommand::ToggleAutostart);
-    autostart.detail = L"Sovereign стартует в трее, окно не открывается.";
+    autostart.detail = L"В трее, без окна.";
     autostart.checked = c.autostart;
     l.items.push_back(std::move(autostart));
-    y += 72 + kGap;
+    y += 68 + kGap;
 
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 72}));
-    l.items.push_back(Make(Kind::Text, {x0 + 20, y + 12, x1 - 180, y + 36}, L"Папка данных"));
-    l.items.push_back(
-        Make(Kind::Muted, {x0 + 20, y + 36, x1 - 180, y + 60}, L"%LOCALAPPDATA%\\Sovereign — настройки и конфиг"));
-    l.items.push_back(CommandItem(Kind::Button, {x1 - 20 - 140, y + 19, x1 - 20, y + 19 + kButton}, L"Открыть",
-                                  kGlyphFolder, UiCommand::OpenFolder));
-    y += 72 + kGap;
-
-    // Version and updates.
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 72}));
-    l.items.push_back(Make(Kind::Text, {x0 + 20, y + 12, x1 - 240, y + 36}, L"Sovereign " + c.version));
-    l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 36, x1 - 240, y + 60}, UpdateStatus(c)));
-    const D2D1_RECT_F button{x1 - 20 - 210, y + 19, x1 - 20, y + 19 + kButton};
+    // Version and updates: the button under the text, the window is narrow.
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 110}));
+    l.items.push_back(Make(Kind::Text, {x0 + 16, y + 10, x1 - 16, y + 34}, L"Sovereign " + c.version));
+    l.items.push_back(Make(Kind::Muted, {x0 + 16, y + 34, x1 - 16, y + 56}, UpdateStatus(c)));
+    const D2D1_RECT_F button{x0 + 16, y + 64, x1 - 16, y + 64 + kButton};
     if (c.update == UiUpdate::Available) {
       l.items.push_back(CommandItem(Kind::AccentButton, button, L"Обновить до " + c.updateVersion, kGlyphDownload,
                                     UiCommand::InstallUpdate));
@@ -818,14 +776,18 @@ class Painter {
       check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading;
       l.items.push_back(std::move(check));
     }
-    y += 72 + kGap + 8;
+    y += 110 + kGap;
 
-    l.items.push_back(CommandItem(Kind::DangerButton, {x0, y, x0 + 220, y + kButton}, L"Выйти из Sovereign", kGlyphExit,
+    const float mid = (x0 + x1) / 2;
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Папка данных", kGlyphFolder,
+                                  UiCommand::OpenFolder));
+    l.items.push_back(CommandItem(Kind::DangerButton, {mid + 4, y, x1, y + kButton}, L"Выйти", kGlyphExit,
                                   UiCommand::Exit));
     y += kButton + 10;
-    return Paragraph(l, Kind::Wrap,
-                     L"Трей закроется. Подключение этим не выключается — им управляет служба; при следующем "
-                     L"запуске Sovereign продолжит с того же места.",
+    return Paragraph(l, Kind::Caption,
+                     L"Папка — %LOCALAPPDATA%\\Sovereign: настройки, конфиг, его история. "
+                     L"«Выйти» закрывает трей; подключение остаётся — им управляет служба, "
+                     L"и следующий запуск продолжит с того же места.",
                      x0, x1, y);
   }
 
@@ -838,24 +800,6 @@ class Painter {
     const D2D1_COLOR_F accent = FromColorRef(ui::kAccent);
     const float hoverAlpha = pressed ? 0.04f : (hovered ? 0.08f : 0.0f);
     switch (it.kind) {
-      case Kind::Nav: {
-        if (it.checked || hovered) {
-          k.Round(r, 6, Rgb(255, 255, 255, it.checked ? 0.07f : 0.04f));
-        }
-        if (it.checked) {
-          const float mid = (r.top + r.bottom) / 2;
-          k.Round({r.left, mid - 9, r.left + 3, mid + 9}, 1.5f, accent);
-        }
-        k.Text(it.glyph, glyph_.get(), {r.left + 10, r.top, r.left + 38, r.bottom}, it.checked ? accent : primary);
-        k.Text(it.text, body_.get(), {r.left + 48, r.top, r.right - 8, r.bottom}, primary);
-        break;
-      }
-      case Kind::RailStatus: {
-        k.t->FillEllipse(D2D1::Ellipse({r.left + 5, r.top + 12}, 5, 5), k.Color(FromColorRef(c.statusDot)));
-        k.Text(it.text, caption_.get(), {r.left + 18, r.top, r.right, r.top + 24}, primary);
-        k.Text(it.detail, caption_.get(), {r.left + 18, r.top + 22, r.right, r.top + 46}, secondary);
-        break;
-      }
       case Kind::Card:
         k.Round(r, kRadius, FromColorRef(ui::kCardColor));
         k.Outline(r, kRadius, Rgb(255, 255, 255, 0.06f));
@@ -866,6 +810,7 @@ class Painter {
       case Kind::Text: k.Text(it.text, body_.get(), r, primary); break;
       case Kind::Muted: k.Text(it.text, caption_.get(), r, secondary); break;
       case Kind::Wrap: k.Text(it.text, wrap_.get(), r, secondary); break;
+      case Kind::Caption: k.Text(it.text, captionWrap_.get(), r, secondary); break;
       case Kind::ErrorText: {
         const D2D1_COLOR_F danger = FromColorRef(ui::kDanger);
         k.Text(it.glyph, glyph_.get(), {r.left, r.top, r.left + 20, r.top + 20}, danger);
@@ -873,39 +818,48 @@ class Painter {
         break;
       }
       case Kind::Field:
-        k.Text(it.text, body_.get(), {r.left, r.top, r.left + 160, r.bottom}, secondary);
-        k.Text(it.detail, body_.get(), {r.left + 160, r.top, r.right, r.bottom}, primary);
+        k.Text(it.text, body_.get(), {r.left, r.top, r.left + 110, r.bottom}, secondary);
+        k.Text(it.detail, body_.get(), {r.left + 110, r.top, r.right, r.bottom}, primary);
         break;
       case Kind::Power: DrawPower(k, it, c, hovered, pressed); break;
       case Kind::StateText: {
-        k.Text(it.text, state_.get(), {r.left, r.top, r.right, r.top + 40}, primary);
-        k.Text(it.detail, wrap_.get(), {r.left, r.top + 48, r.right, r.bottom},
+        k.Text(it.text, state_.get(), {r.left, r.top, r.right - 72, r.top + 30}, primary);  // the icons' corner
+        k.Text(it.detail, captionWrap_.get(), {r.left, r.top + 36, r.right, r.bottom},
                c.display == Display::Error ? FromColorRef(ui::kDanger) : secondary);
         break;
       }
-      case Kind::Stat: {
-        k.Round(r, kRadius, FromColorRef(ui::kCardColor));
-        k.Outline(r, kRadius, Rgb(255, 255, 255, 0.06f));
-        D2D1_COLOR_F mark = secondary;
-        if (it.index == 0) {
-          mark = accent;
-        } else if (it.index == 1) {
-          mark = FromColorRef(ui::kUpload);
+      case Kind::Link: {
+        if (hoverAlpha > 0) {
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
         }
-        k.Round({r.left + 18, r.top + 22, r.left + 22, r.top + 34}, 2, mark);
-        k.Text(it.text, caption_.get(), {r.left + 30, r.top + 16, r.right - 12, r.top + 40}, secondary);
-        k.Text(it.detail, value_.get(), {r.left + 18, r.top + 40, r.right - 12, r.bottom - 12}, primary);
+        const float right = it.glyph.empty() ? r.right - 12 : r.right - 40;
+        k.Text(it.text, body_.get(), {r.left + 12, r.top + 6, right, r.top + 26}, primary);
+        k.Text(it.detail, caption_.get(), {r.left + 12, r.top + 26, right, r.bottom - 4}, secondary);
+        k.Text(it.glyph, glyph_.get(), {r.right - 36, r.top, r.right - 8, r.bottom}, secondary);
         break;
       }
-      case Kind::Graph: DrawGraph(k, r, c); break;
+      case Kind::Banner: {
+        k.Round(r, kRadius, FromColorRef(ui::kAccent, pressed ? 0.10f : (hovered ? 0.18f : 0.13f)));
+        const D2D1_COLOR_F ink = it.enabled ? accent : secondary;
+        k.Text(it.glyph, glyph_.get(), {r.left + 10, r.top, r.left + 38, r.bottom}, ink);
+        k.Text(it.text, body_.get(), {r.left + 44, r.top, r.right - 36, r.bottom}, ink);
+        if (it.enabled) {
+          k.Text(kGlyphChevron, glyph_.get(), {r.right - 34, r.top, r.right - 8, r.bottom}, ink);
+        }
+        break;
+      }
       case Kind::Button:
       case Kind::AccentButton:
       case Kind::DangerButton: DrawButton(k, it, hovered, pressed); break;
       case Kind::IconButton:
-        if (hoverAlpha > 0) {
+        if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
-        k.Text(it.glyph, glyph_.get(), r, hovered ? primary : secondary);
+        k.Text(it.glyph, glyph_.get(), r,
+               !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f) : (hovered ? primary : secondary));
+        if (it.checked) {
+          k.t->FillEllipse(D2D1::Ellipse({r.right - 9, r.top + 9}, 4, 4), k.Color(accent));
+        }
         break;
       case Kind::Switch: {
         if (hoverAlpha > 0) {
@@ -921,18 +875,17 @@ class Painter {
         if (hoverAlpha > 0) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
         }
-        const D2D1_POINT_2F dot{r.left + 26, (r.top + r.bottom) / 2};
+        const D2D1_POINT_2F dot{r.left + 22, (r.top + r.bottom) / 2};
         if (it.checked) {
           k.t->FillEllipse(D2D1::Ellipse(dot, 9, 9), k.Color(accent));
           k.t->FillEllipse(D2D1::Ellipse(dot, 4, 4), k.Color(Rgb(12, 20, 36)));
         } else {
           k.t->DrawEllipse(D2D1::Ellipse(dot, 8.5f, 8.5f), k.Color(secondary), 1.2f);
         }
-        k.Text(it.text, body_.get(), {r.left + 50, r.top, r.right - 290, r.bottom}, primary);
-        k.Text(it.detail, caption_.get(), {r.right - 280, r.top, r.right - 110, r.bottom}, secondary);
+        k.Text(it.text, body_.get(), {r.left + 42, r.top, r.right - 100, r.bottom}, primary);
         if (it.index >= 0 && static_cast<std::size_t>(it.index) < c.delays.size()) {
           const UiDelay& delay = c.delays[static_cast<std::size_t>(it.index)];
-          k.Text(DelayLabel(delay), delay_.get(), {r.right - 110, r.top, r.right - 16, r.bottom},
+          k.Text(DelayLabel(delay), delay_.get(), {r.right - 100, r.top, r.right - 12, r.bottom},
                  FromColorRef(ui::DelayColor(delay)));
         }
         break;
@@ -1072,7 +1025,7 @@ class Painter {
     if (it.checked) {
       // On: a soft halo, the accent disc, a dark glyph.
       k.t->FillEllipse(D2D1::Ellipse(center, radius, radius), k.Color(FromColorRef(ui::kAccent, 0.12f)));
-      const float inner = radius - 10;
+      const float inner = radius - 7;
       k.t->FillEllipse(D2D1::Ellipse(center, inner, inner),
                        k.Color(FromColorRef(ui::kAccent, pressed ? 0.8f : (hovered ? 0.92f : 1.0f))));
       if (c.display != Display::On) {
@@ -1080,85 +1033,12 @@ class Painter {
       }
       k.Text(it.glyph, glyphBig_.get(), r, Rgb(12, 20, 36));
     } else {
-      const float inner = radius - 10;
+      const float inner = radius - 7;
       k.t->FillEllipse(D2D1::Ellipse(center, inner, inner),
                        k.Color(Rgb(255, 255, 255, pressed ? 0.05f : (hovered ? 0.10f : 0.06f))));
       k.t->DrawEllipse(D2D1::Ellipse(center, inner, inner), k.Color(ring), 2);
       k.Text(it.glyph, glyphBig_.get(), r, FromColorRef(ui::kPrimaryText));
     }
-  }
-
-  void DrawGraph(const Canvas& k, D2D1_RECT_F r, const UiContent& c) const {
-    const D2D1_COLOR_F grid = Rgb(255, 255, 255, 0.06f);
-    const D2D1_COLOR_F secondary = FromColorRef(ui::kSecondaryText);
-    // The legend, in the heading's row.
-    const D2D1_RECT_F legend{r.right - 230, r.top - 36, r.right, r.top - 8};
-    k.Round({legend.left, legend.top + 12, legend.left + 10, legend.top + 16}, 2, FromColorRef(ui::kAccent));
-    k.Text(L"загрузка", caption_.get(), {legend.left + 16, legend.top, legend.left + 110, legend.bottom}, secondary);
-    k.Round({legend.left + 120, legend.top + 12, legend.left + 130, legend.top + 16}, 2, FromColorRef(ui::kUpload));
-    k.Text(L"отдача", caption_.get(), {legend.left + 136, legend.top, legend.right, legend.bottom}, secondary);
-
-    float peak = 0;
-    for (const auto& [down, up] : c.history) {
-      peak = std::max({peak, down, up});
-    }
-    // The scale's top: a power of two from 4 KB/s, so its quarters read round.
-    float top = 4096;
-    while (top < peak * 1.1f) {
-      top *= 2;
-    }
-    const bool idle = peak <= 0;
-    const float left = r.left + 64;
-    for (int i = 0; i <= 4; ++i) {
-      const float y = r.bottom - (r.bottom - r.top) * static_cast<float>(i) / 4.0f;
-      k.Line({left, std::round(y) + 0.5f}, {r.right, std::round(y) + 0.5f}, grid);
-      if (i > 0 && !idle) {
-        k.Text(FormatRate(static_cast<double>(top) * i / 4), caption_.get(), {r.left, y - 10, left - 8, y + 10},
-               secondary);
-      }
-    }
-    if (idle) {
-      k.Text(c.display == Display::On ? L"трафика нет" : L"нет данных — подключение выключено", button_.get(),
-             {left, r.top, r.right, r.bottom}, secondary);
-      return;
-    }
-    const float step = (r.right - left) / static_cast<float>(kHistory - 1);
-    const std::size_t count = std::min(c.history.size(), kHistory);
-    const std::size_t skip = c.history.size() - count;
-    const auto x = [&](std::size_t i) { return r.right - step * static_cast<float>(count - 1 - i); };
-    const auto y = [&](float v) { return r.bottom - (r.bottom - r.top) * std::min(v / top, 1.0f); };
-
-    const auto series = [&](bool down, D2D1_COLOR_F color, bool fill) {
-      wil::com_ptr<ID2D1PathGeometry> path;
-      wil::com_ptr<ID2D1GeometrySink> sink;
-      if (FAILED(d2d_->CreatePathGeometry(path.put())) || FAILED(path->Open(sink.put()))) {
-        return;
-      }
-      const auto value = [&](std::size_t i) {
-        const auto& p = c.history[skip + i];
-        return down ? p.first : p.second;
-      };
-      sink->BeginFigure(fill ? D2D1::Point2F(x(0), r.bottom) : D2D1::Point2F(x(0), y(value(0))),
-                        fill ? D2D1_FIGURE_BEGIN_FILLED : D2D1_FIGURE_BEGIN_HOLLOW);
-      for (std::size_t i = fill ? 0 : 1; i < count; ++i) {
-        sink->AddLine(D2D1::Point2F(x(i), y(value(i))));
-      }
-      if (fill) {
-        sink->AddLine(D2D1::Point2F(x(count - 1), r.bottom));
-      }
-      sink->EndFigure(fill ? D2D1_FIGURE_END_CLOSED : D2D1_FIGURE_END_OPEN);
-      if (FAILED(sink->Close())) {
-        return;
-      }
-      if (fill) {
-        k.t->FillGeometry(path.get(), k.Color(color));
-      } else {
-        k.t->DrawGeometry(path.get(), k.Color(color), 1.6f);
-      }
-    };
-    series(true, FromColorRef(ui::kAccent, 0.16f), true);
-    series(false, FromColorRef(ui::kUpload), false);
-    series(true, FromColorRef(ui::kAccent), false);
   }
 
   wil::com_ptr<ID2D1Factory> d2d_;
@@ -1167,9 +1047,7 @@ class Painter {
   wil::com_ptr<IDWriteInlineObject> ellipsis_;
   wil::com_ptr<IDWriteTextFormat> title_;
   wil::com_ptr<IDWriteTextFormat> state_;
-  wil::com_ptr<IDWriteTextFormat> value_;
   wil::com_ptr<IDWriteTextFormat> delay_;
-  wil::com_ptr<IDWriteTextFormat> brand_;
   wil::com_ptr<IDWriteTextFormat> heading_;
   wil::com_ptr<IDWriteTextFormat> body_;
   wil::com_ptr<IDWriteTextFormat> caption_;
@@ -1227,17 +1105,19 @@ struct MainWindow::Impl {
   bool selecting = false;      // dragging a selection over the log
   std::optional<POINT> mouse;  // the cursor over the client area, in pixels
   bool copied = false;
-  bool placed = false;  // sized and centered once, on the first show
+  bool placed = false;  // sized and put by the tray once, on the first show
 
   wil::com_ptr<ID2D1HwndRenderTarget> target;
-  wil::com_ptr<ID2D1Bitmap> mark;  // tied to the target
+  ULONGLONG deactivatedAt = 0;  // GetTickCount64 when the window last lost the focus
 
   Impl(HINSTANCE inst, CommandHandler handler) : instance(inst), onCommand(std::move(handler)) {
     WNDCLASSW wc{};
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = &Impl::WindowProc;
     wc.hInstance = instance;
-    wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));  // IDC_ARROW, see flyout.cpp
+    // IDC_ARROW (32512) spelled out: the macro goes through the UNICODE-dependent
+    // MAKEINTRESOURCE, which the CI's clang won't match with LoadCursorW.
+    wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     wc.lpszClassName = kClassName;
     RegisterClassW(&wc);  // already registered is fine
     window.reset(CreateWindowExW(0, kClassName, L"Sovereign", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
@@ -1297,7 +1177,7 @@ struct MainWindow::Impl {
       if (!Interactive(item) || !Contains(item.rect, x, y)) {
         continue;
       }
-      if (item.scrolls && (y < layout.viewTop || y >= layout.viewBottom || x < kRail)) {
+      if (item.scrolls && (y < layout.viewTop || y >= layout.viewBottom)) {
         continue;
       }
       return static_cast<int>(i);
@@ -1491,7 +1371,6 @@ struct MainWindow::Impl {
         // The system's suggestion keeps the window the same physical size.
         const auto* suggested = reinterpret_cast<const RECT*>(lParam);  // NOLINT(performance-no-int-to-ptr)
         target.reset();
-        mark.reset();
         SetWindowPos(w, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
         Relayout();
@@ -1572,7 +1451,7 @@ struct MainWindow::Impl {
         const float step = -static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
         if (InLog(at)) {
           ScrollLog(step * 3 * kLogLine);
-        } else if (ToDip(at.x) >= kRail) {
+        } else {
           ScrollBy(step * kWheelStep);
         }
         return 0;
@@ -1585,6 +1464,11 @@ struct MainWindow::Impl {
           Relayout();
         }
         return 0;
+      case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE) {
+          deactivatedAt = GetTickCount64();
+        }
+        return DefWindowProcW(w, message, wParam, lParam);
       case WM_CLOSE:
         // Only the view closes: the tray keeps running.
         ShowWindow(w, SW_HIDE);
@@ -1615,6 +1499,15 @@ struct MainWindow::Impl {
     if (onLog && key == VK_ESCAPE && log.HasSelection()) {
       log.anchor = log.caret = -1;
       Relayout();
+      return true;
+    }
+    if (key == VK_ESCAPE) {
+      // Back to the overview; from there, away.
+      if (page != UiPage::Overview) {
+        Go(UiPage::Overview);
+      } else {
+        ShowWindow(hwnd, SW_HIDE);
+      }
       return true;
     }
     const float screen = onLog ? layout.logBox->bottom - layout.logBox->top - kLogLine : ClientDip().height * 0.8f;
@@ -1657,17 +1550,17 @@ struct MainWindow::Impl {
         return;
       }
       target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
-      mark = painter.Mark(target.get(), 32, dpi);
     }
     target->BeginDraw();
-    painter.Draw(target.get(), layout, content, in, mark.get(), log);
+    painter.Draw(target.get(), layout, content, in, log);
     if (target->EndDraw() == D2DERR_RECREATE_TARGET) {
       target.reset();
-      mark.reset();
     }
   }
 
-  // Sized for the monitor under the cursor and centered in its work area.
+  // Sized for the monitor under the cursor and put in the corner of its work
+  // area - where the notification area usually is, and the tray is where
+  // it's opened from.
   void Place() {
     POINT cursor{};
     GetCursorPos(&cursor);
@@ -1681,7 +1574,8 @@ struct MainWindow::Impl {
     const RECT work = mi.rcWork;
     const int w = std::min(Scale(kDefaultWidth, dpiX), static_cast<int>(work.right - work.left));
     const int h = std::min(Scale(kDefaultHeight, dpiX), static_cast<int>(work.bottom - work.top));
-    SetWindowPos(hwnd, nullptr, work.left + (work.right - work.left - w) / 2, work.top + (work.bottom - work.top - h) / 2,
+    const int margin = Scale(12, dpiX);
+    SetWindowPos(hwnd, nullptr, std::max(work.left, work.right - w - margin), std::max(work.top, work.bottom - h - margin),
                  w, h, SWP_NOZORDER | SWP_NOACTIVATE);
   }
 };
@@ -1703,6 +1597,18 @@ void MainWindow::Show(UiPage page) {
 }
 
 void MainWindow::Hide() { ShowWindow(impl_->hwnd, SW_HIDE); }
+
+void MainWindow::Toggle() {
+  Impl& m = *impl_;
+  // A click on the tray icon takes the focus from the window before the
+  // click arrives: a window that just lost it was in front.
+  const bool inFront = GetForegroundWindow() == m.hwnd || GetTickCount64() - m.deactivatedAt < kToggleGraceMs;
+  if (IsVisible() && inFront) {
+    Hide();
+  } else {
+    Show(IsVisible() ? m.page : UiPage::Overview);
+  }
+}
 
 bool MainWindow::IsVisible() const { return impl_->hwnd != nullptr && IsWindowVisible(impl_->hwnd) != FALSE; }
 
@@ -1746,9 +1652,8 @@ void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::
   const float scale = 96.0f / dpi;
   const Layout layout = painter.Build(content, page, static_cast<float>(width) * scale,
                                       static_cast<float>(height) * scale, scroll, false, log.HasSelection());
-  const wil::com_ptr<ID2D1Bitmap> mark = painter.Mark(target.get(), 32, dpi);
   target->BeginDraw();
-  painter.Draw(target.get(), layout, content, Interaction{}, mark.get(), log);
+  painter.Draw(target.get(), layout, content, Interaction{}, log);
   THROW_IF_FAILED(target->EndDraw());
 
   wil::com_ptr<IWICStream> stream;
