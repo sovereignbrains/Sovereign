@@ -48,6 +48,7 @@
 #include "app_rules.h"
 #include "autostart.h"
 #include "cache_file.h"
+#include "config_sync.h"
 #include "delays.h"
 #include "fetch.h"
 #include "protocol_choice.h"
@@ -170,12 +171,17 @@ struct View {
   std::int64_t lastRefresh = 0;
   int updateHours = 0;
   std::string subscriptionError;  // the last refresh failed with this
+  bool configEdited = false;      // config.json differs from the subscription it's based on
+  bool subscriptionWaiting = false;  // a newer subscription waits for the user's choice
+  std::string choiceError;        // why the last choice didn't go through
+  std::vector<std::string> mergeNotes;  // where the last carry-over had both sides change the same thing
   std::deque<std::pair<float, float>> history;  // down, up per poll, oldest first
   // A balloon to show once: the UI shows it when noticeId changes.
   unsigned noticeId = 0;
   std::wstring noticeTitle;
   std::wstring noticeText;
   bool noticeIsError = false;
+  std::optional<UiPage> noticePage;  // what a click on the balloon opens
   AppsMode appsMode = AppsMode::Exclude;
   std::vector<std::string> apps;
   std::vector<std::string> protocols;  // the config selector's options
@@ -183,6 +189,15 @@ struct View {
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
   bool delaysTesting = false;
   std::string delayError;
+};
+
+// What to do with the config when a newer subscription meets the user's
+// edits (config_sync.h), or to drop the edits.
+enum class ConfigChoice : std::uint8_t {
+  TakeNew,   // the new subscription replaces the config; the edits go to history
+  KeepMine,  // the config stays; the new subscription becomes its base
+  CarryOver, // the edits, merged into the new subscription
+  Revert,    // back to the subscription as it arrived (the newest, if one waits)
 };
 
 // A new per-app setup from the flyout or the main window.
@@ -213,6 +228,7 @@ struct Shared {
   bool pendingUrlTest = false;
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
+  std::optional<ConfigChoice> pendingChoice;
   View view;
   HWND window = nullptr;
   // The log window's lines, newest last, and how many were ever added (the
@@ -221,7 +237,8 @@ struct Shared {
   std::uint64_t logsAdded = 0;
 
   bool HasRequests() const {
-    return pendingWant || pendingImport || pendingRefresh || pendingUrlTest || pendingApps || pendingProtocol;
+    return pendingWant || pendingImport || pendingRefresh || pendingUrlTest || pendingApps || pendingProtocol ||
+           pendingChoice;
   }
 };
 
@@ -352,11 +369,13 @@ class Worker {
 
   void Run(const std::stop_token& stop) {
     auto& shared = State();
+    AdoptOriginal();
     while (!stop.stop_requested()) {
       std::optional<bool> want;
       std::optional<std::string> import;
       std::optional<AppsChange> apps;
       std::optional<std::string> protocol;
+      std::optional<ConfigChoice> choice;
       bool refresh = false;
       bool urlTest = false;
       {
@@ -364,6 +383,7 @@ class Worker {
         want = std::exchange(shared.pendingWant, std::nullopt);
         apps = std::exchange(shared.pendingApps, std::nullopt);
         protocol = std::exchange(shared.pendingProtocol, std::nullopt);
+        choice = std::exchange(shared.pendingChoice, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
         refresh = std::exchange(shared.pendingRefresh, false);
         urlTest = std::exchange(shared.pendingUrlTest, false);
@@ -380,6 +400,9 @@ class Worker {
         Refresh();
       } else if (refresh || RefreshDue()) {
         Refresh();
+      }
+      if (choice) {
+        Choose(*choice);
       }
       if (apps) {
         settings_.appsMode = apps->mode;
@@ -455,11 +478,37 @@ class Worker {
     return std::time(nullptr) - settings_.lastRefresh >= std::int64_t{settings_.updateHours} * 3600;
   }
 
-  void Notify(std::wstring title, std::wstring text, bool isError) {
+  void Notify(std::wstring title, std::wstring text, bool isError, std::optional<UiPage> page = std::nullopt) {
     ++noticeId_;
     noticeTitle_ = std::move(title);
     noticeText_ = std::move(text);
     noticeIsError_ = isError;
+    noticePage_ = page;
+  }
+
+  // A tray from before subscription.json: its config.json is the
+  // subscription as it arrived (refreshes overwrote it), so that's the base.
+  void AdoptOriginal() {
+    if (settings_.subscriptionUrl.empty()) {
+      return;
+    }
+    try {
+      if (!sovereign::tray::LoadOriginal()) {
+        if (const auto config = sovereign::tray::LoadConfig()) {
+          sovereign::tray::SaveOriginal(*config);
+        }
+      }
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("saving subscription.json failed");
+    }
+  }
+
+  // config.json becomes `text`; the one it replaces goes to history.
+  static void ReplaceConfig(const std::optional<std::string>& old, const std::string& text) {
+    if (old && !sovereign::tray::SameConfig(*old, text)) {
+      sovereign::tray::SaveHistory(*old);
+    }
+    sovereign::tray::SaveConfig(text);
   }
 
   void Refresh() {
@@ -484,25 +533,140 @@ class Worker {
     lastFailure_.reset();
     subscriptionError_.clear();
 
-    const auto previous = sovereign::tray::LoadConfig();
-    const bool changed = !previous || *previous != fetched->body;
+    // Taken whole if the config has no edits of its own; otherwise it waits
+    // for the user (config_sync.h).
+    using sovereign::tray::Arrival;
+    Arrival arrival = Arrival::Unchanged;
+    bool alreadyWaiting = false;
     try {
-      if (changed) {
-        sovereign::tray::SaveConfig(fetched->body);
+      const auto original = sovereign::tray::LoadOriginal();
+      const auto config = sovereign::tray::LoadConfig();
+      arrival = sovereign::tray::ClassifyArrival(original, config, fetched->body);
+      switch (arrival) {
+        case Arrival::Unchanged:
+          if (!original) {
+            sovereign::tray::SaveOriginal(fetched->body);
+          }
+          sovereign::tray::ClearPending();  // the subscription went back to what the config is based on
+          break;
+        case Arrival::Replace:
+          ReplaceConfig(config, fetched->body);
+          sovereign::tray::SaveOriginal(fetched->body);
+          sovereign::tray::ClearPending();
+          mergeNotes_.clear();  // about a config that's gone
+          break;
+        case Arrival::Ask: {
+          const auto waiting = sovereign::tray::LoadPending();
+          alreadyWaiting = waiting && sovereign::tray::SameConfig(*waiting, fetched->body);
+          if (!alreadyWaiting) {
+            sovereign::tray::SavePending(fetched->body);
+          }
+          break;
+        }
       }
     } catch (...) {
-      LOG_CAUGHT_EXCEPTION_MSG("saving config.json failed");
-      subscriptionError_ = "не удалось сохранить config.json";
+      LOG_CAUGHT_EXCEPTION_MSG("saving the subscription failed");
+      subscriptionError_ = "не удалось сохранить конфиг в %LOCALAPPDATA%\\Sovereign";
       return;
     }
     settings_.lastRefresh = std::time(nullptr);
     settings_.updateHours =
         static_cast<int>(fetched->updateInterval.value_or(sovereign::tray::kDefaultUpdateInterval).count());
     Save();
+    if (arrival == Arrival::Ask) {
+      if (!alreadyWaiting) {
+        Notify(L"Sovereign: новая версия подписки",
+               L"В конфиге есть твои правки, поэтому он не заменён. Нажми, чтобы выбрать, что оставить.", false,
+               UiPage::Subscription);
+      }
+      return;
+    }
     Notify(L"Sovereign: подписка обновлена",
-           std::format(L"выходов в конфиге: {}{}", check.outbounds, changed ? L"" : L" (без изменений)"), false);
+           std::format(L"выходов в конфиге: {}{}", check.outbounds,
+                       arrival == Arrival::Replace ? L"" : L" (без изменений)"),
+           false);
     // A running box with the old config is restarted by the model: the hash
     // the service reports no longer matches (ExpectedConfigHash).
+  }
+
+  void Choose(ConfigChoice choice) {
+    choiceError_.clear();
+    try {
+      const auto original = sovereign::tray::LoadOriginal();
+      const auto config = sovereign::tray::LoadConfig();
+      const auto waiting = sovereign::tray::LoadPending();
+      switch (choice) {
+        case ConfigChoice::TakeNew:
+          if (waiting) {
+            ReplaceConfig(config, *waiting);
+            sovereign::tray::SaveOriginal(*waiting);
+            sovereign::tray::ClearPending();
+            mergeNotes_.clear();
+          }
+          break;
+        case ConfigChoice::KeepMine:
+          if (waiting) {
+            sovereign::tray::SaveOriginal(*waiting);
+            sovereign::tray::ClearPending();
+          }
+          break;
+        case ConfigChoice::CarryOver: {
+          if (!waiting || !original || !config) {
+            break;
+          }
+          const auto merged = sovereign::tray::MergeConfigs(*original, *config, *waiting);
+          if (!merged) {
+            choiceError_ = "не получилось: config.json или подписка - не JSON-объект";
+            break;
+          }
+          const auto check = sovereign::tray::CheckSubscriptionConfig(merged->config);
+          if (!check.ok) {
+            choiceError_ = "после переноса правок конфиг не годится: " + check.error;
+            break;
+          }
+          ReplaceConfig(config, merged->config);
+          sovereign::tray::SaveOriginal(*waiting);
+          sovereign::tray::ClearPending();
+          mergeNotes_ = merged->conflicts;
+          break;
+        }
+        case ConfigChoice::Revert: {
+          const auto& to = waiting ? waiting : original;
+          if (to) {
+            ReplaceConfig(config, *to);
+            sovereign::tray::SaveOriginal(*to);
+            sovereign::tray::ClearPending();
+            mergeNotes_.clear();
+          }
+          break;
+        }
+      }
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("applying the config choice failed");
+      choiceError_ = "не удалось записать конфиг в %LOCALAPPDATA%\\Sovereign";
+    }
+    // As with a refresh: a changed config restarts the box through its hash.
+  }
+
+  // Whether config.json has edits of its own and a subscription waits -
+  // re-read every poll (config.json may be edited by hand), compared only
+  // when a file changed.
+  void UpdateConfigState() {
+    std::optional<std::string> original;
+    std::optional<std::string> config;
+    try {
+      original = sovereign::tray::LoadOriginal();
+      config = sovereign::tray::LoadConfig();
+      waiting_ = sovereign::tray::LoadPending().has_value();
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("reading the config failed");
+      return;
+    }
+    if (original != seenOriginal_ || config != seenConfig_) {
+      edited_ = original && config && !sovereign::tray::SameConfig(*original, *config);
+      seenOriginal_ = std::move(original);
+      seenConfig_ = std::move(config);
+    }
   }
 
   // One point of the speed graph a second; a request that wakes the loop
@@ -621,6 +785,7 @@ class Worker {
   void Publish() {
     auto& shared = State();
     auto protocols = Protocols();  // reads config.json: outside the lock
+    UpdateConfigState();
     HWND window = nullptr;
     {
       const std::scoped_lock lock(shared.mutex);
@@ -637,10 +802,15 @@ class Worker {
       v.updateHours = settings_.updateHours;
       v.history = history_;
       v.subscriptionError = subscriptionError_;
+      v.configEdited = edited_;
+      v.subscriptionWaiting = waiting_;
+      v.choiceError = choiceError_;
+      v.mergeNotes = mergeNotes_;
       v.noticeId = noticeId_;
       v.noticeTitle = noticeTitle_;
       v.noticeText = noticeText_;
       v.noticeIsError = noticeIsError_;
+      v.noticePage = noticePage_;
       v.appsMode = settings_.appsMode;
       v.apps = settings_.apps;
       std::tie(v.protocols, v.protocol) = protocols;
@@ -665,6 +835,13 @@ class Worker {
   std::wstring noticeTitle_;
   std::wstring noticeText_;
   bool noticeIsError_ = false;
+  std::optional<UiPage> noticePage_;
+  bool edited_ = false;
+  bool waiting_ = false;
+  std::optional<std::string> seenOriginal_;  // the texts edited_ was computed from
+  std::optional<std::string> seenConfig_;
+  std::string choiceError_;
+  std::vector<std::string> mergeNotes_;
   std::uint64_t logSince_ = 0;  // box_logs cursor
   std::string loggedError_;     // the model's error last put into the log
   std::deque<std::pair<float, float>> history_;
@@ -930,6 +1107,15 @@ void RequestProtocol(std::string tag) {
   Wake();
 }
 
+void RequestChoice(ConfigChoice choice) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingChoice = choice;
+  }
+  Wake();
+}
+
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
 // What the flyout and the main window show, from the worker's view.
@@ -948,6 +1134,12 @@ UiContent ContentFrom(const View& v) {
   c.subscriptionHost = v.subscriptionHost;
   c.subscriptionError = Widen(v.subscriptionError);
   c.updateHours = v.hasSubscription ? v.updateHours : 0;
+  c.configEdited = v.configEdited;
+  c.subscriptionWaiting = v.subscriptionWaiting;
+  c.choiceError = Widen(v.choiceError);
+  for (const std::string& note : v.mergeNotes) {
+    c.mergeNotes.push_back(Widen(note));
+  }
   if (!v.hasSubscription) {
     c.subscription = L"нет";
   } else if (!v.subscriptionError.empty()) {
@@ -1000,7 +1192,7 @@ UiContent ContentFrom(const View& v) {
 sovereign::tray::Flyout* g_flyout = nullptr;
 sovereign::tray::MainWindow* g_mainWindow = nullptr;
 std::string g_announcedUpdate;       // the version the balloon already told about
-bool g_updateBalloonShown = false;   // the last balloon was about an update: a click opens the settings
+std::optional<UiPage> g_balloonPage;  // what a click on the last balloon opens
 bool g_installerLaunched = false;
 unsigned g_lastNotice = 0;
 std::uint64_t g_logsShown = 0;  // Shared::logsAdded as of the main window's last log update
@@ -1069,6 +1261,23 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::RefreshSubscription:
       RequestRefresh();
+      break;
+    case UiCommand::TakeSubscription:
+      RequestChoice(ConfigChoice::TakeNew);
+      break;
+    case UiCommand::KeepConfig:
+      RequestChoice(ConfigChoice::KeepMine);
+      break;
+    case UiCommand::CarryOverEdits:
+      RequestChoice(ConfigChoice::CarryOver);
+      break;
+    case UiCommand::RevertConfig:
+      if (MessageBoxW(owner,
+                      L"Вернуть конфиг к подписке в том виде, как она пришла?\n\n"
+                      L"Твои правки не пропадут: нынешний config.json сохранится в папке history.",
+                      L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
+        RequestChoice(ConfigChoice::Revert);
+      }
       break;
     case UiCommand::SetAppsMode:
       RequestApps({args.index == 1 ? AppsMode::Include : AppsMode::Exclude, view.apps});
@@ -1139,7 +1348,7 @@ void OnUpdateChanged(HWND trayWindow) {
     g_announcedUpdate = update.latest;
     g_trayIcon->Balloon(L"Sovereign: доступна версия " + Widen(update.latest),
                         L"Нажми, чтобы обновить - установщик скачается с GitHub.", NIIF_INFO);
-    g_updateBalloonShown = true;
+    g_balloonPage = UiPage::Settings;
   }
   if (update.status == Status::Ready && !g_installerLaunched) {
     HWND owner = g_mainWindow != nullptr && g_mainWindow->IsVisible() ? GetForegroundWindow() : trayWindow;
@@ -1176,7 +1385,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       if (g_trayIcon != nullptr) {
         if (view.noticeId != 0 && view.noticeId != g_lastNotice) {
           g_lastNotice = view.noticeId;
-          g_updateBalloonShown = false;  // this balloon is the worker's, not about an update
+          g_balloonPage = view.noticePage;  // this balloon is the worker's
         }
         g_trayIcon->Update(view);
       }
@@ -1192,8 +1401,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       // double click opens the window. A double click arrives as up, double
       // click, up: the first up opened the panel, the last must not reopen it.
       static ULONGLONG ignoreUpUntil = 0;
-      if (lParam == NIN_BALLOONUSERCLICK && g_updateBalloonShown) {
-        ShowMainWindow(UiPage::Settings);
+      if (lParam == NIN_BALLOONUSERCLICK && g_balloonPage) {
+        ShowMainWindow(*g_balloonPage);
       } else if (lParam == WM_LBUTTONDBLCLK) {
         ignoreUpUntil = GetTickCount64() + GetDoubleClickTime();
         if (g_flyout != nullptr) {
