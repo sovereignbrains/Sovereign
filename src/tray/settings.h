@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -17,7 +18,7 @@ namespace sovereign::tray {
 // SYSTEM/admins) can read - it holds a config with passwords and keys.
 //
 //   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours",
-//                 "appsMode", "apps", "protocol"}
+//                 "appsMode", "apps", "appPaths", "protocol"}
 //   config.json            the sing-box config: the subscription's copy, the
 //                          user's edits on it, or by hand when there's no
 //                          subscription; the tray adds its own bits (the
@@ -39,6 +40,9 @@ struct TraySettings {
   int updateHours = 12;              // from Profile-Update-Interval, else the default
   AppsMode appsMode = AppsMode::Exclude;  // per-app routing (app_rules.h)
   std::vector<std::string> apps;          // exe names, as sing-box's process_name
+  // Where a listed app's exe was last seen, by its name in `apps`: only for
+  // its icon in the window - the rule matches the name wherever it runs.
+  std::map<std::string, std::string> appPaths;
   std::string protocol;  // the proxy selector's default to use; empty = the config's (protocol_choice.h)
 };
 

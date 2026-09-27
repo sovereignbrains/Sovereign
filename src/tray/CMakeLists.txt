@@ -39,7 +39,7 @@ add_library(sovereign_tray_ui STATIC
   ui_style.h
 )
 target_include_directories(sovereign_tray_ui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(sovereign_tray_ui PUBLIC sovereign_tray_lib sovereign_common user32 gdi32 ole32 d2d1 dwrite dwmapi shcore windowscodecs)
+target_link_libraries(sovereign_tray_ui PUBLIC sovereign_tray_lib sovereign_common user32 gdi32 ole32 shell32 d2d1 dwrite dwmapi shcore windowscodecs)
 
 add_executable(sovereign-tray WIN32
   main.cpp

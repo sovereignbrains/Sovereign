@@ -18,6 +18,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <tlhelp32.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -184,6 +185,7 @@ struct View {
   std::optional<UiPage> noticePage;  // what a click on the balloon opens
   AppsMode appsMode = AppsMode::Exclude;
   std::vector<std::string> apps;
+  std::vector<std::string> appPaths;   // per app, "" if not known
   std::vector<std::string> protocols;  // the config selector's options
   int protocol = -1;                   // the one in use
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
@@ -204,7 +206,12 @@ enum class ConfigChoice : std::uint8_t {
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
   std::vector<std::string> list;
+  std::map<std::string, std::string> paths;  // exe paths learned while adding (icons)
 };
+
+// How often the worker looks among running processes for listed apps whose
+// exe it hasn't seen yet (their icons).
+constexpr std::chrono::seconds kAppPathLookup{30};
 
 std::wstring StatusLine(const View& v) {
   switch (v.display) {
@@ -407,8 +414,13 @@ class Worker {
       if (apps) {
         settings_.appsMode = apps->mode;
         settings_.apps = std::move(apps->list);
+        settings_.appPaths.merge(apps->paths);
+        std::erase_if(settings_.appPaths, [&](const auto& entry) {
+          return std::find(settings_.apps.begin(), settings_.apps.end(), entry.first) == settings_.apps.end();
+        });
         Save();  // the effective config changes: the model restarts the box
       }
+      FindAppPaths();
       if (protocol) {
         settings_.protocol = *protocol;
         Save();  // likewise
@@ -765,6 +777,51 @@ class Worker {
     shared.logsAdded += fresh.size();
   }
 
+  // Listed apps whose exe hasn't been seen: looked for among the running
+  // processes now and then, so their icons show once they've run.
+  void FindAppPaths() {
+    const auto now = TrayModel::Clock::now();
+    if (lastPathLookup_ && now - *lastPathLookup_ < kAppPathLookup) {
+      return;
+    }
+    lastPathLookup_ = now;
+    std::vector<std::wstring> missing;
+    for (const std::string& app : settings_.apps) {
+      if (!settings_.appPaths.contains(app)) {
+        missing.push_back(Widen(app));
+      }
+    }
+    if (missing.empty()) {
+      return;
+    }
+    const wil::unique_handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    if (!snapshot || snapshot.get() == INVALID_HANDLE_VALUE) {
+      return;
+    }
+    bool found = false;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof entry;
+    for (BOOL more = Process32FirstW(snapshot.get(), &entry); more; more = Process32NextW(snapshot.get(), &entry)) {
+      const auto match = std::find_if(missing.begin(), missing.end(), [&](const std::wstring& name) {
+        return CompareStringOrdinal(name.c_str(), -1, entry.szExeFile, -1, TRUE) == CSTR_EQUAL;
+      });
+      if (match == missing.end()) {
+        continue;
+      }
+      const wil::unique_handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID));
+      wchar_t path[MAX_PATH]{};
+      DWORD size = MAX_PATH;
+      if (process && QueryFullProcessImageNameW(process.get(), 0, path, &size)) {
+        settings_.appPaths[Narrow(*match)] = Narrow(std::wstring(path, size));
+        missing.erase(match);
+        found = true;
+      }
+    }
+    if (found) {
+      Save();
+    }
+  }
+
   void Publish() {
     auto& shared = State();
     auto protocols = Protocols();  // reads config.json: outside the lock
@@ -795,6 +852,11 @@ class Worker {
       v.noticePage = noticePage_;
       v.appsMode = settings_.appsMode;
       v.apps = settings_.apps;
+      v.appPaths.clear();
+      for (const std::string& app : settings_.apps) {
+        const auto path = settings_.appPaths.find(app);
+        v.appPaths.push_back(path == settings_.appPaths.end() ? std::string() : path->second);
+      }
       std::tie(v.protocols, v.protocol) = protocols;
       v.delays.clear();
       for (const std::string& tag : v.protocols) {
@@ -818,6 +880,7 @@ class Worker {
   std::wstring noticeText_;
   bool noticeIsError_ = false;
   std::optional<UiPage> noticePage_;
+  std::optional<TrayModel::Clock::time_point> lastPathLookup_;
   bool edited_ = false;
   bool waiting_ = false;
   std::optional<std::string> seenOriginal_;  // the texts edited_ was computed from
@@ -960,10 +1023,15 @@ bool SameName(const std::string& a, const std::string& b) {
   return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
-// Exe names of the programs with a visible window - what "add from running"
-// offers - sorted, without duplicates and without the ones already listed.
-std::vector<std::string> RunningApps(const std::vector<std::string>& listed) {
-  std::vector<std::string> names;
+struct RunningApp {
+  std::string name;  // the exe's, what the rule matches
+  std::string path;  // the exe's full path, for its icon
+};
+
+// The programs with a visible window - what "add from running" offers -
+// sorted by name, without duplicates and without the ones already listed.
+std::vector<RunningApp> RunningApps(const std::vector<std::string>& listed) {
+  std::vector<RunningApp> names;
   EnumWindows(
       [](HWND w, LPARAM out) -> BOOL {
         if (!IsWindowVisible(w) || GetWindowTextLengthW(w) == 0 || GetWindow(w, GW_OWNER) != nullptr) {
@@ -980,18 +1048,20 @@ std::vector<std::string> RunningApps(const std::vector<std::string>& listed) {
         if (QueryFullProcessImageNameW(process.get(), 0, path, &size)) {
           const std::wstring full(path, size);
           // EnumWindows hands its context back as an LPARAM - the cast is the API's shape.
-          reinterpret_cast<std::vector<std::string>*>(out)->push_back(  // NOLINT(performance-no-int-to-ptr)
-              Narrow(full.substr(full.find_last_of(L'\\') + 1)));
+          reinterpret_cast<std::vector<RunningApp>*>(out)->push_back(  // NOLINT(performance-no-int-to-ptr)
+              {Narrow(full.substr(full.find_last_of(L'\\') + 1)), Narrow(full)});
         }
         return TRUE;
       },
       reinterpret_cast<LPARAM>(&names));
-  std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
-    return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_LESS_THAN;
+  std::sort(names.begin(), names.end(), [](const RunningApp& a, const RunningApp& b) {
+    return CompareStringOrdinal(Widen(a.name).c_str(), -1, Widen(b.name).c_str(), -1, TRUE) == CSTR_LESS_THAN;
   });
-  names.erase(std::unique(names.begin(), names.end(), SameName), names.end());
-  std::erase_if(names, [&](const std::string& n) {
-    return std::any_of(listed.begin(), listed.end(), [&](const std::string& l) { return SameName(n, l); });
+  names.erase(std::unique(names.begin(), names.end(),
+                          [](const RunningApp& a, const RunningApp& b) { return SameName(a.name, b.name); }),
+              names.end());
+  std::erase_if(names, [&](const RunningApp& n) {
+    return std::any_of(listed.begin(), listed.end(), [&](const std::string& l) { return SameName(n.name, l); });
   });
   if (names.size() > kMenuMaxItems) {
     names.resize(kMenuMaxItems);
@@ -999,9 +1069,9 @@ std::vector<std::string> RunningApps(const std::vector<std::string>& listed) {
   return names;
 }
 
-// "Add exe...": the exe name of a file the user picks (the file dialog is
-// just a convenient way to spell it right; only the name is kept).
-std::optional<std::string> PickExe(HWND window) {
+// "Add exe...": the full path of an exe the user picks (the rule keeps only
+// its name; the path is for the icon).
+std::optional<std::wstring> PickExe(HWND window) {
   try {
     const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
     const COMDLG_FILTERSPEC filter{L"Программы", L"*.exe"};
@@ -1016,8 +1086,7 @@ std::optional<std::string> PickExe(HWND window) {
     THROW_IF_FAILED(dialog->GetResult(&item));
     wil::unique_cotaskmem_string name;
     THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &name));
-    const std::wstring full(name.get());
-    return Narrow(full.substr(full.find_last_of(L'\\') + 1));
+    return std::wstring(name.get());
   } catch (...) {
     LOG_CAUGHT_EXCEPTION_MSG("the file dialog failed");
     return std::nullopt;
@@ -1033,13 +1102,13 @@ View CurrentView() {
 // window's button; the pick is added to the list.
 void AddFromRunning(HWND window, POINT at) {
   const View view = CurrentView();
-  const std::vector<std::string> running = RunningApps(view.apps);
+  const std::vector<RunningApp> running = RunningApps(view.apps);
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
     return;
   }
   for (std::size_t i = 0; i < running.size(); ++i) {
-    AppendMenuW(menu.get(), MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i]).c_str());
+    AppendMenuW(menu.get(), MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i].name).c_str());
   }
   if (running.empty()) {
     AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"нет подходящих окон");
@@ -1052,18 +1121,20 @@ void AddFromRunning(HWND window, POINT at) {
                      nullptr));
   PostMessageW(window, WM_NULL, 0, 0);
   if (command >= kMenuAddRunning && command < kMenuAddRunning + running.size()) {
-    AppsChange change{view.appsMode, view.apps};
-    change.list.push_back(running[command - kMenuAddRunning]);
+    const RunningApp& pick = running[command - kMenuAddRunning];
+    AppsChange change{view.appsMode, view.apps, {{pick.name, pick.path}}};
+    change.list.push_back(pick.name);
     RequestApps(std::move(change));
   }
 }
 
 void AddExe(HWND window) {
   const View view = CurrentView();
-  if (const auto exe = PickExe(window)) {
-    if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, *exe); })) {
-      AppsChange change{view.appsMode, view.apps};
-      change.list.push_back(*exe);
+  if (const auto path = PickExe(window)) {
+    const std::string exe = Narrow(path->substr(path->find_last_of(L'\\') + 1));
+    if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, exe); })) {
+      AppsChange change{view.appsMode, view.apps, {{exe, Narrow(*path)}}};
+      change.list.push_back(exe);
       RequestApps(std::move(change));
     }
   }
@@ -1127,6 +1198,9 @@ UiContent ContentFrom(const View& v) {
   c.appsInclude = v.appsMode == AppsMode::Include;
   for (const std::string& app : v.apps) {
     c.apps.push_back(Widen(app));
+  }
+  for (const std::string& path : v.appPaths) {
+    c.appPaths.push_back(Widen(path));
   }
   for (const std::string& p : v.protocols) {
     c.protocols.push_back(Widen(p));
@@ -1237,7 +1311,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     case UiCommand::SetAppsMode:
-      RequestApps({args.index == 1 ? AppsMode::Include : AppsMode::Exclude, view.apps});
+      RequestApps({args.index == 1 ? AppsMode::Include : AppsMode::Exclude, view.apps, {}});
       break;
     case UiCommand::RemoveApp:
       if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.apps.size()) {

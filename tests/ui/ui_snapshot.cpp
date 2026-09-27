@@ -39,7 +39,9 @@ UiContent SampleContent() {
   c.subscriptionHost = L"packetlab.tech";
   c.updateHours = 12;
   c.appsInclude = false;
-  c.apps = {L"steam.exe", L"Telegram.exe", L"qbittorrent.exe", L"EpicGamesLauncher.exe"};
+  c.apps = {L"steam.exe", L"Telegram.exe", L"qbittorrent.exe", L"notepad.exe"};
+  // One exe that is there on any Windows: its real icon; the rest aren't known.
+  c.appPaths = {L"", L"", L"", L"C:\\Windows\\System32\\notepad.exe"};
   c.protocols = {L"auto", L"AnyTLS · Нидерланды", L"AnyTLS · Финляндия", L"REALITY · Германия", L"REALITY · Польша"};
   c.protocol = 1;
   using State = sovereign::tray::UiDelay::State;

@@ -47,6 +47,7 @@ struct UiContent {
 
   bool appsInclude = false;      // per-app mode: false = all except the list
   std::vector<std::wstring> apps;
+  std::vector<std::wstring> appPaths;   // per app: its exe's full path for the icon; empty if unknown
   std::vector<std::wstring> protocols;  // the selector's options; empty = no choice
   int protocol = -1;                    // index of the one in use
   std::vector<UiDelay> delays;          // one per protocol (may be shorter: untested)

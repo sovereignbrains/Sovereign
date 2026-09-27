@@ -84,6 +84,13 @@ TraySettings LoadSettings() {
       }
     }
   }
+  if (const auto v = json.find("appPaths"); v != json.end() && v->is_object()) {
+    for (const auto& [name, path] : v->items()) {
+      if (path.is_string() && !path.get<std::string>().empty()) {
+        settings.appPaths[name] = path.get<std::string>();
+      }
+    }
+  }
   if (const auto v = json.find("protocol"); v != json.end() && v->is_string()) {
     settings.protocol = v->get<std::string>();
   }
@@ -98,6 +105,7 @@ void SaveSettings(const TraySettings& settings) {
   json["updateHours"] = settings.updateHours;
   json["appsMode"] = std::string(AppsModeName(settings.appsMode));
   json["apps"] = settings.apps;
+  json["appPaths"] = settings.appPaths;
   json["protocol"] = settings.protocol;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }

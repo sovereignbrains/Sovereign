@@ -5,6 +5,7 @@
 #include <dwmapi.h>
 #include <dwrite.h>
 #include <shellscalingapi.h>
+#include <shlobj.h>
 #include <wincodec.h>
 
 #include <wil/com.h>
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <deque>
 #include <format>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,6 +54,7 @@ constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
 constexpr float kPower = 76;       // the on/off button's diameter
+constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
 // The log page: a line's height, and how many lines it keeps (the tray keeps
@@ -372,6 +375,9 @@ class Painter {
 
   IWICImagingFactory* Wic() const { return wic_.get(); }
 
+  // The program icons are the render target's: a new target needs new ones.
+  void ForgetIcons() const { icons_.clear(); }
+
  private:
   static constexpr const wchar_t* kDisplay = L"Segoe UI Variable Display";
   static constexpr const wchar_t* kText = L"Segoe UI Variable Text";
@@ -422,6 +428,36 @@ class Painter {
       }
     }
     return f;
+  }
+
+  // A program's icon from its exe, at the target's DPI; null if the path is
+  // unknown or the file has none. Loaded once per path (a miss too).
+  ID2D1Bitmap* ProgramIcon(ID2D1RenderTarget* target, const std::wstring& path) const {
+    if (path.empty() || !wic_) {
+      return nullptr;
+    }
+    const auto [it, fresh] = icons_.try_emplace(path);
+    if (!fresh) {
+      return it->second.get();
+    }
+    FLOAT dpiX = 96;
+    FLOAT dpiY = 96;
+    target->GetDpi(&dpiX, &dpiY);
+    const auto size = static_cast<UINT>(std::lround(kAppIcon * dpiX / 96.0f));
+    HICON extracted = nullptr;
+    if (FAILED(SHDefExtractIconW(path.c_str(), 0, 0, &extracted, nullptr, size)) || extracted == nullptr) {
+      return nullptr;
+    }
+    const wil::unique_hicon icon(extracted);
+    wil::com_ptr<IWICBitmap> source;
+    wil::com_ptr<IWICFormatConverter> converter;
+    if (SUCCEEDED(wic_->CreateBitmapFromHICON(icon.get(), source.put())) &&
+        SUCCEEDED(wic_->CreateFormatConverter(converter.put())) &&
+        SUCCEEDED(converter->Initialize(source.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr,
+                                        0, WICBitmapPaletteTypeCustom))) {
+      target->CreateBitmapFromWicBitmap(converter.get(), nullptr, it->second.put());
+    }
+    return it->second.get();
   }
 
   // The height `text` takes wrapped to `width` in `format`.
@@ -713,7 +749,9 @@ class Painter {
         if (i > 0) {
           l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
         }
-        l.items.push_back(Make(Kind::AppRow, {x0 + 8, top, x1 - 56, top + kRow}, c.apps[i], kGlyphProgram));
+        Item app = Make(Kind::AppRow, {x0 + 8, top, x1 - 56, top + kRow}, c.apps[i], kGlyphProgram);
+        app.detail = i < c.appPaths.size() ? c.appPaths[i] : std::wstring();  // the icon's exe
+        l.items.push_back(std::move(app));
         const float bt = top + (kRow - kButton) / 2;
         Item remove = CommandItem(Kind::IconButton, {x1 - 12 - kButton, bt, x1 - 12, bt + kButton}, L"Убрать",
                                   kGlyphRemove, UiCommand::RemoveApp, static_cast<int>(i));
@@ -900,10 +938,16 @@ class Painter {
         k.Text(it.text, button_.get(), r, it.checked ? Rgb(12, 20, 36) : primary);
         break;
       }
-      case Kind::AppRow:
-        k.Text(it.glyph, glyph_.get(), {r.left + 8, r.top, r.left + 36, r.bottom}, secondary);
+      case Kind::AppRow: {
+        const float cy = (r.top + r.bottom) / 2;
+        if (ID2D1Bitmap* icon = ProgramIcon(k.t, it.detail); icon != nullptr) {
+          k.t->DrawBitmap(icon, {r.left + 12, cy - kAppIcon / 2, r.left + 12 + kAppIcon, cy + kAppIcon / 2});
+        } else {
+          k.Text(it.glyph, glyph_.get(), {r.left + 8, r.top, r.left + 36, r.bottom}, secondary);
+        }
         k.Text(it.text, body_.get(), {r.left + 48, r.top, r.right, r.bottom}, primary);
         break;
+      }
       case Kind::LogBox: break;  // DrawLog
     }
   }
@@ -1057,6 +1101,8 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> mono_;
   wil::com_ptr<IDWriteTextFormat> glyph_;
   wil::com_ptr<IDWriteTextFormat> glyphBig_;
+  // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
+  mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
 };
 
 int Scale(float dip, UINT dpi) { return static_cast<int>(std::lround(dip * static_cast<float>(dpi) / 96.0f)); }
@@ -1371,6 +1417,7 @@ struct MainWindow::Impl {
         // The system's suggestion keeps the window the same physical size.
         const auto* suggested = reinterpret_cast<const RECT*>(lParam);  // NOLINT(performance-no-int-to-ptr)
         target.reset();
+      painter.ForgetIcons();
         SetWindowPos(w, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
         Relayout();
@@ -1555,6 +1602,7 @@ struct MainWindow::Impl {
     painter.Draw(target.get(), layout, content, in, log);
     if (target->EndDraw() == D2DERR_RECREATE_TARGET) {
       target.reset();
+      painter.ForgetIcons();
     }
   }
 
