@@ -17,9 +17,6 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 constexpr std::size_t kMaxConflicts = 100;
-// Real configs are a few levels deep; anything past this is taken from the
-// user's side whole instead of recursing further.
-constexpr int kMaxDepth = 64;
 
 // Equal JSON values, object key order aside (ordered_json's own == minds it).
 bool Equal(const Json& a, const Json& b) {
@@ -117,27 +114,26 @@ class Merger {
   std::vector<std::string> conflicts;
 
   // nullopt: absent in the result.
-  std::optional<Json> Merge(const Json* base, const Json* mine, const Json* theirs, const std::string& path,
-                            int depth) {
+  std::optional<Json> Merge(const Json* base, const Json* mine, const Json* theirs, const std::string& path) {
     if (Same(mine, theirs) || Same(theirs, base)) {
       return Copy(mine);
     }
     if (Same(mine, base)) {
       return Copy(theirs);
     }
-    if (base != nullptr && mine != nullptr && theirs != nullptr && depth < kMaxDepth) {
+    if (base != nullptr && mine != nullptr && theirs != nullptr) {
       if (base->is_object() && mine->is_object() && theirs->is_object()) {
-        return MergeObjects(*base, *mine, *theirs, path, depth + 1);
+        return MergeObjects(*base, *mine, *theirs, path);
       }
       if (base->is_array() && mine->is_array() && theirs->is_array()) {
-        return MergeArrays(*base, *mine, *theirs, path, depth + 1);
+        return MergeArrays(*base, *mine, *theirs, path);
       }
     }
     Conflict(path);
     return Copy(mine);
   }
 
-  Json MergeObjects(const Json& base, const Json& mine, const Json& theirs, const std::string& path, int depth) {
+  Json MergeObjects(const Json& base, const Json& mine, const Json& theirs, const std::string& path) {
     // Theirs' key order, then the keys only the user has.
     std::vector<std::string> keys;
     for (const auto& item : theirs.items()) {
@@ -150,7 +146,7 @@ class Merger {
     }
     Json out = Json::object();
     for (const std::string& key : keys) {
-      if (auto merged = Merge(Member(base, key), Member(mine, key), Member(theirs, key), Join(path, key), depth)) {
+      if (auto merged = Merge(Member(base, key), Member(mine, key), Member(theirs, key), Join(path, key))) {
         out[key] = std::move(*merged);
       }
     }
@@ -165,7 +161,7 @@ class Merger {
     }
   }
 
-  Json MergeArrays(const Json& base, const Json& mine, const Json& theirs, const std::string& path, int depth) {
+  Json MergeArrays(const Json& base, const Json& mine, const Json& theirs, const std::string& path) {
     const bool tagged = Tagged(base) && Tagged(mine) && Tagged(theirs);
     if (!tagged) {
       // Both sides changed a list whose order matters (route rules) and
@@ -187,7 +183,7 @@ class Merger {
     std::vector<std::pair<std::string, Json>> out;
     for (std::size_t i = 0; i < theirs.size(); ++i) {
       const std::string& id = theirIds[i];
-      if (auto merged = Merge(Find(baseAt, base, id), Find(mineAt, mine, id), &theirs[i], label(theirs[i], i), depth)) {
+      if (auto merged = Merge(Find(baseAt, base, id), Find(mineAt, mine, id), &theirs[i], label(theirs[i], i))) {
         out.emplace_back(id, std::move(*merged));
       }
     }
@@ -199,7 +195,7 @@ class Merger {
       if (theirAt.contains(id)) {
         continue;
       }
-      auto merged = Merge(Find(baseAt, base, id), &mine[i], nullptr, label(mine[i], i), depth);
+      auto merged = Merge(Find(baseAt, base, id), &mine[i], nullptr, label(mine[i], i));
       if (!merged) {
         continue;
       }
@@ -224,7 +220,33 @@ class Merger {
 
 }  // namespace
 
+int NestingDepth(std::string_view text) {
+  int depth = 0;
+  int deepest = 0;
+  bool inString = false;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const char ch = text[i];
+    if (inString) {
+      if (ch == '\\') {
+        ++i;  // the escaped character, a quote among them
+      } else if (ch == '"') {
+        inString = false;
+      }
+    } else if (ch == '"') {
+      inString = true;
+    } else if (ch == '{' || ch == '[') {
+      deepest = std::max(deepest, ++depth);
+    } else if (ch == '}' || ch == ']') {
+      --depth;
+    }
+  }
+  return deepest;
+}
+
 bool SameConfig(std::string_view a, std::string_view b) {
+  if (NestingDepth(a) > kMaxConfigDepth || NestingDepth(b) > kMaxConfigDepth) {
+    return a == b;
+  }
   const auto x = nlohmann::json::parse(a, nullptr, /*allow_exceptions=*/false);
   const auto y = nlohmann::json::parse(b, nullptr, /*allow_exceptions=*/false);
   if (x.is_discarded() || y.is_discarded()) {
@@ -250,6 +272,10 @@ Arrival ClassifyArrival(const std::optional<std::string>& original, const std::o
 }
 
 std::optional<MergedConfig> MergeConfigs(std::string_view base, std::string_view mine, std::string_view theirs) {
+  if (NestingDepth(base) > kMaxConfigDepth || NestingDepth(mine) > kMaxConfigDepth ||
+      NestingDepth(theirs) > kMaxConfigDepth) {
+    return std::nullopt;
+  }
   const Json b = Json::parse(base, nullptr, /*allow_exceptions=*/false);
   const Json m = Json::parse(mine, nullptr, /*allow_exceptions=*/false);
   const Json t = Json::parse(theirs, nullptr, /*allow_exceptions=*/false);
@@ -257,7 +283,7 @@ std::optional<MergedConfig> MergeConfigs(std::string_view base, std::string_view
     return std::nullopt;
   }
   Merger merger;
-  const Json merged = merger.MergeObjects(b, m, t, {}, 0);
+  const Json merged = merger.MergeObjects(b, m, t, {});
   return MergedConfig{
       .config = merged.dump(2, ' ', false, Json::error_handler_t::replace) + "\n",
       .conflicts = std::move(merger.conflicts),

@@ -16,9 +16,16 @@
 
 namespace sovereign::tray {
 
+// How deep the text's objects and arrays nest, counted without recursing
+// (strings skipped). The comparisons and the merge recurse per level, and a
+// subscription is untrusted: past kMaxConfigDepth - far more than any real
+// config - text is compared as text and not merged.
+inline constexpr int kMaxConfigDepth = 64;
+int NestingDepth(std::string_view text);
+
 // Whether two configs say the same thing: equal JSON values - key order,
-// spacing and number spelling don't count. Text that isn't JSON compares as
-// text.
+// spacing and number spelling don't count. Text that isn't JSON, or nests
+// deeper than kMaxConfigDepth, compares as text.
 bool SameConfig(std::string_view a, std::string_view b);
 
 enum class Arrival : std::uint8_t {
@@ -47,7 +54,7 @@ struct MergedConfig {
 // servers) merge element by element; other arrays (route rules) keep the
 // new version's elements with the user's additions and removals applied,
 // the additions after the element they followed. nullopt if any of the
-// three isn't a JSON object.
+// three isn't a JSON object or nests deeper than kMaxConfigDepth.
 std::optional<MergedConfig> MergeConfigs(std::string_view base, std::string_view mine, std::string_view theirs);
 
 }  // namespace sovereign::tray

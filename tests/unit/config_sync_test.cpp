@@ -171,7 +171,8 @@ void TestNotObjects() {
   CHECK(!MergeConfigs("{}", "{}", ""));
 }
 
-void TestDeepNestingDoesNotRecurseForever() {
+// Nesting a subscription could use to blow the stack: never recursed into.
+void TestDeepNestingIsNotRecursedInto() {
   std::string deep;
   for (int i = 0; i < 1000; ++i) {
     deep += R"({"a":)";
@@ -184,8 +185,12 @@ void TestDeepNestingDoesNotRecurseForever() {
     theirs += "}";
     base += "}";
   }
-  const auto merged = MergeConfigs(base, mine, theirs);
-  CHECK(merged && !merged->conflicts.empty());
+  CHECK(sovereign::tray::NestingDepth(mine) == 1000);
+  CHECK(!MergeConfigs(base, mine, theirs));
+  CHECK(!SameConfig(base, mine));  // compared as text
+  CHECK(SameConfig(mine, mine));
+  CHECK(ClassifyArrival(base, mine, theirs) == Arrival::Ask);
+  CHECK(sovereign::tray::NestingDepth(R"({"a":"[[[{{{\"]]"})") == 1);  // brackets in strings don't count
 }
 
 }  // namespace
@@ -202,7 +207,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestEditedButDropped();
     TestKeepsTheSubscriptionsKeyOrder();
     TestNotObjects();
-    TestDeepNestingDoesNotRecurseForever();
+    TestDeepNestingIsNotRecursedInto();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 1;

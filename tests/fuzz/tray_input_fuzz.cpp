@@ -38,7 +38,8 @@ void CheckMerge(std::string_view base, std::string_view mine, std::string_view t
     return nlohmann::json::parse(t, nullptr, /*allow_exceptions=*/false).is_object();
   };
   if (!merged) {
-    if (isObject(base) && isObject(mine) && isObject(theirs)) {
+    const auto shallow = [](std::string_view t) { return NestingDepth(t) <= kMaxConfigDepth; };
+    if (isObject(base) && isObject(mine) && isObject(theirs) && shallow(base) && shallow(mine) && shallow(theirs)) {
       std::abort();
     }
     return;
