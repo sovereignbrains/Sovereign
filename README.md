@@ -32,7 +32,9 @@ The client works and is in daily use; the project is between its MVP and its con
 - **subscription**: paste an `https://` link from the clipboard, refresh by hand or on the server's `Profile-Update-Interval`; the server sees a `sing-box` User-Agent with the pinned version;
 - **protocol**: pick any option of the subscription's selector (or `auto`);
 - **per-app routing**: everything except a list of programs, or only the list;
-- start at sign-in, a log window with the core's lines, the settings folder.
+- start at sign-in, the main window.
+
+**Main window** — everything the flyout does, with room: an overview (on/off, speed and connections, a two-minute speed graph), the protocol pick, the subscription (server, last refresh, interval, errors), per-app routing, the core's log (levels in color, lines select and copy), settings. Drawn with Direct2D like the flyout, keyboard-navigable (Tab, Enter, Ctrl+1..6). Started by hand the tray opens it; from the Run key (`--background`) it stays in the notification area; a second start brings the running tray's window up. Closing it only hides it.
 
 **Service** (`sovereign-core.exe`, runs as SYSTEM):
 
@@ -61,7 +63,7 @@ The tray owns all state (settings, the subscription's config) and sends the serv
 
 ```
 src/service/      the service: pipe server, control protocol, GoCore bridge, ETW, power events
-src/tray/         the tray: flyout (Direct2D), worker, subscription, per-app rules, log window
+src/tray/         the tray: flyout and main window (Direct2D), worker, subscription, per-app rules
 src/common/       shared headers and the handwritten JSON adapters (Duration, Listable, ...)
 src/generated/    C++ option structs generated from sing-box — do not edit, regenerate
 src/conformance/  ClientHello parser and canonical form for the harness
@@ -73,6 +75,7 @@ tests/unit/       unit tests (control protocol, tray logic, adapters)
 tests/golden/     generated structs and adapters against golden JSON
 tests/conformance/  the harness, golden ClientHellos, captured fixtures
 tests/fuzz/       libFuzzer targets, seed corpora, the JSON dictionary (run with tools/fuzz/run.ps1)
+tests/ui/         ui-snapshot: the main window's pages drawn into PNGs with sample content, no desktop needed
 tests/smoke/      service smoke tests run by CI (GoCore, ETW, flight recorder)
 ```
 
@@ -80,7 +83,7 @@ tests/smoke/      service smoke tests run by CI (GoCore, ETW, flight recorder)
 
 Every push (and a nightly run) goes through five jobs on `windows-latest`:
 
-- **build** — Debug build with warnings as errors, all tests, the real GoCore smoke test, the ETW flight-recorder test under the real SCM, and the conformance harness against the official sing-box release (downloaded and sha256-pinned);
+- **build** — Debug build with warnings as errors, all tests, the real GoCore smoke test, the ETW flight-recorder test under the real SCM, the conformance harness against the official sing-box release (downloaded and sha256-pinned), and the main window's pages drawn to PNG (the `ui-snapshots` artifact);
 - **analyze** — the whole tree under MSVC `/analyze`;
 - **asan** — everything under AddressSanitizer (the Go runtime can't share an ASan process, so GoCore's C++ side is exercised against a stub DLL with the same C ABI — [#9](https://github.com/sovereignbrains/Sovereign/issues/9));
 - **clang-tidy** — with the clang-tidy bundled with the runner's Visual Studio;
@@ -115,7 +118,7 @@ Presets: `ci` (Debug), `ci-asan`, `ci-analyze`, `ci-fuzz` (then `pwsh tools/fuzz
 sovereign-core.exe --install     (admin) register and start the service and its ETW recorder
 sovereign-core.exe --uninstall   (admin) remove both
 sovereign-core.exe --run         run in a console instead, for debugging
-sovereign-tray.exe               the tray; copy a subscription link and use "paste" in the flyout
+sovereign-tray.exe               the tray and its window; copy a subscription link and use "paste"
 ```
 
 Settings and the downloaded config live in `%LOCALAPPDATA%\Sovereign`, the service's logs and cache in `%ProgramData%\Sovereign`. `tools/trace/sovtrace.ps1 dump` decodes the flight recorder.

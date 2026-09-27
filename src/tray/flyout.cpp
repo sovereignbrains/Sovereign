@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "icons.h"
+#include "ui_style.h"
 
 namespace sovereign::tray {
 
@@ -50,7 +51,7 @@ constexpr const wchar_t* kGlyphRefresh = L"\xE72C";
 constexpr const wchar_t* kGlyphApps = L"\xE71D";
 constexpr const wchar_t* kGlyphChevron = L"\xE76C";
 constexpr const wchar_t* kGlyphBack = L"\xE72B";
-constexpr const wchar_t* kGlyphFolder = L"\xE8B7";
+constexpr const wchar_t* kGlyphWindow = L"\xE737";
 constexpr const wchar_t* kGlyphExit = L"\xE8BB";
 constexpr const wchar_t* kGlyphRemove = L"\xE711";
 constexpr const wchar_t* kGlyphAdd = L"\xE710";
@@ -84,7 +85,7 @@ struct Item {
   std::wstring_view glyph;  // empty: none (never a null pointer - /analyze)
   std::wstring text;
   Target target = Target::None;
-  FlyoutCommand command = FlyoutCommand::Toggle;
+  UiCommand command = UiCommand::Toggle;
   int index = 0;
   bool checked = false;
   bool enabled = true;
@@ -101,13 +102,10 @@ D2D1_RECT_F Row(float top, float height) { return {kPad, top, kWidth - kPad, top
 
 bool Contains(const D2D1_RECT_F& r, float x, float y) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; }
 
-D2D1_COLOR_F Rgb(float r, float g, float b, float a = 1.0f) { return D2D1::ColorF(r / 255, g / 255, b / 255, a); }
+using ui::FromColorRef;
+using ui::Rgb;
 
-D2D1_COLOR_F FromColorRef(COLORREF c) {
-  return Rgb(static_cast<float>(GetRValue(c)), static_cast<float>(GetGValue(c)), static_cast<float>(GetBValue(c)));
-}
-
-Item Command(Kind kind, D2D1_RECT_F rect, const wchar_t* glyph, std::wstring text, FlyoutCommand command, int index = 0) {
+Item Command(Kind kind, D2D1_RECT_F rect, const wchar_t* glyph, std::wstring text, UiCommand command, int index = 0) {
   Item i;
   i.kind = kind;
   i.rect = rect;
@@ -139,13 +137,13 @@ Item Text(D2D1_RECT_F rect, const wchar_t* glyph, std::wstring text, bool enable
   return i;
 }
 
-Layout MainPage(const FlyoutContent& c) {
+Layout MainPage(const UiContent& c) {
   Layout l;
   l.header = true;
   float y = kPad + kHeader + kGap;
   l.separators.push_back(y - kGap / 2);
 
-  Item toggle = Command(Kind::Toggle, Row(y, kRow), kGlyphPower, c.on ? L"Включено" : L"Выключено", FlyoutCommand::Toggle);
+  Item toggle = Command(Kind::Toggle, Row(y, kRow), kGlyphPower, c.on ? L"Включено" : L"Выключено", UiCommand::Toggle);
   toggle.checked = c.on;
   l.items.push_back(std::move(toggle));
   y += kRow;
@@ -164,8 +162,8 @@ Layout MainPage(const FlyoutContent& c) {
   const D2D1_RECT_F refresh{right - kButton, buttonTop, right, buttonTop + kButton};
   const D2D1_RECT_F paste{refresh.left - 4 - kButton, buttonTop, refresh.left - 4, buttonTop + kButton};
   l.items.push_back(Text({kPad, y, paste.left - 4, y + kRow}, kGlyphSync, L"Подписка · " + c.subscription));
-  l.items.push_back(Command(Kind::IconButton, paste, kGlyphPaste, L"", FlyoutCommand::PasteSubscription));
-  Item refreshItem = Command(Kind::IconButton, refresh, kGlyphRefresh, L"", FlyoutCommand::RefreshSubscription);
+  l.items.push_back(Command(Kind::IconButton, paste, kGlyphPaste, L"", UiCommand::PasteSubscription));
+  Item refreshItem = Command(Kind::IconButton, refresh, kGlyphRefresh, L"", UiCommand::RefreshSubscription);
   refreshItem.enabled = c.hasSubscription;
   l.items.push_back(std::move(refreshItem));
   y += kRow;
@@ -178,34 +176,35 @@ Layout MainPage(const FlyoutContent& c) {
   y += kRow;
 
   Item autostart =
-      Command(Kind::Toggle, Row(y, kRow), kGlyphStartup, L"Запуск при входе", FlyoutCommand::ToggleAutostart);
+      Command(Kind::Toggle, Row(y, kRow), kGlyphStartup, L"Запуск при входе", UiCommand::ToggleAutostart);
   autostart.checked = c.autostart;
   l.items.push_back(std::move(autostart));
   y += kRow + kGap;
 
   l.separators.push_back(y - kGap / 2);
   const float cell = (right - kPad - 8) / 3;
-  const auto footer = [&](int n, const wchar_t* glyph, const wchar_t* caption, FlyoutCommand command) {
+  const auto footer = [&](int n, const wchar_t* glyph, const wchar_t* caption, UiCommand command, UiPage page) {
     const float left = kPad + static_cast<float>(n) * (cell + 4);
-    l.items.push_back(Command(Kind::Footer, {left, y, left + cell, y + kFooter}, glyph, caption, command));
+    l.items.push_back(
+        Command(Kind::Footer, {left, y, left + cell, y + kFooter}, glyph, caption, command, static_cast<int>(page)));
   };
-  footer(0, kGlyphLog, L"Журнал", FlyoutCommand::OpenLogs);
-  footer(1, kGlyphFolder, L"Папка", FlyoutCommand::OpenFolder);
-  footer(2, kGlyphExit, L"Выход", FlyoutCommand::Exit);
+  footer(0, kGlyphWindow, L"Открыть", UiCommand::OpenWindow, UiPage::Overview);
+  footer(1, kGlyphLog, L"Журнал", UiCommand::OpenWindow, UiPage::Logs);
+  footer(2, kGlyphExit, L"Выход", UiCommand::Exit, UiPage::Overview);
   l.height = y + kFooter + kPad;
   return l;
 }
 
-Layout AppsPage(const FlyoutContent& c, std::size_t scroll) {
+Layout AppsPage(const UiContent& c, std::size_t scroll) {
   Layout l;
   float y = kPad;
   l.items.push_back(Link(Kind::Back, Row(y, 36), kGlyphBack, L"Приложения", Target::BackToMain));
   y += 36 + kGap;
 
   const float mid = kWidth / 2;
-  Item except = Command(Kind::Segment, {kPad, y, mid - 2, y + 32}, nullptr, L"Все, кроме списка", FlyoutCommand::SetAppsMode, 0);
+  Item except = Command(Kind::Segment, {kPad, y, mid - 2, y + 32}, nullptr, L"Все, кроме списка", UiCommand::SetAppsMode, 0);
   except.checked = !c.appsInclude;
-  Item only = Command(Kind::Segment, {mid + 2, y, kWidth - kPad, y + 32}, nullptr, L"Только список", FlyoutCommand::SetAppsMode, 1);
+  Item only = Command(Kind::Segment, {mid + 2, y, kWidth - kPad, y + 32}, nullptr, L"Только список", UiCommand::SetAppsMode, 1);
   only.checked = c.appsInclude;
   l.items.push_back(std::move(except));
   l.items.push_back(std::move(only));
@@ -222,7 +221,7 @@ Layout AppsPage(const FlyoutContent& c, std::size_t scroll) {
     const float top = y + (kListRow - kButton) / 2;
     l.items.push_back(Text({kPad, y, right - kButton - 4, y + kListRow}, nullptr, c.apps[i]));
     l.items.push_back(Command(Kind::IconButton, {right - kButton, top, right, top + kButton}, kGlyphRemove, L"",
-                              FlyoutCommand::RemoveApp, static_cast<int>(i)));
+                              UiCommand::RemoveApp, static_cast<int>(i)));
     y += kListRow;
   }
   if (c.apps.size() > kVisibleApps) {
@@ -234,14 +233,14 @@ Layout AppsPage(const FlyoutContent& c, std::size_t scroll) {
 
   l.separators.push_back(y - kGap / 2);
   l.items.push_back(Command(Kind::Footer, {kPad, y, kWidth / 2 - 2, y + kFooter}, kGlyphAdd, L"Из запущенных",
-                            FlyoutCommand::AddRunning));
+                            UiCommand::AddRunning));
   l.items.push_back(Command(Kind::Footer, {kWidth / 2 + 2, y, kWidth - kPad, y + kFooter}, kGlyphFile,
-                            L"Выбрать exe…", FlyoutCommand::AddExe));
+                            L"Выбрать exe…", UiCommand::AddExe));
   l.height = y + kFooter + kPad;
   return l;
 }
 
-Layout ProtocolsPage(const FlyoutContent& c) {
+Layout ProtocolsPage(const UiContent& c) {
   Layout l;
   float y = kPad;
   l.items.push_back(Link(Kind::Back, Row(y, 36), kGlyphBack, L"Протокол", Target::BackToMain));
@@ -249,7 +248,7 @@ Layout ProtocolsPage(const FlyoutContent& c) {
   for (std::size_t i = 0; i < c.protocols.size(); ++i) {
     const std::wstring& name = c.protocols[i];
     Item choice = Command(Kind::Choice, Row(y, kListRow), kGlyphCheck,
-                          name == L"auto" ? L"auto — лучший по задержке" : name, FlyoutCommand::SetProtocol,
+                          name == L"auto" ? L"auto — лучший по задержке" : name, UiCommand::SetProtocol,
                           static_cast<int>(i));
     choice.checked = static_cast<int>(i) == c.protocol;
     l.items.push_back(std::move(choice));
@@ -259,26 +258,13 @@ Layout ProtocolsPage(const FlyoutContent& c) {
   return l;
 }
 
-// A glyph font that exists here: Fluent Icons on Windows 11, MDL2 on 10.
-std::wstring GlyphFamily(IDWriteFactory* factory) {
-  wil::com_ptr<IDWriteFontCollection> fonts;
-  if (SUCCEEDED(factory->GetSystemFontCollection(&fonts, FALSE))) {
-    UINT32 index = 0;
-    BOOL exists = FALSE;
-    if (SUCCEEDED(fonts->FindFamilyName(L"Segoe Fluent Icons", &index, &exists)) && exists) {
-      return L"Segoe Fluent Icons";
-    }
-  }
-  return L"Segoe MDL2 Assets";
-}
-
 }  // namespace
 
 struct Flyout::Impl {
   HINSTANCE instance;
   CommandHandler onCommand;
   wil::unique_hwnd window;
-  FlyoutContent content;
+  UiContent content;
   Page page = Page::Main;
   std::size_t scroll = 0;
   Layout layout;
@@ -316,7 +302,7 @@ struct Flyout::Impl {
     format(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 12.5f, caption);
     format(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 13, centered);
     centered->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    format(GlyphFamily(dwrite.get()).c_str(), DWRITE_FONT_WEIGHT_NORMAL, 16, glyph);
+    format(ui::GlyphFamily(dwrite.get()).c_str(), DWRITE_FONT_WEIGHT_NORMAL, 16, glyph);
     glyph->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     THROW_IF_FAILED(dwrite->CreateEllipsisTrimmingSign(body.get(), ellipsis.put()));
     const DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
@@ -341,7 +327,7 @@ struct Flyout::Impl {
     DwmSetWindowAttribute(window.get(), DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof corners);
     const BOOL dark = TRUE;
     DwmSetWindowAttribute(window.get(), DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof dark);
-    const COLORREF border = RGB(46, 74, 128);
+    const COLORREF border = ui::kBorder;
     DwmSetWindowAttribute(window.get(), DWMWA_BORDER_COLOR, &border, sizeof border);
   }
 
@@ -459,19 +445,18 @@ struct Flyout::Impl {
       case Target::None: return;
       case Target::Command: break;
     }
-    FlyoutArgs args;
+    UiArgs args;
     args.index = item.index;
     args.anchor = ScreenPoint(item.rect);
     switch (item.command) {
       // These take the focus (a menu, a file dialog) or end the tray: close first.
-      case FlyoutCommand::AddRunning:
-      case FlyoutCommand::AddExe:
-      case FlyoutCommand::OpenLogs:
-      case FlyoutCommand::OpenFolder:
-      case FlyoutCommand::Exit:
+      case UiCommand::AddRunning:
+      case UiCommand::AddExe:
+      case UiCommand::OpenWindow:
+      case UiCommand::Exit:
         HideNow();
         break;
-      case FlyoutCommand::SetProtocol:
+      case UiCommand::SetProtocol:
         page = Page::Main;  // picked: back to the overview, which shows it
         break;
       default:
@@ -575,7 +560,7 @@ struct Flyout::Impl {
     }
     auto* t = target.get();
     t->BeginDraw();
-    t->Clear(Rgb(28, 31, 38));
+    t->Clear(FromColorRef(ui::kPanelColor));
 
     wil::com_ptr<ID2D1SolidColorBrush> primary;
     wil::com_ptr<ID2D1SolidColorBrush> secondary;
@@ -583,11 +568,11 @@ struct Flyout::Impl {
     wil::com_ptr<ID2D1SolidColorBrush> hoverFill;
     wil::com_ptr<ID2D1SolidColorBrush> accent;
     wil::com_ptr<ID2D1SolidColorBrush> brush;
-    t->CreateSolidColorBrush(Rgb(242, 244, 248), primary.put());
-    t->CreateSolidColorBrush(Rgb(160, 168, 184), secondary.put());
+    t->CreateSolidColorBrush(FromColorRef(ui::kPrimaryText), primary.put());
+    t->CreateSolidColorBrush(FromColorRef(ui::kSecondaryText), secondary.put());
     t->CreateSolidColorBrush(Rgb(255, 255, 255, 0.10f), faint.put());
     t->CreateSolidColorBrush(Rgb(255, 255, 255, 0.07f), hoverFill.put());
-    t->CreateSolidColorBrush(Rgb(76, 146, 255), accent.put());
+    t->CreateSolidColorBrush(FromColorRef(ui::kAccent), accent.put());
     t->CreateSolidColorBrush(Rgb(0, 0, 0), brush.put());
     if (!primary || !secondary || !faint || !hoverFill || !accent || !brush) {
       t->EndDraw();
@@ -694,7 +679,7 @@ Flyout::Flyout(HINSTANCE instance, CommandHandler onCommand)
 
 Flyout::~Flyout() = default;
 
-void Flyout::Toggle(const RECT& anchor, const FlyoutContent& content) {
+void Flyout::Toggle(const RECT& anchor, const UiContent& content) {
   impl_->content = content;
   if (impl_->visible) {
     impl_->HideNow();
@@ -708,7 +693,7 @@ void Flyout::Toggle(const RECT& anchor, const FlyoutContent& content) {
 
 void Flyout::Hide() { impl_->HideNow(); }
 
-void Flyout::Update(const FlyoutContent& content) {
+void Flyout::Update(const UiContent& content) {
   impl_->content = content;
   if (impl_->visible) {
     impl_->Relayout();

@@ -21,6 +21,11 @@ inline constexpr std::chrono::hours kDefaultUpdateInterval{12};
 // Only https: the URL carries the user's token and the answer their keys.
 bool IsHttpsUrl(std::wstring_view url);
 
+// The host (and port) of a URL, for showing where the subscription comes from:
+// the rest - path, query, user info - is where the token lives. Empty if
+// there is no "scheme://host".
+std::wstring UrlHost(std::wstring_view url);
+
 // A subscription answer the tray will hand to box_start: a JSON object with a
 // non-empty "outbounds" array. On success, how many outbounds (proxies and the
 // rest) it has; otherwise why not, for the user.

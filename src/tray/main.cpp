@@ -1,10 +1,15 @@
 // sovereign-tray: the user's side of Sovereign. A notification-area icon that
 // turns the proxy on and off through the service's control pipe, shows state
-// and speed, and keeps the config fresh from a subscription URL. Decisions
-// live in TrayModel and subscription.h (both unit-tested); this file is Win32
-// glue: a hidden window on the UI thread, and a worker thread that owns the
-// settings and does everything that blocks (the pipe, WinHTTP) once a second
-// or when the UI asks.
+// and speed, and keeps the config fresh from a subscription URL; its flyout
+// for the quick things, the main window for everything. Decisions live in
+// TrayModel and subscription.h (both unit-tested); this file is Win32 glue: a
+// hidden window on the UI thread, and a worker thread that owns the settings
+// and does everything that blocks (the pipe, WinHTTP) once a second or when
+// the UI asks.
+//
+// Started by hand the tray opens its window; from the Run key (--background)
+// it stays in the notification area. A second start shows the first one's
+// window and exits.
 //
 // Quitting the tray doesn't stop the box - the service runs it, the tray only
 // steers. The next tray start picks the saved on/off intent up again.
@@ -48,23 +53,32 @@
 #include "icons.h"
 #include "json_field.h"
 #include "log_lines.h"
-#include "log_window.h"
+#include "main_window.h"
 #include "pipe_client.h"
 #include "settings.h"
 #include "sha256.h"
 #include "subscription.h"
 #include "tray_model.h"
+#include "ui_content.h"
 
 namespace {
 
 using sovereign::tray::Action;
 using sovereign::tray::AppsMode;
 using sovereign::tray::Display;
+using sovereign::tray::FormatRate;
+using sovereign::tray::UiCommand;
+using sovereign::tray::UiContent;
+using sovereign::tray::UiPage;
 using sovereign::tray::TraySettings;
 using sovereign::tray::TrayModel;
 
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kViewChangedMessage = WM_APP + 2;
+// A second tray start asks the running one to show its window (registered:
+// it crosses processes).
+const UINT kShowWindowMessage = RegisterWindowMessageW(L"Sovereign.ShowWindow");
+constexpr wchar_t kTrayClassName[] = L"SovereignTrayWindow";
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
 constexpr std::size_t kMenuMaxItems = 250;
@@ -81,6 +95,9 @@ constexpr std::chrono::minutes kRefreshRetry{30};
 // one poll reads at most (a flood is read on over the next seconds).
 constexpr std::size_t kLogKeep = 5000;
 constexpr int kLogPagesPerPoll = 20;
+
+// Speed samples the main window's graph shows: two minutes of polls.
+constexpr std::size_t kHistory = 120;
 
 std::wstring Widen(const std::string& utf8) {
   if (utf8.empty()) {
@@ -100,16 +117,6 @@ std::string Narrow(const std::wstring& wide) {
   std::string out(static_cast<std::size_t>(n), '\0');
   WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
   return out;
-}
-
-std::wstring FormatRate(double bytesPerSecond) {
-  if (bytesPerSecond < 1024) {
-    return std::format(L"{:.0f} Б/с", bytesPerSecond);
-  }
-  if (bytesPerSecond < 1024 * 1024) {
-    return std::format(L"{:.1f} КБ/с", bytesPerSecond / 1024);
-  }
-  return std::format(L"{:.1f} МБ/с", bytesPerSecond / (1024 * 1024));
 }
 
 std::wstring LocalTime(std::int64_t unixSeconds) {
@@ -147,8 +154,11 @@ struct View {
   std::int64_t connections = 0;
   std::string error;
   bool hasSubscription = false;
+  std::wstring subscriptionHost;  // UrlHost of the subscription URL
   std::int64_t lastRefresh = 0;
+  int updateHours = 0;
   std::string subscriptionError;  // the last refresh failed with this
+  std::deque<std::pair<float, float>> history;  // down, up per poll, oldest first
   // A balloon to show once: the UI shows it when noticeId changes.
   unsigned noticeId = 0;
   std::wstring noticeTitle;
@@ -160,7 +170,7 @@ struct View {
   int protocol = -1;                   // the one in use
 };
 
-// A new per-app setup from the flyout.
+// A new per-app setup from the flyout or the main window.
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
   std::vector<std::string> list;
@@ -365,6 +375,7 @@ class Worker {
       const auto config = EffectiveConfig();
       model_.SetExpectedConfig(ExpectedConfigHash(config));
       Execute(model_, model_.OnPoll(PollStats(), TrayModel::Clock::now()), config);
+      Sample();
       CollectLogs();
       Publish();
 
@@ -474,9 +485,25 @@ class Worker {
     // the service reports no longer matches (ExpectedConfigHash).
   }
 
+  // One point of the speed graph a second; a request that wakes the loop
+  // sooner doesn't add one.
+  void Sample() {
+    const auto now = TrayModel::Clock::now();
+    if (lastSample_ && now - *lastSample_ < std::chrono::milliseconds(900)) {
+      return;
+    }
+    lastSample_ = now;
+    const bool on = model_.GetDisplay() == Display::On;
+    history_.emplace_back(on ? static_cast<float>(model_.DownRate()) : 0.0f,
+                          on ? static_cast<float>(model_.UpRate()) : 0.0f);
+    while (history_.size() > kHistory) {
+      history_.pop_front();
+    }
+  }
+
   // The core's new log lines from the service, plus the tray's own errors
   // (a box that never started has no log of its own to explain why), into the
-  // lines the log window shows.
+  // lines the main window's log shows.
   void CollectLogs() {
     std::vector<std::wstring> fresh;
     for (int page = 0; page < kLogPagesPerPoll; ++page) {
@@ -530,7 +557,10 @@ class Worker {
       v.connections = model_.Connections();
       v.error = model_.LastError();
       v.hasSubscription = !settings_.subscriptionUrl.empty();
+      v.subscriptionHost = sovereign::tray::UrlHost(Widen(settings_.subscriptionUrl));
       v.lastRefresh = settings_.lastRefresh;
+      v.updateHours = settings_.updateHours;
+      v.history = history_;
       v.subscriptionError = subscriptionError_;
       v.noticeId = noticeId_;
       v.noticeTitle = noticeTitle_;
@@ -555,6 +585,8 @@ class Worker {
   bool noticeIsError_ = false;
   std::uint64_t logSince_ = 0;  // box_logs cursor
   std::string loggedError_;     // the model's error last put into the log
+  std::deque<std::pair<float, float>> history_;
+  std::optional<TrayModel::Clock::time_point> lastSample_;
 };
 
 // NOTIFYICONDATA as RAII: the icon leaves the notification area whatever
@@ -801,13 +833,22 @@ void RequestProtocol(std::string tag) {
   Wake();
 }
 
-// What the flyout shows, from the worker's view.
-sovereign::tray::FlyoutContent FlyoutFrom(const View& v) {
-  sovereign::tray::FlyoutContent c;
+// What the flyout and the main window show, from the worker's view.
+UiContent ContentFrom(const View& v) {
+  UiContent c;
+  c.display = v.display;
   c.status = StatusLine(v);
   c.statusDot = sovereign::tray::StateColor(v.display);
   c.on = v.wantOn;
+  c.down = v.down;
+  c.up = v.up;
+  c.connections = v.connections;
+  c.error = v.display == Display::Error ? Widen(v.error) : std::wstring();
+  c.history.assign(v.history.begin(), v.history.end());
   c.hasSubscription = v.hasSubscription;
+  c.subscriptionHost = v.subscriptionHost;
+  c.subscriptionError = Widen(v.subscriptionError);
+  c.updateHours = v.hasSubscription ? v.updateHours : 0;
   if (!v.hasSubscription) {
     c.subscription = L"нет";
   } else if (!v.subscriptionError.empty()) {
@@ -824,33 +865,18 @@ sovereign::tray::FlyoutContent FlyoutFrom(const View& v) {
   }
   c.protocol = v.protocol;
   c.autostart = sovereign::tray::AutostartEnabled();
+  c.version = L"0.1 · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
   return c;
 }
 
 sovereign::tray::Flyout* g_flyout = nullptr;
-sovereign::tray::LogWindow* g_logWindow = nullptr;
-std::uint64_t g_logsShown = 0;  // Shared::logsAdded as of the log window's last update
+sovereign::tray::MainWindow* g_mainWindow = nullptr;
+std::uint64_t g_logsShown = 0;  // Shared::logsAdded as of the main window's last log update
 
-void OpenLogs() {
-  if (g_logWindow == nullptr) {
-    return;
-  }
-  std::vector<std::wstring> lines;
-  {
-    auto& shared = State();
-    const std::scoped_lock lock(shared.mutex);
-    lines.assign(shared.logs.begin(), shared.logs.end());
-    g_logsShown = shared.logsAdded;
-  }
-  if (lines.empty()) {
-    lines.emplace_back(L"пока пусто: служба ещё ничего не написала");
-  }
-  g_logWindow->Show(lines);
-}
-
-// The lines added since the open log window was last updated.
+// The log lines added since the main window's log was last updated. The
+// window keeps them whether it's shown or not, so opening it is instant.
 void UpdateLogs() {
-  if (g_logWindow == nullptr || !g_logWindow->IsOpen()) {
+  if (g_mainWindow == nullptr) {
     return;
   }
   std::vector<std::wstring> lines;
@@ -861,7 +887,24 @@ void UpdateLogs() {
     lines.assign(shared.logs.end() - static_cast<std::ptrdiff_t>(fresh), shared.logs.end());
     g_logsShown = shared.logsAdded;
   }
-  g_logWindow->Append(lines);
+  g_mainWindow->AppendLogs(lines);
+}
+
+void UpdateWindows() {
+  const UiContent content = ContentFrom(CurrentView());
+  if (g_flyout != nullptr) {
+    g_flyout->Update(content);
+  }
+  if (g_mainWindow != nullptr) {
+    g_mainWindow->Update(content);
+  }
+}
+
+void ShowMainWindow(UiPage page) {
+  if (g_mainWindow != nullptr) {
+    g_mainWindow->Update(ContentFrom(CurrentView()));
+    g_mainWindow->Show(page);
+  }
 }
 
 // The tray icon's rectangle on screen (the flyout opens next to it); the
@@ -880,60 +923,61 @@ RECT TrayIconRect(HWND window) {
   return rect;
 }
 
-void OnFlyoutCommand(HWND window, sovereign::tray::FlyoutCommand command, const sovereign::tray::FlyoutArgs& args) {
-  using sovereign::tray::FlyoutCommand;
+// A command from the flyout or the main window. `trayWindow` is the hidden
+// window that owns the icon; menus and dialogs belong to args.owner if set.
+void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiArgs& args) {
   const View view = CurrentView();
+  HWND owner = args.owner != nullptr ? args.owner : trayWindow;
   switch (command) {
-    case FlyoutCommand::Toggle:
+    case UiCommand::Toggle:
       RequestToggle();
       break;
-    case FlyoutCommand::PasteSubscription:
-      RequestImport(window);
+    case UiCommand::PasteSubscription:
+      RequestImport(owner);
       break;
-    case FlyoutCommand::RefreshSubscription:
+    case UiCommand::RefreshSubscription:
       RequestRefresh();
       break;
-    case FlyoutCommand::SetAppsMode:
+    case UiCommand::SetAppsMode:
       RequestApps({args.index == 1 ? AppsMode::Include : AppsMode::Exclude, view.apps});
       break;
-    case FlyoutCommand::RemoveApp:
+    case UiCommand::RemoveApp:
       if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.apps.size()) {
         AppsChange change{view.appsMode, view.apps};
         change.list.erase(change.list.begin() + args.index);
         RequestApps(std::move(change));
       }
       break;
-    case FlyoutCommand::AddRunning:
-      AddFromRunning(window, args.anchor);
+    case UiCommand::AddRunning:
+      AddFromRunning(owner, args.anchor);
       break;
-    case FlyoutCommand::AddExe:
-      AddExe(window);
+    case UiCommand::AddExe:
+      AddExe(owner);
       break;
-    case FlyoutCommand::SetProtocol:
+    case UiCommand::SetProtocol:
       if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.protocols.size()) {
         RequestProtocol(view.protocols[static_cast<std::size_t>(args.index)]);
       }
       break;
-    case FlyoutCommand::ToggleAutostart:
+    case UiCommand::ToggleAutostart:
       if (!sovereign::tray::SetAutostart(!sovereign::tray::AutostartEnabled()) && g_trayIcon != nullptr) {
         g_trayIcon->Balloon(L"Sovereign", L"Не удалось изменить автозапуск (реестр отказал).");
       }
-      if (g_flyout != nullptr) {
-        g_flyout->Update(FlyoutFrom(view));
-      }
+      UpdateWindows();
       break;
-    case FlyoutCommand::OpenLogs:
-      OpenLogs();
+    case UiCommand::OpenWindow:
+      ShowMainWindow(args.index >= 0 && args.index < sovereign::tray::kUiPageCount ? static_cast<UiPage>(args.index)
+                                                                                   : UiPage::Overview);
       break;
-    case FlyoutCommand::OpenFolder:
+    case UiCommand::OpenFolder:
       try {
         ShellExecuteW(nullptr, L"open", sovereign::tray::DataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
       } catch (...) {
         LOG_CAUGHT_EXCEPTION();
       }
       break;
-    case FlyoutCommand::Exit:
-      DestroyWindow(window);
+    case UiCommand::Exit:
+      DestroyWindow(trayWindow);
       break;
   }
 }
@@ -943,6 +987,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 
   if (message == taskbarCreated && g_trayIcon != nullptr) {
     g_trayIcon->Add();
+    return 0;
+  }
+  if (message == kShowWindowMessage && kShowWindowMessage != 0) {
+    ShowMainWindow(UiPage::Overview);
     return 0;
   }
   switch (message) {
@@ -956,18 +1004,28 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       if (g_trayIcon != nullptr) {
         g_trayIcon->Update(view);
       }
-      if (g_flyout != nullptr) {
-        g_flyout->Update(FlyoutFrom(view));
-      }
+      UpdateWindows();
       UpdateLogs();
       return 0;
     }
-    case kTrayCallbackMessage:
-      // Either button opens the panel, like the system's own tray flyouts.
-      if ((lParam == WM_LBUTTONUP || lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) && g_flyout != nullptr) {
-        g_flyout->Toggle(TrayIconRect(window), FlyoutFrom(CurrentView()));
+    case kTrayCallbackMessage: {
+      // Either button opens the panel, like the system's own tray flyouts; a
+      // double click opens the window. A double click arrives as up, double
+      // click, up: the first up opened the panel, the last must not reopen it.
+      static ULONGLONG ignoreUpUntil = 0;
+      if (lParam == WM_LBUTTONDBLCLK) {
+        ignoreUpUntil = GetTickCount64() + GetDoubleClickTime();
+        if (g_flyout != nullptr) {
+          g_flyout->Hide();
+        }
+        ShowMainWindow(UiPage::Overview);
+      } else if (lParam == WM_LBUTTONUP && GetTickCount64() < ignoreUpUntil) {
+        ignoreUpUntil = 0;
+      } else if ((lParam == WM_LBUTTONUP || lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) && g_flyout != nullptr) {
+        g_flyout->Toggle(TrayIconRect(window), ContentFrom(CurrentView()));
       }
       return 0;
+    }
     case WM_DESTROY:
       // Everything visible goes first: after the message loop the worker is
       // joined, and it may be inside a pipe call that takes a while (a
@@ -979,8 +1037,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       if (g_flyout != nullptr) {
         g_flyout->Hide();
       }
-      if (g_logWindow != nullptr) {
-        g_logWindow->Close();
+      if (g_mainWindow != nullptr) {
+        g_mainWindow->Hide();
       }
       PostQuitMessage(0);
       return 0;
@@ -989,19 +1047,44 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
   }
 }
 
+// Whether the command line holds `arg` as a whole argument.
+bool HasArg(const wchar_t* commandLine, std::wstring_view arg) {
+  int count = 0;
+  const wil::unique_hlocal_ptr<wchar_t*> args(CommandLineToArgvW(commandLine, &count));
+  if (!args) {
+    return false;
+  }
+  for (int i = 0; i < count; ++i) {
+    if (arg == args.get()[i]) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
-  // Sharp at any scaling: the flyout sizes itself for its monitor's DPI.
+  // Sharp at any scaling: the flyout and the window size themselves for their monitor's DPI.
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   // The file dialog ("add exe") is COM, on this thread.
   const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  // The whole command line: CommandLineToArgvW expects argv[0] first.
+  const bool background = HasArg(GetCommandLineW(), sovereign::tray::kBackgroundArg);
 
   // One tray per session: a second one would fight the first over the box.
+  // Started by hand while one runs, it brings that one's window up instead.
   const wil::unique_mutex_nothrow single(CreateMutexW(nullptr, FALSE, L"Local\\SovereignTray"));
   if (!single || GetLastError() == ERROR_ALREADY_EXISTS) {
+    if (HWND running = FindWindowW(kTrayClassName, nullptr); running != nullptr && !background) {
+      DWORD pid = 0;
+      GetWindowThreadProcessId(running, &pid);
+      AllowSetForegroundWindow(pid);  // this process has the foreground right now; the window needs it
+      PostMessageW(running, kShowWindowMessage, 0, 0);
+    }
     return 0;
   }
+  sovereign::tray::RefreshAutostart();
 
   TraySettings settings;
   try {
@@ -1010,33 +1093,38 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     LOG_CAUGHT_EXCEPTION_MSG("reading tray settings failed; starting turned off");
   }
 
-  const wchar_t kClassName[] = L"SovereignTrayWindow";
   WNDCLASSW windowClass{};
   windowClass.lpfnWndProc = WindowProc;
   windowClass.hInstance = instance;
-  windowClass.lpszClassName = kClassName;
+  windowClass.lpszClassName = kTrayClassName;
   if (!RegisterClassW(&windowClass)) {
     return 1;
   }
   // A message-only window can't receive broadcasts like TaskbarCreated, so
   // this one is a normal (never shown) top-level window.
-  HWND window = CreateWindowExW(0, kClassName, L"sovereign tray", 0, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
+  HWND window = CreateWindowExW(0, kTrayClassName, L"sovereign tray", 0, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
   if (!window) {
     return 1;
   }
+  // The second start's message comes from another process of the same user
+  // at the same integrity: let it through UIPI anyway, in case one runs elevated.
+  ChangeWindowMessageFilterEx(window, kShowWindowMessage, MSGFLT_ALLOW, nullptr);
   {
     const std::scoped_lock lock(State().mutex);
     State().window = window;
     State().view.wantOn = settings.wantOn;
   }
 
-  sovereign::tray::Flyout flyout(instance, [window](sovereign::tray::FlyoutCommand command,
-                                                   const sovereign::tray::FlyoutArgs& args) {
-    OnFlyoutCommand(window, command, args);
-  });
+  const auto onCommand = [window](UiCommand command, const sovereign::tray::UiArgs& args) {
+    OnUiCommand(window, command, args);
+  };
+  sovereign::tray::Flyout flyout(instance, onCommand);
   g_flyout = &flyout;
-  sovereign::tray::LogWindow logWindow(instance);
-  g_logWindow = &logWindow;
+  sovereign::tray::MainWindow mainWindow(instance, onCommand);
+  g_mainWindow = &mainWindow;
+  if (!background) {
+    ShowMainWindow(UiPage::Overview);
+  }
 
   int exitCode = 0;
   {
@@ -1050,7 +1138,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     exitCode = static_cast<int>(msg.wParam);
     thread.request_stop();
   }  // joins the worker before its state goes away
-  g_logWindow = nullptr;
+  g_mainWindow = nullptr;
   g_flyout = nullptr;
   return exitCode;
 }

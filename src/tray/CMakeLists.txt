@@ -21,18 +21,27 @@ add_library(sovereign_tray_lib STATIC
 target_include_directories(sovereign_tray_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_lib PUBLIC sovereign_common)
 
+# The windows: the flyout and the main window, drawn with Direct2D - linked by
+# the tray and by tests/ui's snapshot tool.
+add_library(sovereign_tray_ui STATIC
+  flyout.cpp
+  flyout.h
+  main_window.cpp
+  main_window.h
+  icons.cpp
+  icons.h
+  ui_content.h
+  ui_style.h
+)
+target_include_directories(sovereign_tray_ui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(sovereign_tray_ui PUBLIC sovereign_tray_lib sovereign_common user32 gdi32 ole32 d2d1 dwrite dwmapi shcore windowscodecs)
+
 add_executable(sovereign-tray WIN32
   main.cpp
   autostart.cpp
   autostart.h
-  log_window.cpp
-  log_window.h
   fetch.cpp
   fetch.h
-  flyout.cpp
-  flyout.h
-  icons.cpp
-  icons.h
   pipe_client.cpp
   pipe_client.h
   settings.cpp
@@ -48,5 +57,5 @@ string(REGEX REPLACE "^v" "" SOVEREIGN_TRAY_SINGBOX_VERSION "${SOVEREIGN_TRAY_SI
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tools/codegen/sing-box.version")
 target_compile_definitions(sovereign-tray PRIVATE "SOVEREIGN_SINGBOX_VERSION_W=L\"${SOVEREIGN_TRAY_SINGBOX_VERSION}\"")
 
-target_link_libraries(sovereign-tray PRIVATE sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid d2d1 dwrite dwmapi shcore windowscodecs uxtheme)
+target_link_libraries(sovereign-tray PRIVATE sovereign_tray_ui sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid)
 sovereign_copy_asan_runtime(sovereign-tray)

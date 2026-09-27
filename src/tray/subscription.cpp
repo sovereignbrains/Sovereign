@@ -25,6 +25,19 @@ bool IsHttpsUrl(std::wstring_view url) {
          std::none_of(url.begin(), url.end(), [](wchar_t c) { return c <= L' ' || c == 0x7F; });
 }
 
+std::wstring UrlHost(std::wstring_view url) {
+  const auto scheme = url.find(L"://");
+  if (scheme == std::wstring_view::npos) {
+    return {};
+  }
+  std::wstring_view authority = url.substr(scheme + 3);
+  authority = authority.substr(0, authority.find_first_of(L"/?#"));
+  if (const auto at = authority.rfind(L'@'); at != std::wstring_view::npos) {
+    authority.remove_prefix(at + 1);
+  }
+  return std::wstring(authority);
+}
+
 ConfigCheck CheckSubscriptionConfig(std::string_view body) {
   if (body.size() > kMaxSubscriptionBytes) {
     return {.error = "ответ больше 4 МБ - это не конфиг"};

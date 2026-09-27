@@ -25,6 +25,15 @@ void TestHttpsOnly() {
   CHECK(!IsHttpsUrl(L""));
 }
 
+void TestUrlHost() {
+  CHECK(UrlHost(L"https://packetlab.tech/sub/0123abcd") == L"packetlab.tech");
+  CHECK(UrlHost(L"https://sub.example.com:8443?token=secret") == L"sub.example.com:8443");
+  CHECK(UrlHost(L"https://user:pass@host.example#frag") == L"host.example");  // no credentials on screen
+  CHECK(UrlHost(L"https://host.example") == L"host.example");
+  CHECK(UrlHost(L"no scheme").empty());
+  CHECK(UrlHost(L"").empty());
+}
+
 void TestConfigCheck() {
   const auto ok = CheckSubscriptionConfig(R"({"outbounds":[{"type":"direct"},{"type":"anytls"}]})");
   CHECK(ok.ok && ok.outbounds == 2 && ok.error.empty());
@@ -60,6 +69,7 @@ void TestTunDetection() {
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestHttpsOnly();
+    TestUrlHost();
     TestConfigCheck();
     TestUpdateInterval();
     TestTunDetection();

@@ -12,6 +12,7 @@
 
 #include <array>
 #include <string>
+#include <string_view>
 
 namespace sovereign::tray {
 
@@ -60,10 +61,23 @@ bool SetAutostart(bool enabled) {
     LOG_CAUGHT_EXCEPTION();
     return false;
   }
-  const std::wstring command = L"\"" + exe + L"\"";
+  const std::wstring command = L"\"" + exe + L"\" " + kBackgroundArg;
   const auto bytes = static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t));
   return RegSetValueExW(key.get(), kValueName, 0, REG_SZ, reinterpret_cast<const BYTE*>(command.c_str()), bytes) ==
          ERROR_SUCCESS;
+}
+
+void RefreshAutostart() {
+  if (!AutostartEnabled()) {
+    return;
+  }
+  std::array<wchar_t, std::size_t{2} * MAX_PATH> command{};
+  DWORD size = static_cast<DWORD>(command.size() * sizeof(wchar_t));
+  if (RegGetValueW(HKEY_CURRENT_USER, kRunKey, kValueName, RRF_RT_REG_SZ, nullptr, command.data(), &size) ==
+          ERROR_SUCCESS &&
+      std::wstring_view(command.data()).find(kBackgroundArg) == std::wstring_view::npos) {
+    SetAutostart(true);
+  }
 }
 
 }  // namespace sovereign::tray
