@@ -69,7 +69,9 @@ target_link_libraries(sovereign_common INTERFACE WIL::WIL nlohmann_json::nlohman
 
 add_subdirectory(src/service)
 add_subdirectory(src/tray)
+add_subdirectory(src/conformance)
 
 enable_testing()
 add_subdirectory(tests/golden)
 add_subdirectory(tests/unit)
+add_subdirectory(tests/conformance)
