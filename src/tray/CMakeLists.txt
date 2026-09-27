@@ -15,6 +15,8 @@ add_library(sovereign_tray_lib STATIC
   protocol_choice.h
   log_lines.cpp
   log_lines.h
+  cache_file.cpp
+  cache_file.h
 )
 target_include_directories(sovereign_tray_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_lib PUBLIC sovereign_common)

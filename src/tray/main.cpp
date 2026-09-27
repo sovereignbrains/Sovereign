@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <iphlpapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 
 #include <wil/com.h>
@@ -40,6 +41,7 @@
 
 #include "app_rules.h"
 #include "autostart.h"
+#include "cache_file.h"
 #include "fetch.h"
 #include "protocol_choice.h"
 #include "flyout.h"
@@ -304,10 +306,22 @@ void Execute(TrayModel& model, Action action, const std::optional<std::string>& 
   }
 }
 
+// Where the box keeps its cache file (cache_file.h): the service runs it as
+// SYSTEM, so a machine-wide directory it can write - the one --install makes
+// for the service's logs. Empty if the folder can't be found: then no cache.
+std::string CacheFilePath() {
+  wil::unique_cotaskmem_string programData;
+  if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr, &programData))) {
+    return {};
+  }
+  return Narrow(std::wstring(programData.get()) + L"\\Sovereign\\cache.db");
+}
+
 // The worker's state besides the model: the settings it owns and saves.
 class Worker {
  public:
-  explicit Worker(TraySettings settings) : settings_(std::move(settings)), model_(settings_.wantOn) {}
+  explicit Worker(TraySettings settings)
+      : settings_(std::move(settings)), model_(settings_.wantOn), cacheFile_(CacheFilePath()) {}
 
   void Run(const std::stop_token& stop) {
     auto& shared = State();
@@ -359,15 +373,16 @@ class Worker {
   }
 
  private:
-  // config.json with the protocol pick and the per-app rules applied - what
-  // the box must run.
+  // config.json with the protocol pick, the per-app rules and the cache file
+  // applied - what the box must run.
   std::optional<std::string> EffectiveConfig() const {
     const auto config = sovereign::tray::LoadConfig();
     if (!config) {
       return std::nullopt;
     }
-    return sovereign::tray::ApplyAppRules(sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol),
-                                          settings_.appsMode, settings_.apps);
+    std::string effective = sovereign::tray::ApplyAppRules(
+        sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol), settings_.appsMode, settings_.apps);
+    return cacheFile_.empty() ? effective : sovereign::tray::ApplyCacheFile(effective, cacheFile_);
   }
 
   // The selector's options and which one the box uses: the user's pick if
@@ -530,6 +545,7 @@ class Worker {
 
   TraySettings settings_;
   TrayModel model_;
+  std::string cacheFile_;  // UTF-8; empty: no cache file
   std::optional<TrayModel::Clock::time_point> lastFailure_;
   std::string subscriptionError_;
   unsigned noticeId_ = 0;

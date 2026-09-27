@@ -31,6 +31,11 @@ target_link_libraries(unit-protocol-choice PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-protocol-choice)
 add_test(NAME unit-protocol-choice COMMAND unit-protocol-choice)
 
+add_executable(unit-cache-file cache_file_test.cpp check.h)
+target_link_libraries(unit-cache-file PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-cache-file)
+add_test(NAME unit-cache-file COMMAND unit-cache-file)
+
 add_executable(unit-log-lines log_lines_test.cpp check.h)
 target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-lines)
