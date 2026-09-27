@@ -75,9 +75,6 @@ using sovereign::tray::TrayModel;
 
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kViewChangedMessage = WM_APP + 2;
-// A second tray start asks the running one to show its window (registered:
-// it crosses processes).
-const UINT kShowWindowMessage = RegisterWindowMessageW(L"Sovereign.ShowWindow");
 constexpr wchar_t kTrayClassName[] = L"SovereignTrayWindow";
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
@@ -98,6 +95,13 @@ constexpr int kLogPagesPerPoll = 20;
 
 // Speed samples the main window's graph shows: two minutes of polls.
 constexpr std::size_t kHistory = 120;
+
+// A second tray start asks the running one to show its window (registered:
+// it crosses processes).
+UINT ShowWindowMessage() {
+  static const UINT message = RegisterWindowMessageW(L"Sovereign.ShowWindow");
+  return message;
+}
 
 std::wstring Widen(const std::string& utf8) {
   if (utf8.empty()) {
@@ -989,7 +993,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     g_trayIcon->Add();
     return 0;
   }
-  if (message == kShowWindowMessage && kShowWindowMessage != 0) {
+  if (message == ShowWindowMessage() && message != 0) {
     ShowMainWindow(UiPage::Overview);
     return 0;
   }
@@ -1080,7 +1084,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
       DWORD pid = 0;
       GetWindowThreadProcessId(running, &pid);
       AllowSetForegroundWindow(pid);  // this process has the foreground right now; the window needs it
-      PostMessageW(running, kShowWindowMessage, 0, 0);
+      PostMessageW(running, ShowWindowMessage(), 0, 0);
     }
     return 0;
   }
@@ -1108,7 +1112,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   }
   // The second start's message comes from another process of the same user
   // at the same integrity: let it through UIPI anyway, in case one runs elevated.
-  ChangeWindowMessageFilterEx(window, kShowWindowMessage, MSGFLT_ALLOW, nullptr);
+  ChangeWindowMessageFilterEx(window, ShowWindowMessage(), MSGFLT_ALLOW, nullptr);
   {
     const std::scoped_lock lock(State().mutex);
     State().window = window;
