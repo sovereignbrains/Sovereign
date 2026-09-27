@@ -14,7 +14,9 @@
 // into an unsigned field are errors; null leaves the zero value. nlohmann's
 // get<> converts all of those silently (70000 -> 4464), so generated code
 // reads its integer fields through here. The rules are checked against the
-// real unmarshaler: tests/golden/fixtures/integers.golden.json.
+// real unmarshaler: tests/golden/fixtures/integers.golden.json. (min)/(max) in
+// parentheses: windows.h's macros would expand them where NOMINMAX isn't set
+// (the CI's clang-tidy).
 
 namespace sovereign::adapters {
 
@@ -28,13 +30,13 @@ T GetInteger(const nlohmann::json& j) {
   // minus sign as signed, anything with a fraction or exponent as a float.
   if (j.is_number_unsigned()) {
     const auto value = j.get<std::uint64_t>();
-    if (value <= static_cast<std::uint64_t>(std::numeric_limits<T>::max())) {
+    if (value <= static_cast<std::uint64_t>((std::numeric_limits<T>::max)())) {
       return static_cast<T>(value);
     }
   } else if (j.is_number_integer() && std::is_signed_v<T>) {
     const auto value = j.get<std::int64_t>();
-    if (value >= static_cast<std::int64_t>(std::numeric_limits<T>::min()) &&
-        value <= static_cast<std::int64_t>(std::numeric_limits<T>::max())) {
+    if (value >= static_cast<std::int64_t>((std::numeric_limits<T>::min)()) &&
+        value <= static_cast<std::int64_t>((std::numeric_limits<T>::max)())) {
       return static_cast<T>(value);
     }
   }
