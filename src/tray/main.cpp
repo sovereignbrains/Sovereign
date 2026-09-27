@@ -62,6 +62,8 @@
 #include "subscription.h"
 #include "tray_model.h"
 #include "ui_content.h"
+#include "update.h"
+#include "updater.h"
 
 namespace {
 
@@ -77,6 +79,7 @@ using sovereign::tray::TrayModel;
 
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kViewChangedMessage = WM_APP + 2;
+constexpr UINT kUpdateChangedMessage = WM_APP + 3;
 constexpr wchar_t kTrayClassName[] = L"SovereignTrayWindow";
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
@@ -85,7 +88,7 @@ constexpr std::size_t kMenuMaxItems = 250;
 // What the subscription server sees: Sovereign runs the official sing-box core
 // (no Mieru), so servers that pick a format by User-Agent - packetlab's does -
 // give it the plain sing-box one. The version is the pinned core's.
-constexpr wchar_t kUserAgent[] = L"Sovereign/0.1 (sing-box " SOVEREIGN_SINGBOX_VERSION_W L")";
+constexpr wchar_t kUserAgent[] = L"Sovereign/" SOVEREIGN_VERSION_W L" (sing-box " SOVEREIGN_SINGBOX_VERSION_W L")";
 
 // After a failed refresh, when to try again (the old config keeps working).
 constexpr std::chrono::minutes kRefreshRetry{30};
@@ -718,9 +721,9 @@ class TrayIcon {
   }
 
   // A balloon from the UI thread itself (e.g. nothing usable on the clipboard).
-  void Balloon(const std::wstring& title, const std::wstring& text) {
+  void Balloon(const std::wstring& title, const std::wstring& text, DWORD flags = NIIF_WARNING) {
     data_.uFlags = NIF_INFO;
-    data_.dwInfoFlags = NIIF_WARNING;
+    data_.dwInfoFlags = flags;
     wcsncpy_s(data_.szInfoTitle, title.c_str(), _TRUNCATE);
     wcsncpy_s(data_.szInfo, text.c_str(), _TRUNCATE);
     Shell_NotifyIconW(NIM_MODIFY, &data_);
@@ -927,6 +930,8 @@ void RequestProtocol(std::string tag) {
   Wake();
 }
 
+sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
+
 // What the flyout and the main window show, from the worker's view.
 UiContent ContentFrom(const View& v) {
   UiContent c;
@@ -973,12 +978,31 @@ UiContent ContentFrom(const View& v) {
   c.canTestDelays = v.display == Display::On && !v.protocols.empty();
   c.delayError = Widen(v.delayError);
   c.autostart = sovereign::tray::AutostartEnabled();
-  c.version = L"0.1 · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
+  c.version = SOVEREIGN_VERSION_W L" · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
+  if (g_updater != nullptr) {
+    using Status = sovereign::tray::Updater::Status;
+    const auto update = g_updater->Get();
+    switch (update.status) {
+      case Status::Idle: c.update = sovereign::tray::UiUpdate::Idle; break;
+      case Status::Checking: c.update = sovereign::tray::UiUpdate::Checking; break;
+      case Status::UpToDate: c.update = sovereign::tray::UiUpdate::UpToDate; break;
+      case Status::Available: c.update = sovereign::tray::UiUpdate::Available; break;
+      case Status::Downloading:
+      case Status::Ready: c.update = sovereign::tray::UiUpdate::Downloading; break;
+      case Status::Failed: c.update = sovereign::tray::UiUpdate::Failed; break;
+    }
+    c.updateVersion = Widen(update.latest);
+    c.updateError = Widen(update.error);
+  }
   return c;
 }
 
 sovereign::tray::Flyout* g_flyout = nullptr;
 sovereign::tray::MainWindow* g_mainWindow = nullptr;
+std::string g_announcedUpdate;       // the version the balloon already told about
+bool g_updateBalloonShown = false;   // the last balloon was about an update: a click opens the settings
+bool g_installerLaunched = false;
+unsigned g_lastNotice = 0;
 std::uint64_t g_logsShown = 0;  // Shared::logsAdded as of the main window's last log update
 
 // The log lines added since the main window's log was last updated. The
@@ -1076,6 +1100,16 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::TestDelays:
       RequestUrlTest();
       break;
+    case UiCommand::CheckUpdate:
+      if (g_updater != nullptr) {
+        g_updater->Check();
+      }
+      break;
+    case UiCommand::InstallUpdate:
+      if (g_updater != nullptr) {
+        g_updater->Install();
+      }
+      break;
     case UiCommand::OpenWindow:
       ShowMainWindow(args.index >= 0 && args.index < sovereign::tray::kUiPageCount ? static_cast<UiPage>(args.index)
                                                                                    : UiPage::Overview);
@@ -1091,6 +1125,33 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       DestroyWindow(trayWindow);
       break;
   }
+}
+
+// The updater moved on: tell about a new version once, and run a downloaded
+// installer - which replaces this tray, so the tray makes way.
+void OnUpdateChanged(HWND trayWindow) {
+  if (g_updater == nullptr) {
+    return;
+  }
+  const auto update = g_updater->Get();
+  using Status = sovereign::tray::Updater::Status;
+  if (update.status == Status::Available && update.latest != g_announcedUpdate && g_trayIcon != nullptr) {
+    g_announcedUpdate = update.latest;
+    g_trayIcon->Balloon(L"Sovereign: доступна версия " + Widen(update.latest),
+                        L"Нажми, чтобы обновить - установщик скачается с GitHub.", NIIF_INFO);
+    g_updateBalloonShown = true;
+  }
+  if (update.status == Status::Ready && !g_installerLaunched) {
+    HWND owner = g_mainWindow != nullptr && g_mainWindow->IsVisible() ? GetForegroundWindow() : trayWindow;
+    const std::string error = sovereign::tray::LaunchInstaller(owner, update.installer);
+    if (error.empty()) {
+      g_installerLaunched = true;
+      DestroyWindow(trayWindow);  // the installer starts the new tray when it's done
+      return;
+    }
+    g_updater->LaunchFailed(error);
+  }
+  UpdateWindows();
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1113,18 +1174,27 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case kViewChangedMessage: {
       const View view = CurrentView();
       if (g_trayIcon != nullptr) {
+        if (view.noticeId != 0 && view.noticeId != g_lastNotice) {
+          g_lastNotice = view.noticeId;
+          g_updateBalloonShown = false;  // this balloon is the worker's, not about an update
+        }
         g_trayIcon->Update(view);
       }
       UpdateWindows();
       UpdateLogs();
       return 0;
     }
+    case kUpdateChangedMessage:
+      OnUpdateChanged(window);
+      return 0;
     case kTrayCallbackMessage: {
       // Either button opens the panel, like the system's own tray flyouts; a
       // double click opens the window. A double click arrives as up, double
       // click, up: the first up opened the panel, the last must not reopen it.
       static ULONGLONG ignoreUpUntil = 0;
-      if (lParam == WM_LBUTTONDBLCLK) {
+      if (lParam == NIN_BALLOONUSERCLICK && g_updateBalloonShown) {
+        ShowMainWindow(UiPage::Settings);
+      } else if (lParam == WM_LBUTTONDBLCLK) {
         ignoreUpUntil = GetTickCount64() + GetDoubleClickTime();
         if (g_flyout != nullptr) {
           g_flyout->Hide();
@@ -1232,6 +1302,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   sovereign::tray::Flyout flyout(instance, onCommand);
   g_flyout = &flyout;
   sovereign::tray::MainWindow mainWindow(instance, onCommand);
+  sovereign::tray::Updater updater(
+      sovereign::tray::ParseVersion(Narrow(SOVEREIGN_VERSION_W)).value_or(sovereign::tray::Version{}), kUserAgent,
+      [window] { PostMessageW(window, kUpdateChangedMessage, 0, 0); });
+  g_updater = &updater;
   g_mainWindow = &mainWindow;
   if (!background) {
     ShowMainWindow(UiPage::Overview);
@@ -1249,6 +1323,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     exitCode = static_cast<int>(msg.wParam);
     thread.request_stop();
   }  // joins the worker before its state goes away
+  g_updater = nullptr;
   g_mainWindow = nullptr;
   g_flyout = nullptr;
   return exitCode;

@@ -1,6 +1,6 @@
 // libFuzzer target: everything the tray does with text it didn't write - a
 // subscription body and its headers from the server, the service's pipe
-// responses, config.json on disk. None of it may throw or crash on any input
+// responses, config.json on disk, GitHub's release answers. None of it may throw or crash on any input
 // (the worker thread has nowhere to catch), and the config rewriters must keep
 // turning a JSON object into a JSON object.
 
@@ -19,6 +19,7 @@
 #include "log_lines.h"
 #include "protocol_choice.h"
 #include "subscription.h"
+#include "update.h"
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   using namespace sovereign::tray;
@@ -30,6 +31,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   (void)FindProtocolChoices(text);
   (void)ParseLogsResponse(text);
   (void)ParseDelaysResponse(text);
+  (void)ParseLatestRelease(text);
+  (void)ParseChecksum(text, "Sovereign-Setup-1.2.3.exe");
+  (void)ParseVersion(text);
   (void)IsHttpsUrl(std::wstring(text.begin(), text.end()));
   (void)UrlHost(std::wstring(text.begin(), text.end()));
 

@@ -112,7 +112,13 @@ ctest --test-dir build/ci --output-on-failure
 
 Presets: `ci` (Debug), `ci-asan`, `ci-analyze`, `ci-fuzz` (then `pwsh tools/fuzz/run.ps1`), `release`. To also run the conformance reference locally, configure with `-DSOVEREIGN_REFERENCE_SINGBOX=<path to the official sing-box.exe of the pinned version>`.
 
-## Running
+## Installing
+
+Download `Sovereign-Setup-<version>.exe` from [Releases](https://github.com/sovereignbrains/Sovereign/releases) and run it. It installs into Program Files, registers the service (starts with Windows, restarts itself after a crash), adds Sovereign to the Start menu and starts it; uninstall from Settings → Apps. The tray checks for a newer release a minute after start and every 12 hours, and updates in place when asked: it downloads the new installer, checks it against the release's `.sha256` and runs it (Windows asks for administrator rights). Your settings in `%LOCALAPPDATA%\Sovereign` survive updates and uninstalling.
+
+Releases are built by `.github/workflows/release.yml`: push a tag `vX.Y.Z` (or run the workflow with the version), and it builds the installer (`installer/build.ps1`: Release, the CRT linked in, Inno Setup), installs, updates and uninstalls it on the runner (`installer/smoke.ps1`) and publishes it with its checksum. The CI's `installer` job does the same on every push, without publishing.
+
+## Running from a build
 
 ```
 sovereign-core.exe --install     (admin) register and start the service and its ETW recorder

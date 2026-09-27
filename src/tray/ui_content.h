@@ -23,6 +23,9 @@ struct UiDelay {
   int ms = 0;
 };
 
+// Where the updater is (updater.h), as the windows show it.
+enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Failed };
+
 // What the tray's windows show - the flyout and the main window alike; built
 // by main.cpp from the worker's view. Strings are ready to draw.
 struct UiContent {
@@ -52,7 +55,10 @@ struct UiContent {
   bool canTestDelays = false;           // the box runs: its servers can be tested
   std::wstring delayError;              // why the last test didn't start
   bool autostart = false;               // the tray starts when the user signs in
-  std::wstring version;                 // "0.1 · sing-box 1.14.1"
+  std::wstring version;                 // "0.1.0 · sing-box 1.14.1"
+  UiUpdate update = UiUpdate::Idle;
+  std::wstring updateVersion;           // the newest release, once known
+  std::wstring updateError;
 };
 
 // The main window's pages, in the order of its navigation.
@@ -70,6 +76,8 @@ enum class UiCommand : std::uint8_t {
   SetProtocol,   // index into protocols
   ToggleAutostart,
   TestDelays,
+  CheckUpdate,
+  InstallUpdate,
   OpenWindow,    // index: the UiPage to show
   OpenFolder,
   Exit,

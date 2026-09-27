@@ -82,6 +82,7 @@ constexpr const wchar_t* kGlyphCheck = L"\xE73E";
 constexpr const wchar_t* kGlyphWarning = L"\xE7BA";
 constexpr const wchar_t* kGlyphProgram = L"\xE7C4";
 constexpr const wchar_t* kGlyphStopwatch = L"\xE916";
+constexpr const wchar_t* kGlyphDownload = L"\xE896";
 
 struct PageInfo {
   const wchar_t* glyph;
@@ -228,6 +229,19 @@ std::wstring StateDetail(const UiContent& c) {
              std::format(L"соединений: {}", c.connections);
     }
     case Display::Error: return c.error.empty() ? std::wstring(L"ядро не запустилось") : c.error;
+  }
+  return {};
+}
+
+std::wstring UpdateStatus(const UiContent& c) {
+  switch (c.update) {
+    case UiUpdate::Idle: return L"Обновления проверяются сами, раз в 12 часов.";
+    case UiUpdate::Checking: return L"Проверяю…";
+    case UiUpdate::UpToDate: return L"Это последняя версия.";
+    case UiUpdate::Available:
+      return c.updateError.empty() ? L"Доступна версия " + c.updateVersion : L"Не удалось: " + c.updateError;
+    case UiUpdate::Downloading: return L"Скачиваю версию " + c.updateVersion + L"…";
+    case UiUpdate::Failed: return L"Не удалось проверить: " + c.updateError;
   }
   return {};
 }
@@ -497,6 +511,21 @@ class Painter {
     l.items.push_back(std::move(state));
     y += heroHeight + kGap;
 
+    // A new version: one click away.
+    if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
+      l.items.push_back(Make(Kind::Text, {x0 + 20, y + 10, x1 - 260, y + 34}, L"Доступна версия " + c.updateVersion));
+      l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 34, x1 - 260, y + 56},
+                             c.updateError.empty() ? std::wstring(L"Скачается с GitHub и установится сама.")
+                                                   : L"Не удалось: " + c.updateError));
+      Item update = CommandItem(Kind::AccentButton, {x1 - 236, y + 15, x1 - 20, y + 15 + kButton},
+                                c.update == UiUpdate::Downloading ? L"Скачиваю…" : L"Обновить", kGlyphDownload,
+                                UiCommand::InstallUpdate);
+      update.enabled = c.update == UiUpdate::Available;
+      l.items.push_back(std::move(update));
+      y += 64 + kGap;
+    }
+
     // Nothing to connect with yet: the way to fix that comes first.
     if (!c.hasSubscription && c.protocols.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 76}));
@@ -698,9 +727,21 @@ class Painter {
                                   kGlyphFolder, UiCommand::OpenFolder));
     y += 72 + kGap;
 
+    // Version and updates.
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 72}));
-    l.items.push_back(Make(Kind::Text, {x0 + 20, y + 12, x1 - 20, y + 36}, L"О программе"));
-    l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 36, x1 - 20, y + 60}, L"Sovereign " + c.version));
+    l.items.push_back(Make(Kind::Text, {x0 + 20, y + 12, x1 - 240, y + 36}, L"Sovereign " + c.version));
+    l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 36, x1 - 240, y + 60}, UpdateStatus(c)));
+    const D2D1_RECT_F button{x1 - 20 - 210, y + 19, x1 - 20, y + 19 + kButton};
+    if (c.update == UiUpdate::Available) {
+      l.items.push_back(CommandItem(Kind::AccentButton, button, L"Обновить до " + c.updateVersion, kGlyphDownload,
+                                    UiCommand::InstallUpdate));
+    } else {
+      Item check = CommandItem(Kind::Button, button,
+                               c.update == UiUpdate::Downloading ? L"Скачиваю…" : L"Проверить обновления",
+                               kGlyphRefresh, UiCommand::CheckUpdate);
+      check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading;
+      l.items.push_back(std::move(check));
+    }
     y += 72 + kGap + 8;
 
     l.items.push_back(CommandItem(Kind::DangerButton, {x0, y, x0 + 220, y + kButton}, L"Выйти из Sovereign", kGlyphExit,

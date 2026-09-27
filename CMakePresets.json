@@ -33,6 +33,16 @@
       }
     },
     {
+      "name": "dist",
+      "displayName": "What the installer ships: Release, the CRT linked in (no VC++ redistributable needed)",
+      "inherits": "ci",
+      "binaryDir": "${sourceDir}/build/dist",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+      }
+    },
+    {
       "name": "ci-asan",
       "inherits": "ci",
       "binaryDir": "${sourceDir}/build/ci-asan",
@@ -55,6 +65,7 @@
     { "name": "debug", "configurePreset": "debug", "configuration": "Debug" },
     { "name": "release", "configurePreset": "release", "configuration": "Release" },
     { "name": "ci", "configurePreset": "ci" },
+    { "name": "dist", "configurePreset": "dist", "targets": ["sovereign-core", "sovereign-tray"] },
     { "name": "ci-asan", "configurePreset": "ci-asan" },
     { "name": "ci-analyze", "configurePreset": "ci-analyze" },
     {

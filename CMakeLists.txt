@@ -14,6 +14,13 @@ if (MSVC)
   add_compile_definitions(UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
 
+# The version the tray reports and compares with the latest release (the
+# updater); the release workflow passes the tag's. MAJOR.MINOR.PATCH.
+set(SOVEREIGN_VERSION "0.1.0" CACHE STRING "Sovereign's version, MAJOR.MINOR.PATCH")
+if (NOT SOVEREIGN_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "SOVEREIGN_VERSION must be MAJOR.MINOR.PATCH, got '${SOVEREIGN_VERSION}'")
+endif()
+
 option(SOVEREIGN_ENABLE_ASAN "Build with AddressSanitizer" OFF)
 if (SOVEREIGN_ENABLE_ASAN AND MSVC)
   add_compile_options(/fsanitize=address)

@@ -54,8 +54,10 @@ UiContent SampleContent() {
   using State = sovereign::tray::UiDelay::State;
   c.delays = {{State::Ok, 48}, {State::Ok, 52}, {State::Ok, 310}, {State::Failed, 0}, {State::Pending, 0}};
   c.canTestDelays = true;
+  c.update = sovereign::tray::UiUpdate::Available;
+  c.updateVersion = L"0.3.0";
   c.autostart = true;
-  c.version = L"0.1 · sing-box 1.14.1";
+  c.version = L"0.2.0 · sing-box 1.14.1";
   return c;
 }
 

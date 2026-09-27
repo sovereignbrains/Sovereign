@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <expected>
 #include <optional>
 #include <string>
@@ -17,5 +18,10 @@ struct FetchResult {
 // contains the URL - it carries the subscription token. Blocking: call it off
 // the UI thread.
 std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent);
+
+// Any other GET over https, same client, the body capped at maxBytes; an
+// error for anything but a 200. Blocking: call it off the UI thread.
+std::expected<std::string, std::string> Download(const std::wstring& url, const std::wstring& userAgent,
+                                                 std::size_t maxBytes);
 
 }  // namespace sovereign::tray
