@@ -13,6 +13,7 @@
 #include <adapters/duration.h>
 #include <adapters/fwmark.h>
 #include <adapters/curve_preference.h>
+#include <adapters/integer.h>
 #include <adapters/omit_empty.h>
 
 namespace sovereign {
@@ -74,8 +75,8 @@ inline void from_json(const nlohmann::json& j, InboundACMEOptions& v) {
   if (j.contains("provider")) { v.provider = j.at("provider").get<decltype(v.provider)>(); }
   if (j.contains("disable_http_challenge")) { v.disableHTTPChallenge = j.at("disable_http_challenge").get<decltype(v.disableHTTPChallenge)>(); }
   if (j.contains("disable_tls_alpn_challenge")) { v.disableTLSALPNChallenge = j.at("disable_tls_alpn_challenge").get<decltype(v.disableTLSALPNChallenge)>(); }
-  if (j.contains("alternative_http_port")) { v.alternativeHTTPPort = j.at("alternative_http_port").get<decltype(v.alternativeHTTPPort)>(); }
-  if (j.contains("alternative_tls_port")) { v.alternativeTLSPort = j.at("alternative_tls_port").get<decltype(v.alternativeTLSPort)>(); }
+  if (j.contains("alternative_http_port")) { v.alternativeHTTPPort = sovereign::adapters::GetInteger<std::uint16_t>(j.at("alternative_http_port")); }
+  if (j.contains("alternative_tls_port")) { v.alternativeTLSPort = sovereign::adapters::GetInteger<std::uint16_t>(j.at("alternative_tls_port")); }
   if (j.contains("external_account")) { v.externalAccount = j.at("external_account").get<decltype(v.externalAccount)>(); }
   if (j.contains("dns01_challenge")) { v.dns01Challenge = j.at("dns01_challenge").get<decltype(v.dns01Challenge)>(); }
   if (j.contains("profile")) { v.profile = j.at("profile").get<decltype(v.profile)>(); }
@@ -162,8 +163,8 @@ inline void to_json(nlohmann::json& j, const InboundRealityHandshakeOptions& v) 
 }
 
 inline void from_json(const nlohmann::json& j, InboundRealityHandshakeOptions& v) {
-  v.server = j.at("server").get<decltype(v.server)>();
-  v.serverPort = j.at("server_port").get<decltype(v.serverPort)>();
+  if (j.contains("server")) { v.server = j.at("server").get<decltype(v.server)>(); }
+  if (j.contains("server_port")) { v.serverPort = sovereign::adapters::GetInteger<std::uint16_t>(j.at("server_port")); }
   if (j.contains("detour")) { v.detour = j.at("detour").get<decltype(v.detour)>(); }
   if (j.contains("bind_interface")) { v.bindInterface = j.at("bind_interface").get<decltype(v.bindInterface)>(); }
   if (j.contains("inet4_bind_address")) { v.inet4BindAddress = j.at("inet4_bind_address").get<decltype(v.inet4BindAddress)>(); }
@@ -349,7 +350,7 @@ inline void to_json(nlohmann::json& j, const AnyTLSInboundOptions& v) {
 
 inline void from_json(const nlohmann::json& j, AnyTLSInboundOptions& v) {
   if (j.contains("listen")) { v.listen = j.at("listen").get<decltype(v.listen)>(); }
-  if (j.contains("listen_port")) { v.listenPort = j.at("listen_port").get<decltype(v.listenPort)>(); }
+  if (j.contains("listen_port")) { v.listenPort = sovereign::adapters::GetInteger<std::uint16_t>(j.at("listen_port")); }
   if (j.contains("bind_interface")) { v.bindInterface = j.at("bind_interface").get<decltype(v.bindInterface)>(); }
   if (j.contains("routing_mark")) { v.routingMark = j.at("routing_mark").get<decltype(v.routingMark)>(); }
   if (j.contains("reuse_addr")) { v.reuseAddr = j.at("reuse_addr").get<decltype(v.reuseAddr)>(); }

@@ -13,6 +13,7 @@
 #include <adapters/duration.h>
 #include <adapters/fwmark.h>
 #include <adapters/curve_preference.h>
+#include <adapters/integer.h>
 #include <adapters/omit_empty.h>
 
 namespace sovereign {
@@ -266,13 +267,13 @@ inline void from_json(const nlohmann::json& j, AnyTLSOutboundOptions& v) {
   if (j.contains("fallback_network_type")) { v.fallbackNetworkType = j.at("fallback_network_type").get<decltype(v.fallbackNetworkType)>(); }
   if (j.contains("fallback_delay")) { v.fallbackDelay = j.at("fallback_delay").get<decltype(v.fallbackDelay)>(); }
   if (j.contains("domain_strategy")) { v.domainStrategy = j.at("domain_strategy").get<decltype(v.domainStrategy)>(); }
-  v.server = j.at("server").get<decltype(v.server)>();
-  v.serverPort = j.at("server_port").get<decltype(v.serverPort)>();
+  if (j.contains("server")) { v.server = j.at("server").get<decltype(v.server)>(); }
+  if (j.contains("server_port")) { v.serverPort = sovereign::adapters::GetInteger<std::uint16_t>(j.at("server_port")); }
   if (j.contains("tls")) { v.tls = j.at("tls").get<decltype(v.tls)>(); }
   if (j.contains("password")) { v.password = j.at("password").get<decltype(v.password)>(); }
   if (j.contains("idle_session_check_interval")) { v.idleSessionCheckInterval = j.at("idle_session_check_interval").get<decltype(v.idleSessionCheckInterval)>(); }
   if (j.contains("idle_session_timeout")) { v.idleSessionTimeout = j.at("idle_session_timeout").get<decltype(v.idleSessionTimeout)>(); }
-  if (j.contains("min_idle_session")) { v.minIdleSession = j.at("min_idle_session").get<decltype(v.minIdleSession)>(); }
+  if (j.contains("min_idle_session")) { v.minIdleSession = sovereign::adapters::GetInteger<std::int64_t>(j.at("min_idle_session")); }
   if (j.contains("client_metadata")) { v.clientMetadata = j.at("client_metadata").get<decltype(v.clientMetadata)>(); }
 }
 

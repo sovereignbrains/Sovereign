@@ -35,3 +35,12 @@ add_test(
   NAME golden-duration
   COMMAND golden-duration "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/durations.golden.json"
 )
+
+# Integer fields against the pinned sing unmarshaler (tools/goldengen -fixture integers).
+add_executable(golden-integers integer_test.cpp)
+target_link_libraries(golden-integers PRIVATE sovereign_common)
+sovereign_copy_asan_runtime(golden-integers)
+add_test(
+  NAME golden-integers
+  COMMAND golden-integers "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/integers.golden.json"
+)

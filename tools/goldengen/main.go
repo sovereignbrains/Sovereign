@@ -34,6 +34,8 @@ func main() {
 		data, err = anyTLSOutboundTLSFull()
 	case "durations":
 		data, err = durations()
+	case "integers":
+		data, err = integers()
 	case "anytls_inbound_padding_single":
 		data, err = anyTLSInboundPaddingScheme([]string{"pad"})
 	case "anytls_inbound_padding_array":
@@ -166,6 +168,48 @@ func durations() ([]byte, error) {
 			c.Ns = &ns
 		}
 		result.Parse = append(result.Parse, c)
+	}
+	return json.Marshal(result)
+}
+
+// integers records what sing's JSON unmarshaler does with a JSON literal in an
+// integer field - the option package's ports are uint16, its counters int64:
+// which literals it accepts and what value they give. A null "value" is an
+// error. Our generated code has to agree (adapters/integer.h).
+func integers() ([]byte, error) {
+	type verdict struct {
+		Text  string `json:"text"`
+		Value *int64 `json:"value"`
+	}
+	literals := []string{
+		"0", "443", "65535", "65536", "70000", "-1", "1.5", "1e2", "443.0", "-0",
+		`"443"`, "null", "true", "9223372036854775807", "9223372036854775808",
+		"-9223372036854775808", "18446744073709551616",
+	}
+	var result struct {
+		Uint16 []verdict `json:"uint16"`
+		Int64  []verdict `json:"int64"`
+	}
+	for _, literal := range literals {
+		var u struct {
+			V uint16 `json:"v"`
+		}
+		c := verdict{Text: literal}
+		if singjson.Unmarshal([]byte(`{"v":`+literal+`}`), &u) == nil {
+			v := int64(u.V)
+			c.Value = &v
+		}
+		result.Uint16 = append(result.Uint16, c)
+
+		var s struct {
+			V int64 `json:"v"`
+		}
+		c = verdict{Text: literal}
+		if singjson.Unmarshal([]byte(`{"v":`+literal+`}`), &s) == nil {
+			v := s.V
+			c.Value = &v
+		}
+		result.Int64 = append(result.Int64, c)
 	}
 	return json.Marshal(result)
 }

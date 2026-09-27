@@ -35,6 +35,24 @@ type field struct {
 	OmitEmpty   bool
 	NeedAdapter bool
 	AdapterNote string
+	// IntType: the C++ integer type of an integer field (or of an optional
+	// one), read through adapters::GetInteger - Go's range and literal rules
+	// instead of nlohmann's silent conversions.
+	IntType string
+}
+
+var integerTypes = map[string]bool{
+	"std::int8_t": true, "std::int16_t": true, "std::int32_t": true, "std::int64_t": true,
+	"std::uint8_t": true, "std::uint16_t": true, "std::uint32_t": true, "std::uint64_t": true,
+}
+
+// integerOf returns the integer type cppType is, or holds as an optional.
+func integerOf(cppType string) string {
+	inner := strings.TrimSuffix(strings.TrimPrefix(cppType, "std::optional<"), ">")
+	if integerTypes[inner] && (inner == cppType || cppType == "std::optional<"+inner+">") {
+		return inner
+	}
+	return ""
 }
 
 func main() {
@@ -196,6 +214,7 @@ func (g *generator) flattenFields(st *types.Struct, seen map[string]bool) []fiel
 			OmitEmpty:   omitEmpty,
 			NeedAdapter: needAdapter,
 			AdapterNote: note,
+			IntType:     integerOf(cppType),
 		})
 	}
 	return out
@@ -409,6 +428,12 @@ func (g *generator) renderHeader(namespace, typeName string, sourcePkg string) s
 	if usesType(all, "sovereign::adapters::CurvePreference") {
 		b.WriteString("#include <adapters/curve_preference.h>\n")
 	}
+	for _, f := range all {
+		if f.IntType != "" {
+			b.WriteString("#include <adapters/integer.h>\n")
+			break
+		}
+	}
 	if usesOmitEmpty(all) {
 		b.WriteString("#include <adapters/omit_empty.h>\n")
 	}
@@ -463,14 +488,17 @@ func renderStruct(b *strings.Builder, typeName string, fields []field) {
 	}
 	b.WriteString("}\n\n")
 
+	// Every field is optional on the way in, omitempty or not: Go's unmarshal
+	// never requires a key - a missing one leaves the zero value (omitempty only
+	// shapes the output). Reading non-omitempty fields with at() made a config
+	// without, say, server_port unparsable here while sing-box takes it.
 	fmt.Fprintf(b, "inline void from_json(const nlohmann::json& j, %s& v) {\n", typeName)
 	for _, f := range fields {
-		if f.OmitEmpty {
-			fmt.Fprintf(b, "  if (j.contains(%q)) { v.%s = j.at(%q).get<decltype(v.%s)>(); }\n",
-				f.JSONName, f.CppName, f.JSONName, f.CppName)
-		} else {
-			fmt.Fprintf(b, "  v.%s = j.at(%q).get<decltype(v.%s)>();\n", f.CppName, f.JSONName, f.CppName)
+		read := fmt.Sprintf("v.%s = j.at(%q).get<decltype(v.%s)>();", f.CppName, f.JSONName, f.CppName)
+		if f.IntType != "" {
+			read = fmt.Sprintf("v.%s = sovereign::adapters::GetInteger<%s>(j.at(%q));", f.CppName, f.IntType, f.JSONName)
 		}
+		fmt.Fprintf(b, "  if (j.contains(%q)) { %s }\n", f.JSONName, read)
 	}
 	b.WriteString("}\n")
 }
