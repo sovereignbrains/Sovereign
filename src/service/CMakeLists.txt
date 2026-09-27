@@ -104,3 +104,30 @@ add_custom_command(TARGET sovereign-core POST_BUILD
           "$<TARGET_FILE_DIR:sovereign-core>"
   VERBATIM
 )
+
+# libcronet.dll: the naive outbound (with_naive_outbound + with_purego) loads
+# it at runtime from the exe's directory - without it a subscription with a
+# naive server fails box_start with "cronet: library not found". Upstream's
+# release zip ships the one from cronet-go's lib/windows_amd64 module, and so
+# do we: that module carries the DLL itself, pinned by gocore/go.sum, so no
+# separate version file is needed. `go mod download -json` fetches it if the
+# cache doesn't have it yet and reports where it lives.
+execute_process(
+  COMMAND ${SOVEREIGN_GO_EXECUTABLE} mod download -json github.com/sagernet/cronet-go/lib/windows_amd64
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/gocore"
+  OUTPUT_VARIABLE SOVEREIGN_CRONET_MODULE
+  RESULT_VARIABLE SOVEREIGN_CRONET_RESULT
+)
+if (NOT SOVEREIGN_CRONET_RESULT EQUAL 0)
+  message(FATAL_ERROR "go mod download of cronet-go/lib/windows_amd64 failed: ${SOVEREIGN_CRONET_MODULE}")
+endif()
+string(JSON SOVEREIGN_CRONET_DIR GET "${SOVEREIGN_CRONET_MODULE}" Dir)
+set(SOVEREIGN_CRONET_DLL "${SOVEREIGN_CRONET_DIR}/libcronet.dll")
+if (NOT EXISTS "${SOVEREIGN_CRONET_DLL}")
+  message(FATAL_ERROR "cronet-go/lib/windows_amd64 has no libcronet.dll at ${SOVEREIGN_CRONET_DIR}")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/gocore/go.sum")
+add_custom_command(TARGET sovereign-core POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SOVEREIGN_CRONET_DLL}" "$<TARGET_FILE_DIR:sovereign-core>"
+  VERBATIM
+)
