@@ -190,7 +190,7 @@ void TestDeepNestingDoesNotRecurseForever() {
 
 }  // namespace
 
-int main() {
+int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestSameConfig();
     TestClassify();
