@@ -243,7 +243,7 @@ std::wstring SubscriptionLine(const UiContent& c) {
 
 std::wstring AppsLine(const UiContent& c) {
   if (c.apps.empty()) {
-    return c.appsInclude ? L"только список — он пуст" : L"всё через VPN";
+    return c.appsInclude ? L"только список — он пуст" : L"всё через прокси";
   }
   return std::format(L"{} {}", c.appsInclude ? L"только" : L"всё, кроме", c.apps.size());
 }
@@ -684,7 +684,7 @@ class Painter {
   }
 
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Приложения", L"Какие программы идут через VPN. Имена — как у exe-файла, без пути.", x0, x1, y);
+    y = PageTitle(l, L"Приложения", L"Какие программы идут через прокси. Имена — как у exe-файла, без пути.", x0, x1, y);
     const float mid = (x0 + x1) / 2;
     Item except = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Все, кроме списка", nullptr,
                               UiCommand::SetAppsMode, 0);
@@ -695,15 +695,15 @@ class Painter {
     l.items.push_back(std::move(only));
     y += 36 + 12;
     y = Paragraph(l, Kind::Wrap,
-                  c.appsInclude ? L"Через VPN идут только программы из списка, остальной трафик — напрямую."
-                                : L"Весь трафик идёт через VPN, кроме программ из списка — они ходят напрямую.",
+                  c.appsInclude ? L"Через прокси идут только программы из списка, остальной трафик — напрямую."
+                                : L"Весь трафик идёт через прокси, кроме программ из списка — они ходят напрямую.",
                   x0, x1, y) +
         kGap;
 
     if (c.apps.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
       l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 64},
-                             c.appsInclude ? L"Список пуст — через VPN не идёт ничего." : L"Список пуст — всё идёт через VPN."));
+                             c.appsInclude ? L"Список пуст — через прокси не идёт ничего." : L"Список пуст — всё идёт через прокси."));
       y += 64;
     } else {
       const float h = static_cast<float>(c.apps.size()) * kRow;
