@@ -1,6 +1,6 @@
 #pragma once
 
-// windows.h's min/max macros break std::min/max (see flyout.h).
+// windows.h's min/max macros break std::min/max.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <format>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "tray_model.h"
@@ -26,19 +25,15 @@ struct UiDelay {
 // Where the updater is (updater.h), as the windows show it.
 enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Failed };
 
-// What the tray's windows show - the flyout and the main window alike; built
-// by main.cpp from the worker's view. Strings are ready to draw.
+// What the tray's window shows; built by main.cpp from the worker's view.
+// Strings are ready to draw.
 struct UiContent {
   Display display = Display::ServiceDown;
-  std::wstring status;           // "вкл · ↓ 588 Б/с ↑ 13.3 КБ/с · соединений: 21"
-  COLORREF statusDot = RGB(150, 150, 150);
   bool on = false;               // the toggle's position (the user's intent)
   double down = 0;               // bytes per second
   double up = 0;
   std::int64_t connections = 0;
   std::wstring error;            // why the box doesn't run; empty if it does or is off
-  // The last two minutes of rates, oldest first, one pair a poll: down, up.
-  std::vector<std::pair<float, float>> history;
 
   std::wstring subscription;     // "26.09 19:20" / "нет" / "ошибка: ..."
   bool hasSubscription = false;  // enables the refresh button
@@ -65,9 +60,9 @@ struct UiContent {
   std::wstring updateError;
 };
 
-// The main window's pages, in the order of its navigation.
-enum class UiPage : std::uint8_t { Overview, Protocol, Subscription, Apps, Logs, Settings };
-inline constexpr int kUiPageCount = 6;
+// The window's pages: the overview, and the ones it opens (back with Esc).
+enum class UiPage : std::uint8_t { Overview, Subscription, Apps, Logs, Settings };
+inline constexpr int kUiPageCount = 5;
 
 enum class UiCommand : std::uint8_t {
   Toggle,

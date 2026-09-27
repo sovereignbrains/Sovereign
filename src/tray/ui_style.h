@@ -1,6 +1,6 @@
 #pragma once
 
-// windows.h's min/max macros break std::min/max (see flyout.h).
+// windows.h's min/max macros break std::min/max.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -17,8 +17,7 @@
 
 namespace sovereign::tray::ui {
 
-// The tray's look, shared by the flyout and the main window: dark only,
-// Windows 11 proportions, one blue accent.
+// The tray's look: dark only, Windows 11 proportions, one blue accent.
 
 inline D2D1_COLOR_F Rgb(float r, float g, float b, float a = 1.0f) { return D2D1::ColorF(r / 255, g / 255, b / 255, a); }
 
@@ -29,14 +28,13 @@ inline D2D1_COLOR_F FromColorRef(COLORREF c, float a = 1.0f) {
 // Surfaces, darkest first. The card color is opaque on purpose: a child
 // control (the log's edit box) paints with it through GDI.
 inline constexpr COLORREF kWindowColor = RGB(24, 26, 32);
-inline constexpr COLORREF kPanelColor = RGB(28, 31, 38);  // the flyout, the navigation rail
+inline constexpr COLORREF kPanelColor = RGB(28, 31, 38);  // the window's caption
 inline constexpr COLORREF kCardColor = RGB(34, 38, 46);
 inline constexpr COLORREF kPrimaryText = RGB(242, 244, 248);
 inline constexpr COLORREF kSecondaryText = RGB(160, 168, 184);
 inline constexpr COLORREF kAccent = RGB(76, 146, 255);
 inline constexpr COLORREF kUpload = RGB(64, 196, 140);
 inline constexpr COLORREF kDanger = RGB(240, 96, 96);
-inline constexpr COLORREF kBorder = RGB(46, 74, 128);  // the DWM frame of the flyout
 
 inline constexpr COLORREF kWarning = RGB(235, 180, 60);
 

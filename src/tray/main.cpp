@@ -1,7 +1,7 @@
 // sovereign-tray: the user's side of Sovereign. A notification-area icon that
 // turns the proxy on and off through the service's control pipe, shows state
-// and speed, and keeps the config fresh from a subscription URL; its flyout
-// for the quick things, the main window for everything. Decisions live in
+// and speed, and keeps the config fresh from a subscription URL; a click on
+// it opens the window (main_window.h), a right click a short menu. Decisions live in
 // TrayModel and subscription.h (both unit-tested); this file is Win32 glue: a
 // hidden window on the UI thread, and a worker thread that owns the settings
 // and does everything that blocks (the pipe, WinHTTP) once a second or when
@@ -52,7 +52,6 @@
 #include "delays.h"
 #include "fetch.h"
 #include "protocol_choice.h"
-#include "flyout.h"
 #include "icons.h"
 #include "json_field.h"
 #include "log_lines.h"
@@ -84,6 +83,11 @@ constexpr UINT kUpdateChangedMessage = WM_APP + 3;
 constexpr wchar_t kTrayClassName[] = L"SovereignTrayWindow";
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
+// The tray icon's right-click menu.
+constexpr UINT kMenuToggle = 1;
+constexpr UINT kMenuOpen = 2;
+constexpr UINT kMenuLogs = 3;
+constexpr UINT kMenuExit = 4;
 constexpr std::size_t kMenuMaxItems = 250;
 
 // What the subscription server sees: Sovereign runs the official sing-box core
@@ -98,9 +102,6 @@ constexpr std::chrono::minutes kRefreshRetry{30};
 // one poll reads at most (a flood is read on over the next seconds).
 constexpr std::size_t kLogKeep = 5000;
 constexpr int kLogPagesPerPoll = 20;
-
-// Speed samples the main window's graph shows: two minutes of polls.
-constexpr std::size_t kHistory = 120;
 
 // A latency test the service never finishes stops being waited for.
 constexpr std::chrono::seconds kUrlTestGiveUp{60};
@@ -175,7 +176,6 @@ struct View {
   bool subscriptionWaiting = false;  // a newer subscription waits for the user's choice
   std::string choiceError;        // why the last choice didn't go through
   std::vector<std::string> mergeNotes;  // where the last carry-over had both sides change the same thing
-  std::deque<std::pair<float, float>> history;  // down, up per poll, oldest first
   // A balloon to show once: the UI shows it when noticeId changes.
   unsigned noticeId = 0;
   std::wstring noticeTitle;
@@ -200,7 +200,7 @@ enum class ConfigChoice : std::uint8_t {
   Revert,    // back to the subscription as it arrived (the newest, if one waits)
 };
 
-// A new per-app setup from the flyout or the main window.
+// A new per-app setup from the window.
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
   std::vector<std::string> list;
@@ -417,7 +417,6 @@ class Worker {
       model_.SetExpectedConfig(ExpectedConfigHash(config));
       const auto stats = PollStats();
       Execute(model_, model_.OnPoll(stats, TrayModel::Clock::now()), config);
-      Sample();
       UpdateDelays(stats, urlTest);
       CollectLogs();
       Publish();
@@ -669,22 +668,6 @@ class Worker {
     }
   }
 
-  // One point of the speed graph a second; a request that wakes the loop
-  // sooner doesn't add one.
-  void Sample() {
-    const auto now = TrayModel::Clock::now();
-    if (lastSample_ && now - *lastSample_ < std::chrono::milliseconds(900)) {
-      return;
-    }
-    lastSample_ = now;
-    const bool on = model_.GetDisplay() == Display::On;
-    history_.emplace_back(on ? static_cast<float>(model_.DownRate()) : 0.0f,
-                          on ? static_cast<float>(model_.UpRate()) : 0.0f);
-    while (history_.size() > kHistory) {
-      history_.pop_front();
-    }
-  }
-
   // The servers' latency: tested once every time a box starts, and whenever
   // the user asks; results polled while a test runs (the service only starts
   // one - it takes seconds, and the pipe answers one request at a time).
@@ -800,7 +783,6 @@ class Worker {
       v.subscriptionHost = sovereign::tray::UrlHost(Widen(settings_.subscriptionUrl));
       v.lastRefresh = settings_.lastRefresh;
       v.updateHours = settings_.updateHours;
-      v.history = history_;
       v.subscriptionError = subscriptionError_;
       v.configEdited = edited_;
       v.subscriptionWaiting = waiting_;
@@ -844,8 +826,6 @@ class Worker {
   std::vector<std::string> mergeNotes_;
   std::uint64_t logSince_ = 0;  // box_logs cursor
   std::string loggedError_;     // the model's error last put into the log
-  std::deque<std::pair<float, float>> history_;
-  std::optional<TrayModel::Clock::time_point> lastSample_;
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   bool testing_ = false;
   TrayModel::Clock::time_point testStarted_{};
@@ -1049,8 +1029,8 @@ View CurrentView() {
   return State().view;
 }
 
-// "Из запущенных": a menu of the programs with a window, opened where the
-// flyout's button was; the pick is added to the list.
+// "Из запущенных": a menu of the programs with a window, opened under the
+// window's button; the pick is added to the list.
 void AddFromRunning(HWND window, POINT at) {
   const View view = CurrentView();
   const std::vector<std::string> running = RunningApps(view.apps);
@@ -1118,18 +1098,15 @@ void RequestChoice(ConfigChoice choice) {
 
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
-// What the flyout and the main window show, from the worker's view.
+// What the window shows, from the worker's view.
 UiContent ContentFrom(const View& v) {
   UiContent c;
   c.display = v.display;
-  c.status = StatusLine(v);
-  c.statusDot = sovereign::tray::StateColor(v.display);
   c.on = v.wantOn;
   c.down = v.down;
   c.up = v.up;
   c.connections = v.connections;
   c.error = v.display == Display::Error ? Widen(v.error) : std::wstring();
-  c.history.assign(v.history.begin(), v.history.end());
   c.hasSubscription = v.hasSubscription;
   c.subscriptionHost = v.subscriptionHost;
   c.subscriptionError = Widen(v.subscriptionError);
@@ -1189,7 +1166,6 @@ UiContent ContentFrom(const View& v) {
   return c;
 }
 
-sovereign::tray::Flyout* g_flyout = nullptr;
 sovereign::tray::MainWindow* g_mainWindow = nullptr;
 std::string g_announcedUpdate;       // the version the balloon already told about
 std::optional<UiPage> g_balloonPage;  // what a click on the last balloon opens
@@ -1216,9 +1192,6 @@ void UpdateLogs() {
 
 void UpdateWindows() {
   const UiContent content = ContentFrom(CurrentView());
-  if (g_flyout != nullptr) {
-    g_flyout->Update(content);
-  }
   if (g_mainWindow != nullptr) {
     g_mainWindow->Update(content);
   }
@@ -1231,23 +1204,7 @@ void ShowMainWindow(UiPage page) {
   }
 }
 
-// The tray icon's rectangle on screen (the flyout opens next to it); the
-// cursor if the shell can't tell.
-RECT TrayIconRect(HWND window) {
-  NOTIFYICONIDENTIFIER id{};
-  id.cbSize = sizeof id;
-  id.hWnd = window;
-  id.uID = kTrayIconId;
-  RECT rect{};
-  if (FAILED(Shell_NotifyIconGetRect(&id, &rect))) {
-    POINT cursor{};
-    GetCursorPos(&cursor);
-    rect = {cursor.x, cursor.y, cursor.x + 1, cursor.y + 1};
-  }
-  return rect;
-}
-
-// A command from the flyout or the main window. `trayWindow` is the hidden
+// A command from the window. `trayWindow` is the hidden
 // window that owns the icon; menus and dialogs belong to args.owner if set.
 void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiArgs& args) {
   const View view = CurrentView();
@@ -1336,6 +1293,36 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
   }
 }
 
+// The tray icon's right-click menu: what can't wait for the window.
+void ShowTrayMenu(HWND window) {
+  const View view = CurrentView();
+  wil::unique_hmenu menu(CreatePopupMenu());
+  if (!menu) {
+    return;
+  }
+  AppendMenuW(menu.get(), MF_STRING, kMenuToggle, view.wantOn ? L"Выключить" : L"Включить");
+  AppendMenuW(menu.get(), MF_STRING, kMenuOpen, L"Открыть");
+  AppendMenuW(menu.get(), MF_STRING, kMenuLogs, L"Журнал");
+  AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu.get(), MF_STRING, kMenuExit, L"Выход");
+  SetMenuDefaultItem(menu.get(), kMenuOpen, FALSE);
+  POINT at{};
+  GetCursorPos(&at);
+  // Without the foreground switch the menu doesn't close on an outside click.
+  SetForegroundWindow(window);
+  const auto command = static_cast<UINT>(TrackPopupMenu(
+      menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_RIGHTALIGN | TPM_BOTTOMALIGN, at.x, at.y, 0,
+      window, nullptr));
+  PostMessageW(window, WM_NULL, 0, 0);
+  switch (command) {
+    case kMenuToggle: RequestToggle(); break;
+    case kMenuOpen: ShowMainWindow(UiPage::Overview); break;
+    case kMenuLogs: ShowMainWindow(UiPage::Logs); break;
+    case kMenuExit: DestroyWindow(window); break;
+    default: break;
+  }
+}
+
 // The updater moved on: tell about a new version once, and run a downloaded
 // installer - which replaces this tray, so the tray makes way.
 void OnUpdateChanged(HWND trayWindow) {
@@ -1396,26 +1383,17 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case kUpdateChangedMessage:
       OnUpdateChanged(window);
       return 0;
-    case kTrayCallbackMessage: {
-      // Either button opens the panel, like the system's own tray flyouts; a
-      // double click opens the window. A double click arrives as up, double
-      // click, up: the first up opened the panel, the last must not reopen it.
-      static ULONGLONG ignoreUpUntil = 0;
+    case kTrayCallbackMessage:
+      // A click shows the window or hides it; a right click is the menu.
       if (lParam == NIN_BALLOONUSERCLICK && g_balloonPage) {
         ShowMainWindow(*g_balloonPage);
-      } else if (lParam == WM_LBUTTONDBLCLK) {
-        ignoreUpUntil = GetTickCount64() + GetDoubleClickTime();
-        if (g_flyout != nullptr) {
-          g_flyout->Hide();
-        }
-        ShowMainWindow(UiPage::Overview);
-      } else if (lParam == WM_LBUTTONUP && GetTickCount64() < ignoreUpUntil) {
-        ignoreUpUntil = 0;
-      } else if ((lParam == WM_LBUTTONUP || lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) && g_flyout != nullptr) {
-        g_flyout->Toggle(TrayIconRect(window), ContentFrom(CurrentView()));
+      } else if (lParam == WM_LBUTTONUP && g_mainWindow != nullptr) {
+        g_mainWindow->Update(ContentFrom(CurrentView()));
+        g_mainWindow->Toggle();
+      } else if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
+        ShowTrayMenu(window);
       }
       return 0;
-    }
     case WM_DESTROY:
       // Everything visible goes first: after the message loop the worker is
       // joined, and it may be inside a pipe call that takes a while (a
@@ -1423,9 +1401,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       // still up, Windows reported the tray as hung for that long.
       if (g_trayIcon != nullptr) {
         g_trayIcon->Remove();
-      }
-      if (g_flyout != nullptr) {
-        g_flyout->Hide();
       }
       if (g_mainWindow != nullptr) {
         g_mainWindow->Hide();
@@ -1455,7 +1430,7 @@ bool HasArg(const wchar_t* commandLine, std::wstring_view arg) {
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
-  // Sharp at any scaling: the flyout and the window size themselves for their monitor's DPI.
+  // Sharp at any scaling: the window sizes itself for its monitor's DPI.
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   // The file dialog ("add exe") is COM, on this thread.
   const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -1508,8 +1483,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   const auto onCommand = [window](UiCommand command, const sovereign::tray::UiArgs& args) {
     OnUiCommand(window, command, args);
   };
-  sovereign::tray::Flyout flyout(instance, onCommand);
-  g_flyout = &flyout;
   sovereign::tray::MainWindow mainWindow(instance, onCommand);
   sovereign::tray::Updater updater(
       sovereign::tray::ParseVersion(Narrow(SOVEREIGN_VERSION_W)).value_or(sovereign::tray::Version{}), kUserAgent,
@@ -1534,6 +1507,5 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   }  // joins the worker before its state goes away
   g_updater = nullptr;
   g_mainWindow = nullptr;
-  g_flyout = nullptr;
   return exitCode;
 }

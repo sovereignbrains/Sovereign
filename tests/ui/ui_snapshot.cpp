@@ -14,7 +14,6 @@
 #include <wil/resource.h>
 #include <wil/result.h>
 
-#include <cmath>
 #include <cstdio>
 #include <exception>
 #include <string>
@@ -31,18 +30,10 @@ using sovereign::tray::UiPage;
 UiContent SampleContent() {
   UiContent c;
   c.display = sovereign::tray::Display::On;
-  c.status = L"вкл · ↓ 2.4 МБ/с ↑ 310.2 КБ/с · соединений: 37";
-  c.statusDot = RGB(40, 175, 80);
   c.on = true;
   c.down = 2.4 * 1024 * 1024;
   c.up = 310.2 * 1024;
   c.connections = 37;
-  for (int i = 0; i < 120; ++i) {
-    const double t = i / 6.0;
-    const double down = (1.2 + std::sin(t) * 0.6 + (i > 90 ? 1.1 : 0.0)) * 1024 * 1024;
-    const double up = (180 + std::cos(t * 1.7) * 90) * 1024;
-    c.history.emplace_back(static_cast<float>(down), static_cast<float>(up));
-  }
   c.subscription = L"27.09 19:20";
   c.hasSubscription = true;
   c.subscriptionHost = L"packetlab.tech";
@@ -76,29 +67,27 @@ std::vector<std::wstring> SampleLogs() {
 int Snapshots(const std::wstring& dir) {
   const UiContent content = SampleContent();
   const std::vector<std::wstring> logs = SampleLogs();
-  constexpr const wchar_t* kNames[sovereign::tray::kUiPageCount] = {L"overview", L"protocol", L"subscription",
-                                                                     L"apps",     L"logs",     L"settings"};
+  constexpr const wchar_t* kNames[sovereign::tray::kUiPageCount] = {L"overview", L"subscription", L"apps", L"logs",
+                                                                     L"settings"};
   CreateDirectoryW(dir.c_str(), nullptr);
   for (int p = 0; p < sovereign::tray::kUiPageCount; ++p) {
     const std::wstring path = dir + L"\\" + kNames[p] + L".png";
-    sovereign::tray::RenderMainWindowSnapshot(content, static_cast<UiPage>(p), logs, 980, 660, 96, path);
+    sovereign::tray::RenderMainWindowSnapshot(content, static_cast<UiPage>(p), logs, 400, 620, 96, path);
   }
-  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 1470, 990, 144, dir + L"\\overview-150.png");
+  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\overview-150.png");
 
   // The states that look different: off with no subscription, and an error.
   UiContent empty;
   empty.display = sovereign::tray::Display::Off;
-  empty.statusDot = RGB(90, 90, 90);
   empty.subscription = L"нет";
   empty.version = content.version;
-  sovereign::tray::RenderMainWindowSnapshot(empty, UiPage::Overview, {}, 980, 660, 96, dir + L"\\overview-empty.png");
+  sovereign::tray::RenderMainWindowSnapshot(empty, UiPage::Overview, {}, 400, 620, 96, dir + L"\\overview-empty.png");
   UiContent failed = content;
   failed.display = sovereign::tray::Display::Error;
-  failed.statusDot = RGB(215, 50, 50);
   failed.error = L"уже работает другой клиент sing-box с TUN (адаптер sing-tun) - выключи его, Sovereign подключится сам";
   failed.subscriptionError = L"сервер ответил 403";
-  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 980, 660, 96, dir + L"\\overview-error.png");
-  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Subscription, logs, 980, 660, 96,
+  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 400, 620, 96, dir + L"\\overview-error.png");
+  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Subscription, logs, 400, 620, 96,
                                             dir + L"\\subscription-error.png");
 
   // A newer subscription over the user's edits: the choice; then, narrow,
@@ -106,17 +95,17 @@ int Snapshots(const std::wstring& dir) {
   UiContent waiting = content;
   waiting.configEdited = true;
   waiting.subscriptionWaiting = true;
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 980, 660, 96,
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 400, 620, 96,
                                             dir + L"\\subscription-waiting.png");
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Overview, logs, 980, 660, 96,
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Overview, logs, 400, 620, 96,
                                             dir + L"\\overview-waiting.png");
   waiting.choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 760, 720, 96,
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 360, 640, 96,
                                             dir + L"\\subscription-waiting-narrow.png");
   UiContent merged = content;
   merged.configEdited = true;
   merged.mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};
-  sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Subscription, logs, 980, 660, 96,
+  sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Subscription, logs, 400, 620, 96,
                                             dir + L"\\subscription-merged.png");
   return 0;
 }

@@ -23,7 +23,7 @@ wil::unique_hicon MakeStateIcon(Display display);
 // The app icon (tray.rc) at `size` pixels; null if it can't be loaded.
 wil::unique_hicon LoadAppIcon(int size);
 
-// The state's color (the icon's, and the flyout's status dot).
+// The state's color (the icon's).
 COLORREF StateColor(Display display);
 
 }  // namespace sovereign::tray
