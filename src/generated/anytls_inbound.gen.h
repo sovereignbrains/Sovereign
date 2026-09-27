@@ -12,11 +12,285 @@
 #include <adapters/listable.h>
 #include <adapters/duration.h>
 #include <adapters/fwmark.h>
+#include <adapters/curve_preference.h>
 #include <adapters/omit_empty.h>
 
 namespace sovereign {
 namespace codegen {
 namespace option {
+
+struct ACMEExternalAccountOptions {
+  std::string keyID{};
+  std::string macKey{};
+};
+
+inline void to_json(nlohmann::json& j, const ACMEExternalAccountOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.keyID)) { j["key_id"] = v.keyID; }
+  if (!sovereign::adapters::IsEmptyValue(v.macKey)) { j["mac_key"] = v.macKey; }
+}
+
+inline void from_json(const nlohmann::json& j, ACMEExternalAccountOptions& v) {
+  if (j.contains("key_id")) { v.keyID = j.at("key_id").get<decltype(v.keyID)>(); }
+  if (j.contains("mac_key")) { v.macKey = j.at("mac_key").get<decltype(v.macKey)>(); }
+}
+
+struct InboundACMEOptions {
+  sovereign::adapters::Listable<std::string> domain{};
+  std::string dataDirectory{};
+  std::string defaultServerName{};
+  std::string email{};
+  std::string provider{};
+  bool disableHTTPChallenge{};
+  bool disableTLSALPNChallenge{};
+  std::uint16_t alternativeHTTPPort{};
+  std::uint16_t alternativeTLSPort{};
+  std::optional<ACMEExternalAccountOptions> externalAccount{};
+  std::optional<nlohmann::json> dns01Challenge{};  // unmapped named type github.com/sagernet/sing-box/option.ACMEDNS01ChallengeOptions — needs a handwritten adapter
+  std::string profile{};
+};
+
+inline void to_json(nlohmann::json& j, const InboundACMEOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.domain)) { j["domain"] = v.domain; }
+  if (!sovereign::adapters::IsEmptyValue(v.dataDirectory)) { j["data_directory"] = v.dataDirectory; }
+  if (!sovereign::adapters::IsEmptyValue(v.defaultServerName)) { j["default_server_name"] = v.defaultServerName; }
+  if (!sovereign::adapters::IsEmptyValue(v.email)) { j["email"] = v.email; }
+  if (!sovereign::adapters::IsEmptyValue(v.provider)) { j["provider"] = v.provider; }
+  if (!sovereign::adapters::IsEmptyValue(v.disableHTTPChallenge)) { j["disable_http_challenge"] = v.disableHTTPChallenge; }
+  if (!sovereign::adapters::IsEmptyValue(v.disableTLSALPNChallenge)) { j["disable_tls_alpn_challenge"] = v.disableTLSALPNChallenge; }
+  if (!sovereign::adapters::IsEmptyValue(v.alternativeHTTPPort)) { j["alternative_http_port"] = v.alternativeHTTPPort; }
+  if (!sovereign::adapters::IsEmptyValue(v.alternativeTLSPort)) { j["alternative_tls_port"] = v.alternativeTLSPort; }
+  if (!sovereign::adapters::IsEmptyValue(v.externalAccount)) { j["external_account"] = v.externalAccount; }
+  if (!sovereign::adapters::IsEmptyValue(v.dns01Challenge)) { j["dns01_challenge"] = v.dns01Challenge; }
+  if (!sovereign::adapters::IsEmptyValue(v.profile)) { j["profile"] = v.profile; }
+}
+
+inline void from_json(const nlohmann::json& j, InboundACMEOptions& v) {
+  if (j.contains("domain")) { v.domain = j.at("domain").get<decltype(v.domain)>(); }
+  if (j.contains("data_directory")) { v.dataDirectory = j.at("data_directory").get<decltype(v.dataDirectory)>(); }
+  if (j.contains("default_server_name")) { v.defaultServerName = j.at("default_server_name").get<decltype(v.defaultServerName)>(); }
+  if (j.contains("email")) { v.email = j.at("email").get<decltype(v.email)>(); }
+  if (j.contains("provider")) { v.provider = j.at("provider").get<decltype(v.provider)>(); }
+  if (j.contains("disable_http_challenge")) { v.disableHTTPChallenge = j.at("disable_http_challenge").get<decltype(v.disableHTTPChallenge)>(); }
+  if (j.contains("disable_tls_alpn_challenge")) { v.disableTLSALPNChallenge = j.at("disable_tls_alpn_challenge").get<decltype(v.disableTLSALPNChallenge)>(); }
+  if (j.contains("alternative_http_port")) { v.alternativeHTTPPort = j.at("alternative_http_port").get<decltype(v.alternativeHTTPPort)>(); }
+  if (j.contains("alternative_tls_port")) { v.alternativeTLSPort = j.at("alternative_tls_port").get<decltype(v.alternativeTLSPort)>(); }
+  if (j.contains("external_account")) { v.externalAccount = j.at("external_account").get<decltype(v.externalAccount)>(); }
+  if (j.contains("dns01_challenge")) { v.dns01Challenge = j.at("dns01_challenge").get<decltype(v.dns01Challenge)>(); }
+  if (j.contains("profile")) { v.profile = j.at("profile").get<decltype(v.profile)>(); }
+}
+
+struct InboundECHOptions {
+  bool enabled{};
+  sovereign::adapters::Listable<std::string> key{};
+  std::string keyPath{};
+  bool pqSignatureSchemesEnabled{};
+  bool dynamicRecordSizingDisabled{};
+};
+
+inline void to_json(nlohmann::json& j, const InboundECHOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.key)) { j["key"] = v.key; }
+  if (!sovereign::adapters::IsEmptyValue(v.keyPath)) { j["key_path"] = v.keyPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.pqSignatureSchemesEnabled)) { j["pq_signature_schemes_enabled"] = v.pqSignatureSchemesEnabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.dynamicRecordSizingDisabled)) { j["dynamic_record_sizing_disabled"] = v.dynamicRecordSizingDisabled; }
+}
+
+inline void from_json(const nlohmann::json& j, InboundECHOptions& v) {
+  if (j.contains("enabled")) { v.enabled = j.at("enabled").get<decltype(v.enabled)>(); }
+  if (j.contains("key")) { v.key = j.at("key").get<decltype(v.key)>(); }
+  if (j.contains("key_path")) { v.keyPath = j.at("key_path").get<decltype(v.keyPath)>(); }
+  if (j.contains("pq_signature_schemes_enabled")) { v.pqSignatureSchemesEnabled = j.at("pq_signature_schemes_enabled").get<decltype(v.pqSignatureSchemesEnabled)>(); }
+  if (j.contains("dynamic_record_sizing_disabled")) { v.dynamicRecordSizingDisabled = j.at("dynamic_record_sizing_disabled").get<decltype(v.dynamicRecordSizingDisabled)>(); }
+}
+
+struct InboundRealityHandshakeOptions {
+  std::string server{};
+  std::uint16_t serverPort{};
+  std::string detour{};
+  std::string bindInterface{};
+  std::optional<std::string> inet4BindAddress{};
+  std::optional<std::string> inet6BindAddress{};
+  bool bindAddressNoPort{};
+  std::string protectPath{};
+  sovereign::adapters::FwMark routingMark{};
+  bool reuseAddr{};
+  std::string netNs{};
+  sovereign::adapters::Duration connectTimeout{};
+  bool tcpFastOpen{};
+  bool tcpMultiPath{};
+  bool disableTCPKeepAlive{};
+  sovereign::adapters::Duration tcpKeepAlive{};
+  sovereign::adapters::Duration tcpKeepAliveInterval{};
+  std::optional<bool> udpFragment{};
+  std::optional<nlohmann::json> domainResolver{};  // unmapped named type github.com/sagernet/sing-box/option.DomainResolveOptions — needs a handwritten adapter
+  std::optional<nlohmann::json> networkStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.NetworkStrategy — needs a handwritten adapter
+  nlohmann::json networkType{};  // Listable[github.com/sagernet/sing-box/option.InterfaceType]: unmapped named type github.com/sagernet/sing-box/option.InterfaceType — needs a handwritten adapter
+  nlohmann::json fallbackNetworkType{};  // Listable[github.com/sagernet/sing-box/option.InterfaceType]: unmapped named type github.com/sagernet/sing-box/option.InterfaceType — needs a handwritten adapter
+  sovereign::adapters::Duration fallbackDelay{};
+  nlohmann::json domainStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.DomainStrategy — needs a handwritten adapter
+};
+
+inline void to_json(nlohmann::json& j, const InboundRealityHandshakeOptions& v) {
+  j = nlohmann::json::object();
+  j["server"] = v.server;
+  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.detour)) { j["detour"] = v.detour; }
+  if (!sovereign::adapters::IsEmptyValue(v.bindInterface)) { j["bind_interface"] = v.bindInterface; }
+  if (!sovereign::adapters::IsEmptyValue(v.inet4BindAddress)) { j["inet4_bind_address"] = v.inet4BindAddress; }
+  if (!sovereign::adapters::IsEmptyValue(v.inet6BindAddress)) { j["inet6_bind_address"] = v.inet6BindAddress; }
+  if (!sovereign::adapters::IsEmptyValue(v.bindAddressNoPort)) { j["bind_address_no_port"] = v.bindAddressNoPort; }
+  if (!sovereign::adapters::IsEmptyValue(v.protectPath)) { j["protect_path"] = v.protectPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.routingMark)) { j["routing_mark"] = v.routingMark; }
+  if (!sovereign::adapters::IsEmptyValue(v.reuseAddr)) { j["reuse_addr"] = v.reuseAddr; }
+  if (!sovereign::adapters::IsEmptyValue(v.netNs)) { j["netns"] = v.netNs; }
+  if (!sovereign::adapters::IsEmptyValue(v.connectTimeout)) { j["connect_timeout"] = v.connectTimeout; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpFastOpen)) { j["tcp_fast_open"] = v.tcpFastOpen; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpMultiPath)) { j["tcp_multi_path"] = v.tcpMultiPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.disableTCPKeepAlive)) { j["disable_tcp_keep_alive"] = v.disableTCPKeepAlive; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpKeepAlive)) { j["tcp_keep_alive"] = v.tcpKeepAlive; }
+  if (!sovereign::adapters::IsEmptyValue(v.tcpKeepAliveInterval)) { j["tcp_keep_alive_interval"] = v.tcpKeepAliveInterval; }
+  if (!sovereign::adapters::IsEmptyValue(v.udpFragment)) { j["udp_fragment"] = v.udpFragment; }
+  if (!sovereign::adapters::IsEmptyValue(v.domainResolver)) { j["domain_resolver"] = v.domainResolver; }
+  if (!sovereign::adapters::IsEmptyValue(v.networkStrategy)) { j["network_strategy"] = v.networkStrategy; }
+  if (!sovereign::adapters::IsEmptyValue(v.networkType)) { j["network_type"] = v.networkType; }
+  if (!sovereign::adapters::IsEmptyValue(v.fallbackNetworkType)) { j["fallback_network_type"] = v.fallbackNetworkType; }
+  if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
+  if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
+}
+
+inline void from_json(const nlohmann::json& j, InboundRealityHandshakeOptions& v) {
+  v.server = j.at("server").get<decltype(v.server)>();
+  v.serverPort = j.at("server_port").get<decltype(v.serverPort)>();
+  if (j.contains("detour")) { v.detour = j.at("detour").get<decltype(v.detour)>(); }
+  if (j.contains("bind_interface")) { v.bindInterface = j.at("bind_interface").get<decltype(v.bindInterface)>(); }
+  if (j.contains("inet4_bind_address")) { v.inet4BindAddress = j.at("inet4_bind_address").get<decltype(v.inet4BindAddress)>(); }
+  if (j.contains("inet6_bind_address")) { v.inet6BindAddress = j.at("inet6_bind_address").get<decltype(v.inet6BindAddress)>(); }
+  if (j.contains("bind_address_no_port")) { v.bindAddressNoPort = j.at("bind_address_no_port").get<decltype(v.bindAddressNoPort)>(); }
+  if (j.contains("protect_path")) { v.protectPath = j.at("protect_path").get<decltype(v.protectPath)>(); }
+  if (j.contains("routing_mark")) { v.routingMark = j.at("routing_mark").get<decltype(v.routingMark)>(); }
+  if (j.contains("reuse_addr")) { v.reuseAddr = j.at("reuse_addr").get<decltype(v.reuseAddr)>(); }
+  if (j.contains("netns")) { v.netNs = j.at("netns").get<decltype(v.netNs)>(); }
+  if (j.contains("connect_timeout")) { v.connectTimeout = j.at("connect_timeout").get<decltype(v.connectTimeout)>(); }
+  if (j.contains("tcp_fast_open")) { v.tcpFastOpen = j.at("tcp_fast_open").get<decltype(v.tcpFastOpen)>(); }
+  if (j.contains("tcp_multi_path")) { v.tcpMultiPath = j.at("tcp_multi_path").get<decltype(v.tcpMultiPath)>(); }
+  if (j.contains("disable_tcp_keep_alive")) { v.disableTCPKeepAlive = j.at("disable_tcp_keep_alive").get<decltype(v.disableTCPKeepAlive)>(); }
+  if (j.contains("tcp_keep_alive")) { v.tcpKeepAlive = j.at("tcp_keep_alive").get<decltype(v.tcpKeepAlive)>(); }
+  if (j.contains("tcp_keep_alive_interval")) { v.tcpKeepAliveInterval = j.at("tcp_keep_alive_interval").get<decltype(v.tcpKeepAliveInterval)>(); }
+  if (j.contains("udp_fragment")) { v.udpFragment = j.at("udp_fragment").get<decltype(v.udpFragment)>(); }
+  if (j.contains("domain_resolver")) { v.domainResolver = j.at("domain_resolver").get<decltype(v.domainResolver)>(); }
+  if (j.contains("network_strategy")) { v.networkStrategy = j.at("network_strategy").get<decltype(v.networkStrategy)>(); }
+  if (j.contains("network_type")) { v.networkType = j.at("network_type").get<decltype(v.networkType)>(); }
+  if (j.contains("fallback_network_type")) { v.fallbackNetworkType = j.at("fallback_network_type").get<decltype(v.fallbackNetworkType)>(); }
+  if (j.contains("fallback_delay")) { v.fallbackDelay = j.at("fallback_delay").get<decltype(v.fallbackDelay)>(); }
+  if (j.contains("domain_strategy")) { v.domainStrategy = j.at("domain_strategy").get<decltype(v.domainStrategy)>(); }
+}
+
+struct InboundRealityOptions {
+  bool enabled{};
+  InboundRealityHandshakeOptions handshake{};
+  std::string privateKey{};
+  sovereign::adapters::Listable<std::string> shortID{};
+  sovereign::adapters::Duration maxTimeDifference{};
+};
+
+inline void to_json(nlohmann::json& j, const InboundRealityOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.handshake)) { j["handshake"] = v.handshake; }
+  if (!sovereign::adapters::IsEmptyValue(v.privateKey)) { j["private_key"] = v.privateKey; }
+  if (!sovereign::adapters::IsEmptyValue(v.shortID)) { j["short_id"] = v.shortID; }
+  if (!sovereign::adapters::IsEmptyValue(v.maxTimeDifference)) { j["max_time_difference"] = v.maxTimeDifference; }
+}
+
+inline void from_json(const nlohmann::json& j, InboundRealityOptions& v) {
+  if (j.contains("enabled")) { v.enabled = j.at("enabled").get<decltype(v.enabled)>(); }
+  if (j.contains("handshake")) { v.handshake = j.at("handshake").get<decltype(v.handshake)>(); }
+  if (j.contains("private_key")) { v.privateKey = j.at("private_key").get<decltype(v.privateKey)>(); }
+  if (j.contains("short_id")) { v.shortID = j.at("short_id").get<decltype(v.shortID)>(); }
+  if (j.contains("max_time_difference")) { v.maxTimeDifference = j.at("max_time_difference").get<decltype(v.maxTimeDifference)>(); }
+}
+
+struct InboundTLSOptions {
+  bool enabled{};
+  std::string serverName{};
+  bool insecure{};
+  sovereign::adapters::Listable<std::string> alpn{};
+  std::string minVersion{};
+  std::string maxVersion{};
+  sovereign::adapters::Listable<std::string> cipherSuites{};
+  sovereign::adapters::Listable<sovereign::adapters::CurvePreference> curvePreferences{};
+  sovereign::adapters::Listable<std::string> certificate{};
+  std::string certificatePath{};
+  nlohmann::json clientAuthentication{};  // unmapped named type github.com/sagernet/sing-box/option.ClientAuthType — needs a handwritten adapter
+  sovereign::adapters::Listable<std::string> clientCertificate{};
+  sovereign::adapters::Listable<std::string> clientCertificatePath{};
+  sovereign::adapters::Listable<std::string> clientCertificatePublicKeySHA256{};  // []byte, kept as its base64 JSON text
+  sovereign::adapters::Listable<std::string> key{};
+  std::string keyPath{};
+  bool kernelTx{};
+  bool kernelRx{};
+  sovereign::adapters::Duration handshakeTimeout{};
+  std::optional<nlohmann::json> certificateProvider{};  // unmapped named type github.com/sagernet/sing-box/option.CertificateProviderOptions — needs a handwritten adapter
+  std::optional<InboundACMEOptions> acme{};
+  std::optional<InboundECHOptions> ech{};
+  std::optional<InboundRealityOptions> reality{};
+};
+
+inline void to_json(nlohmann::json& j, const InboundTLSOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.serverName)) { j["server_name"] = v.serverName; }
+  if (!sovereign::adapters::IsEmptyValue(v.insecure)) { j["insecure"] = v.insecure; }
+  if (!sovereign::adapters::IsEmptyValue(v.alpn)) { j["alpn"] = v.alpn; }
+  if (!sovereign::adapters::IsEmptyValue(v.minVersion)) { j["min_version"] = v.minVersion; }
+  if (!sovereign::adapters::IsEmptyValue(v.maxVersion)) { j["max_version"] = v.maxVersion; }
+  if (!sovereign::adapters::IsEmptyValue(v.cipherSuites)) { j["cipher_suites"] = v.cipherSuites; }
+  if (!sovereign::adapters::IsEmptyValue(v.curvePreferences)) { j["curve_preferences"] = v.curvePreferences; }
+  if (!sovereign::adapters::IsEmptyValue(v.certificate)) { j["certificate"] = v.certificate; }
+  if (!sovereign::adapters::IsEmptyValue(v.certificatePath)) { j["certificate_path"] = v.certificatePath; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientAuthentication)) { j["client_authentication"] = v.clientAuthentication; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientCertificate)) { j["client_certificate"] = v.clientCertificate; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientCertificatePath)) { j["client_certificate_path"] = v.clientCertificatePath; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientCertificatePublicKeySHA256)) { j["client_certificate_public_key_sha256"] = v.clientCertificatePublicKeySHA256; }
+  if (!sovereign::adapters::IsEmptyValue(v.key)) { j["key"] = v.key; }
+  if (!sovereign::adapters::IsEmptyValue(v.keyPath)) { j["key_path"] = v.keyPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.kernelTx)) { j["kernel_tx"] = v.kernelTx; }
+  if (!sovereign::adapters::IsEmptyValue(v.kernelRx)) { j["kernel_rx"] = v.kernelRx; }
+  if (!sovereign::adapters::IsEmptyValue(v.handshakeTimeout)) { j["handshake_timeout"] = v.handshakeTimeout; }
+  if (!sovereign::adapters::IsEmptyValue(v.certificateProvider)) { j["certificate_provider"] = v.certificateProvider; }
+  if (!sovereign::adapters::IsEmptyValue(v.acme)) { j["acme"] = v.acme; }
+  if (!sovereign::adapters::IsEmptyValue(v.ech)) { j["ech"] = v.ech; }
+  if (!sovereign::adapters::IsEmptyValue(v.reality)) { j["reality"] = v.reality; }
+}
+
+inline void from_json(const nlohmann::json& j, InboundTLSOptions& v) {
+  if (j.contains("enabled")) { v.enabled = j.at("enabled").get<decltype(v.enabled)>(); }
+  if (j.contains("server_name")) { v.serverName = j.at("server_name").get<decltype(v.serverName)>(); }
+  if (j.contains("insecure")) { v.insecure = j.at("insecure").get<decltype(v.insecure)>(); }
+  if (j.contains("alpn")) { v.alpn = j.at("alpn").get<decltype(v.alpn)>(); }
+  if (j.contains("min_version")) { v.minVersion = j.at("min_version").get<decltype(v.minVersion)>(); }
+  if (j.contains("max_version")) { v.maxVersion = j.at("max_version").get<decltype(v.maxVersion)>(); }
+  if (j.contains("cipher_suites")) { v.cipherSuites = j.at("cipher_suites").get<decltype(v.cipherSuites)>(); }
+  if (j.contains("curve_preferences")) { v.curvePreferences = j.at("curve_preferences").get<decltype(v.curvePreferences)>(); }
+  if (j.contains("certificate")) { v.certificate = j.at("certificate").get<decltype(v.certificate)>(); }
+  if (j.contains("certificate_path")) { v.certificatePath = j.at("certificate_path").get<decltype(v.certificatePath)>(); }
+  if (j.contains("client_authentication")) { v.clientAuthentication = j.at("client_authentication").get<decltype(v.clientAuthentication)>(); }
+  if (j.contains("client_certificate")) { v.clientCertificate = j.at("client_certificate").get<decltype(v.clientCertificate)>(); }
+  if (j.contains("client_certificate_path")) { v.clientCertificatePath = j.at("client_certificate_path").get<decltype(v.clientCertificatePath)>(); }
+  if (j.contains("client_certificate_public_key_sha256")) { v.clientCertificatePublicKeySHA256 = j.at("client_certificate_public_key_sha256").get<decltype(v.clientCertificatePublicKeySHA256)>(); }
+  if (j.contains("key")) { v.key = j.at("key").get<decltype(v.key)>(); }
+  if (j.contains("key_path")) { v.keyPath = j.at("key_path").get<decltype(v.keyPath)>(); }
+  if (j.contains("kernel_tx")) { v.kernelTx = j.at("kernel_tx").get<decltype(v.kernelTx)>(); }
+  if (j.contains("kernel_rx")) { v.kernelRx = j.at("kernel_rx").get<decltype(v.kernelRx)>(); }
+  if (j.contains("handshake_timeout")) { v.handshakeTimeout = j.at("handshake_timeout").get<decltype(v.handshakeTimeout)>(); }
+  if (j.contains("certificate_provider")) { v.certificateProvider = j.at("certificate_provider").get<decltype(v.certificateProvider)>(); }
+  if (j.contains("acme")) { v.acme = j.at("acme").get<decltype(v.acme)>(); }
+  if (j.contains("ech")) { v.ech = j.at("ech").get<decltype(v.ech)>(); }
+  if (j.contains("reality")) { v.reality = j.at("reality").get<decltype(v.reality)>(); }
+}
 
 struct AnyTLSInboundOptions {
   std::optional<std::string> listen{};
@@ -40,7 +314,7 @@ struct AnyTLSInboundOptions {
   sovereign::adapters::Duration sniffTimeout{};
   nlohmann::json domainStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.DomainStrategy — needs a handwritten adapter
   bool udpDisableDomainUnmapping{};
-  std::optional<nlohmann::json> tls{};  // unmapped named type github.com/sagernet/sing-box/option.InboundTLSOptions — needs a handwritten adapter
+  std::optional<InboundTLSOptions> tls{};
   nlohmann::json users{};  // unmapped Go type []github.com/sagernet/sing-box/option.AnyTLSUser — needs a handwritten adapter
   sovereign::adapters::Listable<std::string> paddingScheme{};
 };

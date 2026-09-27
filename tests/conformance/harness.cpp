@@ -15,8 +15,9 @@
 // this harness's listener, which records the first TLS record of every
 // connection and closes it - nothing leaves the machine. The outbound goes
 // through our generated AnyTLSOutbound type before it reaches the core, as a
-// config does in Sovereign; its `tls` object is still a passthrough in the
-// codegen (generating OutboundTLSOptions is its own atom).
+// config does in Sovereign - its `tls` object included (OutboundTLSOptions,
+// OutboundUTLSOptions, OutboundRealityOptions are generated structs), so a
+// serde slip there would show up on the wire.
 //
 // --record writes one raw capture as the golden file (after checking that all
 // captures agree with each other), --save also writes every capture as

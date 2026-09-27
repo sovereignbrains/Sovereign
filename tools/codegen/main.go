@@ -2,13 +2,16 @@
 // go/packages (real type-checking, not regex-over-source) and emits a C++
 // header with a matching struct plus nlohmann::json to_json/from_json.
 //
-// Scope for this first slice (see Sovereign issue #2): only flatten
-// anonymous embedded fields that are plain data (no custom
-// MarshalJSON/UnmarshalJSON) and live in the same package. Anything that
-// needs real Go JSON semantics we can't safely infer here — badoption.*
-// types, foreign embedded types, custom (un)marshalers — is emitted as a
-// raw nlohmann::json member with a comment, left for the handwritten
-// adapter layer (P1's remaining checklist items) to replace.
+// Scope (see Sovereign issues #2, #5): anonymous embedded fields that are
+// plain data (no custom MarshalJSON/UnmarshalJSON) of the same package are
+// flattened; named struct types of the same package that fields reach are
+// generated as C++ structs of their own, in the same header (the requested
+// type's TLS options -> OutboundTLSOptions -> OutboundUTLSOptions, ...).
+// Types with handwritten adapters (badoption.Duration/Listable/Addr, FwMark,
+// CurvePreference) map to them. Anything else that needs real Go JSON
+// semantics we can't safely infer here — foreign embedded types, other
+// custom (un)marshalers — is emitted as a raw nlohmann::json member with a
+// comment, left for the handwritten adapter layer to replace.
 package main
 
 import (
@@ -26,10 +29,10 @@ import (
 )
 
 type field struct {
-	CppName    string
-	CppType    string
-	JSONName   string
-	OmitEmpty  bool
+	CppName     string
+	CppType     string
+	JSONName    string
+	OmitEmpty   bool
 	NeedAdapter bool
 	AdapterNote string
 }
@@ -72,14 +75,14 @@ func main() {
 	if !ok {
 		log.Fatalf("%s is not a named type", *typeName)
 	}
-	structType, ok := named.Underlying().(*types.Struct)
-	if !ok {
+	if _, ok := named.Underlying().(*types.Struct); !ok {
 		log.Fatalf("%s is not a struct", *typeName)
 	}
 
-	fields := flattenFields(pkg.Types, structType, map[string]bool{})
+	g := &generator{pkg: pkg.Types, structs: map[string][]field{}, busy: map[string]bool{}}
+	g.ensure(named)
 
-	src2 := renderHeader(*namespace, *typeName, fields, pkg.PkgPath)
+	src2 := g.renderHeader(*namespace, *typeName, pkg.PkgPath)
 
 	if *out == "-" {
 		fmt.Print(src2)
@@ -88,7 +91,39 @@ func main() {
 	if err := os.WriteFile(*out, []byte(src2), 0o644); err != nil {
 		log.Fatalf("write %s: %v", *out, err)
 	}
-	fmt.Fprintf(os.Stderr, "wrote %s (%d fields, %d need adapters)\n", *out, len(fields), countAdapters(fields))
+	total, adapters := 0, 0
+	for _, name := range g.order {
+		total += len(g.structs[name])
+		adapters += countAdapters(g.structs[name])
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s (%d structs, %d fields, %d need adapters)\n", *out, len(g.order), total, adapters)
+}
+
+// generator collects the structs one header needs: the requested type and,
+// recursively, every named struct type of the same package its fields reach
+// (OutboundTLSOptions -> OutboundUTLSOptions, OutboundRealityOptions, ...).
+// Each becomes a C++ struct of the same name with its own to_json/from_json,
+// emitted dependencies first. A type reaching itself would not compile as a
+// C++ member - none in the option package does today.
+type generator struct {
+	pkg     *types.Package
+	structs map[string][]field
+	order   []string
+	busy    map[string]bool
+}
+
+// ensure generates named (a struct of g.pkg) once and returns its C++ name.
+func (g *generator) ensure(named *types.Named) string {
+	name := named.Obj().Name()
+	if _, done := g.structs[name]; done || g.busy[name] {
+		return name
+	}
+	g.busy[name] = true
+	fields := g.flattenFields(named.Underlying().(*types.Struct), map[string]bool{})
+	delete(g.busy, name)
+	g.structs[name] = fields
+	g.order = append(g.order, name)
+	return name
 }
 
 // hasCustomJSONMethods reports whether t (or *t) implements any of the
@@ -112,7 +147,8 @@ func hasCustomJSONMethods(t types.Type) bool {
 	return check(types.NewPointer(t))
 }
 
-func flattenFields(pkg *types.Package, st *types.Struct, seen map[string]bool) []field {
+func (g *generator) flattenFields(st *types.Struct, seen map[string]bool) []field {
+	pkg := g.pkg
 	var out []field
 	for i := 0; i < st.NumFields(); i++ {
 		v := st.Field(i)
@@ -137,7 +173,7 @@ func flattenFields(pkg *types.Package, st *types.Struct, seen map[string]bool) [
 						key := named.Obj().Name()
 						if !seen[key] {
 							seen[key] = true
-							out = append(out, flattenFields(pkg, es, seen)...)
+							out = append(out, g.flattenFields(es, seen)...)
 							continue
 						}
 					}
@@ -152,7 +188,7 @@ func flattenFields(pkg *types.Package, st *types.Struct, seen map[string]bool) [
 			continue
 		}
 
-		cppType, needAdapter, note := mapType(v.Type())
+		cppType, needAdapter, note := g.mapType(v.Type())
 		out = append(out, field{
 			CppName:     goToCppFieldName(v.Name()),
 			CppType:     cppType,
@@ -201,10 +237,18 @@ func parseJSONTag(tag, goName string) (name string, omitEmpty bool) {
 // anything whose JSON (de)serialization we can't safely auto-generate yet
 // (badoption.* custom types, unmapped composites) — those become raw
 // nlohmann::json members for a handwritten adapter to replace later.
-func mapType(t types.Type) (cppType string, needAdapter bool, note string) {
+func (g *generator) mapType(t types.Type) (cppType string, needAdapter bool, note string) {
 	if p, ok := t.(*types.Pointer); ok {
-		inner, adapt, n := mapType(p.Elem())
+		inner, adapt, n := g.mapType(p.Elem())
 		return "std::optional<" + inner + ">", adapt, n
+	}
+	// []byte: encoding/json writes it as one base64 string. Kept as that text -
+	// it round-trips exactly, and nothing on our side reads the bytes yet (the
+	// one user today is tls.certificate_public_key_sha256, pinning).
+	if sl, ok := t.(*types.Slice); ok {
+		if b, isBasic := sl.Elem().(*types.Basic); isBasic && b.Kind() == types.Uint8 {
+			return "std::string", false, "[]byte, kept as its base64 JSON text"
+		}
 	}
 	if basic, ok := t.(*types.Basic); ok {
 		switch basic.Kind() {
@@ -255,13 +299,22 @@ func mapType(t types.Type) (cppType string, needAdapter bool, note string) {
 		if pkgPath == "github.com/sagernet/sing-box/option" && named.Obj().Name() == "FwMark" {
 			return "sovereign::adapters::FwMark", false, ""
 		}
+		if pkgPath == "github.com/sagernet/sing-box/option" && named.Obj().Name() == "CurvePreference" {
+			return "sovereign::adapters::CurvePreference", false, ""
+		}
 		if pkgPath == "github.com/sagernet/sing/common/json/badoption" && named.Obj().Name() == "Listable" {
 			if targs := named.TypeArgs(); targs != nil && targs.Len() == 1 {
-				elemCpp, elemAdapt, elemNote := mapType(targs.At(0))
+				elemCpp, elemAdapt, elemNote := g.mapType(targs.At(0))
 				if !elemAdapt {
-					return "sovereign::adapters::Listable<" + elemCpp + ">", false, ""
+					return "sovereign::adapters::Listable<" + elemCpp + ">", false, elemNote
 				}
 				return "nlohmann::json", true, "Listable[" + targs.At(0).String() + "]: " + elemNote
+			}
+		}
+		// A plain struct of the package being generated: generated too.
+		if g.pkg != nil && pkgPath == g.pkg.Path() && !hasCustomJSONMethods(named) {
+			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
+				return g.ensure(named), false, ""
 			}
 		}
 		return "nlohmann::json", true, "unmapped named type " + pkgPath + "." + named.Obj().Name() + " — needs a handwritten adapter"
@@ -292,6 +345,9 @@ func goToCppFieldName(goName string) string {
 		return strings.ToLower(goName)
 	case i == 1:
 		return strings.ToLower(string(runes[0])) + string(runes[1:])
+	case !unicode.IsLetter(runes[i]):
+		// The acronym ends at a digit, not at the next word: DNS01Challenge -> dns01Challenge.
+		return strings.ToLower(string(runes[:i])) + string(runes[i:])
 	default:
 		return strings.ToLower(string(runes[:i-1])) + string(runes[i-1:])
 	}
@@ -325,7 +381,12 @@ func countAdapters(fields []field) int {
 	return n
 }
 
-func renderHeader(namespace, typeName string, fields []field, sourcePkg string) string {
+func (g *generator) renderHeader(namespace, typeName string, sourcePkg string) string {
+	var all []field
+	for _, name := range g.order {
+		all = append(all, g.structs[name]...)
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "// Code generated by tools/codegen from %s (%s). DO NOT EDIT.\n", sourcePkg, typeName)
 	fmt.Fprintf(&b, "// Fields marked \"needs adapter\" are raw nlohmann::json passthroughs pending\n")
@@ -336,16 +397,19 @@ func renderHeader(namespace, typeName string, fields []field, sourcePkg string) 
 	b.WriteString("#include <optional>\n")
 	b.WriteString("#include <string>\n\n")
 	b.WriteString("#include <nlohmann/json.hpp>\n")
-	if usesType(fields, "sovereign::adapters::Listable<") {
+	if usesType(all, "sovereign::adapters::Listable<") {
 		b.WriteString("#include <adapters/listable.h>\n")
 	}
-	if usesType(fields, "sovereign::adapters::Duration") {
+	if usesType(all, "sovereign::adapters::Duration") {
 		b.WriteString("#include <adapters/duration.h>\n")
 	}
-	if usesType(fields, "sovereign::adapters::FwMark") {
+	if usesType(all, "sovereign::adapters::FwMark") {
 		b.WriteString("#include <adapters/fwmark.h>\n")
 	}
-	if usesOmitEmpty(fields) {
+	if usesType(all, "sovereign::adapters::CurvePreference") {
+		b.WriteString("#include <adapters/curve_preference.h>\n")
+	}
+	if usesOmitEmpty(all) {
 		b.WriteString("#include <adapters/omit_empty.h>\n")
 	}
 	b.WriteString("\n")
@@ -354,13 +418,26 @@ func renderHeader(namespace, typeName string, fields []field, sourcePkg string) 
 	for _, p := range parts {
 		fmt.Fprintf(&b, "namespace %s {\n", p)
 	}
+
+	// Dependencies first: g.order is the order ensure() finished them in.
+	for _, name := range g.order {
+		b.WriteString("\n")
+		renderStruct(&b, name, g.structs[name])
+	}
 	b.WriteString("\n")
 
-	fmt.Fprintf(&b, "struct %s {\n", typeName)
+	for range parts {
+		b.WriteString("}\n")
+	}
+	return b.String()
+}
+
+func renderStruct(b *strings.Builder, typeName string, fields []field) {
+	fmt.Fprintf(b, "struct %s {\n", typeName)
 	names := make([]string, len(fields))
 	for i, f := range fields {
 		line := fmt.Sprintf("  %s %s{};", f.CppType, f.CppName)
-		if f.NeedAdapter {
+		if f.AdapterNote != "" {
 			line += "  // " + f.AdapterNote
 		}
 		b.WriteString(line + "\n")
@@ -369,36 +446,31 @@ func renderHeader(namespace, typeName string, fields []field, sourcePkg string) 
 	sort.Strings(names) // just to catch accidental dup field names below
 	for i := 1; i < len(names); i++ {
 		if names[i] == names[i-1] {
-			fmt.Fprintf(os.Stderr, "warning: duplicate C++ field name %q after flattening — check embedded struct name collisions\n", names[i])
+			fmt.Fprintf(os.Stderr, "warning: duplicate C++ field name %q in %s after flattening — check embedded struct name collisions\n", names[i], typeName)
 		}
 	}
 	b.WriteString("};\n\n")
 
-	fmt.Fprintf(&b, "inline void to_json(nlohmann::json& j, const %s& v) {\n", typeName)
+	fmt.Fprintf(b, "inline void to_json(nlohmann::json& j, const %s& v) {\n", typeName)
 	b.WriteString("  j = nlohmann::json::object();\n")
 	for _, f := range fields {
 		if f.OmitEmpty {
-			fmt.Fprintf(&b, "  if (!sovereign::adapters::IsEmptyValue(v.%s)) { j[%q] = v.%s; }\n",
+			fmt.Fprintf(b, "  if (!sovereign::adapters::IsEmptyValue(v.%s)) { j[%q] = v.%s; }\n",
 				f.CppName, f.JSONName, f.CppName)
 		} else {
-			fmt.Fprintf(&b, "  j[%q] = v.%s;\n", f.JSONName, f.CppName)
+			fmt.Fprintf(b, "  j[%q] = v.%s;\n", f.JSONName, f.CppName)
 		}
 	}
 	b.WriteString("}\n\n")
 
-	fmt.Fprintf(&b, "inline void from_json(const nlohmann::json& j, %s& v) {\n", typeName)
+	fmt.Fprintf(b, "inline void from_json(const nlohmann::json& j, %s& v) {\n", typeName)
 	for _, f := range fields {
 		if f.OmitEmpty {
-			fmt.Fprintf(&b, "  if (j.contains(%q)) { v.%s = j.at(%q).get<decltype(v.%s)>(); }\n",
+			fmt.Fprintf(b, "  if (j.contains(%q)) { v.%s = j.at(%q).get<decltype(v.%s)>(); }\n",
 				f.JSONName, f.CppName, f.JSONName, f.CppName)
 		} else {
-			fmt.Fprintf(&b, "  v.%s = j.at(%q).get<decltype(v.%s)>();\n", f.CppName, f.JSONName, f.CppName)
+			fmt.Fprintf(b, "  v.%s = j.at(%q).get<decltype(v.%s)>();\n", f.CppName, f.JSONName, f.CppName)
 		}
 	}
-	b.WriteString("}\n\n")
-
-	for range parts {
-		b.WriteString("}\n")
-	}
-	return b.String()
+	b.WriteString("}\n")
 }

@@ -9,13 +9,172 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+#include <adapters/listable.h>
 #include <adapters/duration.h>
 #include <adapters/fwmark.h>
+#include <adapters/curve_preference.h>
 #include <adapters/omit_empty.h>
 
 namespace sovereign {
 namespace codegen {
 namespace option {
+
+struct OutboundECHOptions {
+  bool enabled{};
+  sovereign::adapters::Listable<std::string> config{};
+  std::string configPath{};
+  std::string queryServerName{};
+  bool pqSignatureSchemesEnabled{};
+  bool dynamicRecordSizingDisabled{};
+};
+
+inline void to_json(nlohmann::json& j, const OutboundECHOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.config)) { j["config"] = v.config; }
+  if (!sovereign::adapters::IsEmptyValue(v.configPath)) { j["config_path"] = v.configPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.queryServerName)) { j["query_server_name"] = v.queryServerName; }
+  if (!sovereign::adapters::IsEmptyValue(v.pqSignatureSchemesEnabled)) { j["pq_signature_schemes_enabled"] = v.pqSignatureSchemesEnabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.dynamicRecordSizingDisabled)) { j["dynamic_record_sizing_disabled"] = v.dynamicRecordSizingDisabled; }
+}
+
+inline void from_json(const nlohmann::json& j, OutboundECHOptions& v) {
+  if (j.contains("enabled")) { v.enabled = j.at("enabled").get<decltype(v.enabled)>(); }
+  if (j.contains("config")) { v.config = j.at("config").get<decltype(v.config)>(); }
+  if (j.contains("config_path")) { v.configPath = j.at("config_path").get<decltype(v.configPath)>(); }
+  if (j.contains("query_server_name")) { v.queryServerName = j.at("query_server_name").get<decltype(v.queryServerName)>(); }
+  if (j.contains("pq_signature_schemes_enabled")) { v.pqSignatureSchemesEnabled = j.at("pq_signature_schemes_enabled").get<decltype(v.pqSignatureSchemesEnabled)>(); }
+  if (j.contains("dynamic_record_sizing_disabled")) { v.dynamicRecordSizingDisabled = j.at("dynamic_record_sizing_disabled").get<decltype(v.dynamicRecordSizingDisabled)>(); }
+}
+
+struct OutboundUTLSOptions {
+  bool enabled{};
+  std::string fingerprint{};
+};
+
+inline void to_json(nlohmann::json& j, const OutboundUTLSOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.fingerprint)) { j["fingerprint"] = v.fingerprint; }
+}
+
+inline void from_json(const nlohmann::json& j, OutboundUTLSOptions& v) {
+  if (j.contains("enabled")) { v.enabled = j.at("enabled").get<decltype(v.enabled)>(); }
+  if (j.contains("fingerprint")) { v.fingerprint = j.at("fingerprint").get<decltype(v.fingerprint)>(); }
+}
+
+struct OutboundRealityOptions {
+  bool enabled{};
+  std::string publicKey{};
+  std::string shortID{};
+};
+
+inline void to_json(nlohmann::json& j, const OutboundRealityOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.publicKey)) { j["public_key"] = v.publicKey; }
+  if (!sovereign::adapters::IsEmptyValue(v.shortID)) { j["short_id"] = v.shortID; }
+}
+
+inline void from_json(const nlohmann::json& j, OutboundRealityOptions& v) {
+  if (j.contains("enabled")) { v.enabled = j.at("enabled").get<decltype(v.enabled)>(); }
+  if (j.contains("public_key")) { v.publicKey = j.at("public_key").get<decltype(v.publicKey)>(); }
+  if (j.contains("short_id")) { v.shortID = j.at("short_id").get<decltype(v.shortID)>(); }
+}
+
+struct OutboundTLSOptions {
+  bool enabled{};
+  std::string engine{};
+  bool disableSNI{};
+  std::string serverName{};
+  bool insecure{};
+  sovereign::adapters::Listable<std::string> alpn{};
+  std::string minVersion{};
+  std::string maxVersion{};
+  sovereign::adapters::Listable<std::string> cipherSuites{};
+  sovereign::adapters::Listable<sovereign::adapters::CurvePreference> curvePreferences{};
+  sovereign::adapters::Listable<std::string> certificate{};
+  std::string certificatePath{};
+  sovereign::adapters::Listable<std::string> certificatePublicKeySHA256{};  // []byte, kept as its base64 JSON text
+  sovereign::adapters::Listable<std::string> clientCertificate{};
+  std::string clientCertificatePath{};
+  sovereign::adapters::Listable<std::string> clientKey{};
+  std::string clientKeyPath{};
+  bool fragment{};
+  sovereign::adapters::Duration fragmentFallbackDelay{};
+  bool recordFragment{};
+  std::string spoof{};
+  std::string spoofMethod{};
+  bool kernelTx{};
+  bool kernelRx{};
+  sovereign::adapters::Duration handshakeTimeout{};
+  std::optional<OutboundECHOptions> ech{};
+  std::optional<OutboundUTLSOptions> utls{};
+  std::optional<OutboundRealityOptions> reality{};
+};
+
+inline void to_json(nlohmann::json& j, const OutboundTLSOptions& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
+  if (!sovereign::adapters::IsEmptyValue(v.engine)) { j["engine"] = v.engine; }
+  if (!sovereign::adapters::IsEmptyValue(v.disableSNI)) { j["disable_sni"] = v.disableSNI; }
+  if (!sovereign::adapters::IsEmptyValue(v.serverName)) { j["server_name"] = v.serverName; }
+  if (!sovereign::adapters::IsEmptyValue(v.insecure)) { j["insecure"] = v.insecure; }
+  if (!sovereign::adapters::IsEmptyValue(v.alpn)) { j["alpn"] = v.alpn; }
+  if (!sovereign::adapters::IsEmptyValue(v.minVersion)) { j["min_version"] = v.minVersion; }
+  if (!sovereign::adapters::IsEmptyValue(v.maxVersion)) { j["max_version"] = v.maxVersion; }
+  if (!sovereign::adapters::IsEmptyValue(v.cipherSuites)) { j["cipher_suites"] = v.cipherSuites; }
+  if (!sovereign::adapters::IsEmptyValue(v.curvePreferences)) { j["curve_preferences"] = v.curvePreferences; }
+  if (!sovereign::adapters::IsEmptyValue(v.certificate)) { j["certificate"] = v.certificate; }
+  if (!sovereign::adapters::IsEmptyValue(v.certificatePath)) { j["certificate_path"] = v.certificatePath; }
+  if (!sovereign::adapters::IsEmptyValue(v.certificatePublicKeySHA256)) { j["certificate_public_key_sha256"] = v.certificatePublicKeySHA256; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientCertificate)) { j["client_certificate"] = v.clientCertificate; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientCertificatePath)) { j["client_certificate_path"] = v.clientCertificatePath; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientKey)) { j["client_key"] = v.clientKey; }
+  if (!sovereign::adapters::IsEmptyValue(v.clientKeyPath)) { j["client_key_path"] = v.clientKeyPath; }
+  if (!sovereign::adapters::IsEmptyValue(v.fragment)) { j["fragment"] = v.fragment; }
+  if (!sovereign::adapters::IsEmptyValue(v.fragmentFallbackDelay)) { j["fragment_fallback_delay"] = v.fragmentFallbackDelay; }
+  if (!sovereign::adapters::IsEmptyValue(v.recordFragment)) { j["record_fragment"] = v.recordFragment; }
+  if (!sovereign::adapters::IsEmptyValue(v.spoof)) { j["spoof"] = v.spoof; }
+  if (!sovereign::adapters::IsEmptyValue(v.spoofMethod)) { j["spoof_method"] = v.spoofMethod; }
+  if (!sovereign::adapters::IsEmptyValue(v.kernelTx)) { j["kernel_tx"] = v.kernelTx; }
+  if (!sovereign::adapters::IsEmptyValue(v.kernelRx)) { j["kernel_rx"] = v.kernelRx; }
+  if (!sovereign::adapters::IsEmptyValue(v.handshakeTimeout)) { j["handshake_timeout"] = v.handshakeTimeout; }
+  if (!sovereign::adapters::IsEmptyValue(v.ech)) { j["ech"] = v.ech; }
+  if (!sovereign::adapters::IsEmptyValue(v.utls)) { j["utls"] = v.utls; }
+  if (!sovereign::adapters::IsEmptyValue(v.reality)) { j["reality"] = v.reality; }
+}
+
+inline void from_json(const nlohmann::json& j, OutboundTLSOptions& v) {
+  if (j.contains("enabled")) { v.enabled = j.at("enabled").get<decltype(v.enabled)>(); }
+  if (j.contains("engine")) { v.engine = j.at("engine").get<decltype(v.engine)>(); }
+  if (j.contains("disable_sni")) { v.disableSNI = j.at("disable_sni").get<decltype(v.disableSNI)>(); }
+  if (j.contains("server_name")) { v.serverName = j.at("server_name").get<decltype(v.serverName)>(); }
+  if (j.contains("insecure")) { v.insecure = j.at("insecure").get<decltype(v.insecure)>(); }
+  if (j.contains("alpn")) { v.alpn = j.at("alpn").get<decltype(v.alpn)>(); }
+  if (j.contains("min_version")) { v.minVersion = j.at("min_version").get<decltype(v.minVersion)>(); }
+  if (j.contains("max_version")) { v.maxVersion = j.at("max_version").get<decltype(v.maxVersion)>(); }
+  if (j.contains("cipher_suites")) { v.cipherSuites = j.at("cipher_suites").get<decltype(v.cipherSuites)>(); }
+  if (j.contains("curve_preferences")) { v.curvePreferences = j.at("curve_preferences").get<decltype(v.curvePreferences)>(); }
+  if (j.contains("certificate")) { v.certificate = j.at("certificate").get<decltype(v.certificate)>(); }
+  if (j.contains("certificate_path")) { v.certificatePath = j.at("certificate_path").get<decltype(v.certificatePath)>(); }
+  if (j.contains("certificate_public_key_sha256")) { v.certificatePublicKeySHA256 = j.at("certificate_public_key_sha256").get<decltype(v.certificatePublicKeySHA256)>(); }
+  if (j.contains("client_certificate")) { v.clientCertificate = j.at("client_certificate").get<decltype(v.clientCertificate)>(); }
+  if (j.contains("client_certificate_path")) { v.clientCertificatePath = j.at("client_certificate_path").get<decltype(v.clientCertificatePath)>(); }
+  if (j.contains("client_key")) { v.clientKey = j.at("client_key").get<decltype(v.clientKey)>(); }
+  if (j.contains("client_key_path")) { v.clientKeyPath = j.at("client_key_path").get<decltype(v.clientKeyPath)>(); }
+  if (j.contains("fragment")) { v.fragment = j.at("fragment").get<decltype(v.fragment)>(); }
+  if (j.contains("fragment_fallback_delay")) { v.fragmentFallbackDelay = j.at("fragment_fallback_delay").get<decltype(v.fragmentFallbackDelay)>(); }
+  if (j.contains("record_fragment")) { v.recordFragment = j.at("record_fragment").get<decltype(v.recordFragment)>(); }
+  if (j.contains("spoof")) { v.spoof = j.at("spoof").get<decltype(v.spoof)>(); }
+  if (j.contains("spoof_method")) { v.spoofMethod = j.at("spoof_method").get<decltype(v.spoofMethod)>(); }
+  if (j.contains("kernel_tx")) { v.kernelTx = j.at("kernel_tx").get<decltype(v.kernelTx)>(); }
+  if (j.contains("kernel_rx")) { v.kernelRx = j.at("kernel_rx").get<decltype(v.kernelRx)>(); }
+  if (j.contains("handshake_timeout")) { v.handshakeTimeout = j.at("handshake_timeout").get<decltype(v.handshakeTimeout)>(); }
+  if (j.contains("ech")) { v.ech = j.at("ech").get<decltype(v.ech)>(); }
+  if (j.contains("utls")) { v.utls = j.at("utls").get<decltype(v.utls)>(); }
+  if (j.contains("reality")) { v.reality = j.at("reality").get<decltype(v.reality)>(); }
+}
 
 struct AnyTLSOutboundOptions {
   std::string detour{};
@@ -42,7 +201,7 @@ struct AnyTLSOutboundOptions {
   nlohmann::json domainStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.DomainStrategy — needs a handwritten adapter
   std::string server{};
   std::uint16_t serverPort{};
-  std::optional<nlohmann::json> tls{};  // unmapped named type github.com/sagernet/sing-box/option.OutboundTLSOptions — needs a handwritten adapter
+  std::optional<OutboundTLSOptions> tls{};
   std::string password{};
   sovereign::adapters::Duration idleSessionCheckInterval{};
   sovereign::adapters::Duration idleSessionTimeout{};
