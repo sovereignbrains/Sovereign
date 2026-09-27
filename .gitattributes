@@ -1,0 +1,2 @@
+# Fuzz seeds are inputs, byte for byte: no line-ending conversion, no diffs.
+tests/fuzz/corpus/** binary
