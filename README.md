@@ -30,6 +30,7 @@ The client works and is in daily use; the project is between its MVP and its con
 
 - on/off, with live speed and connection count;
 - **subscription**: paste an `https://` link from the clipboard, refresh by hand or on the server's `Profile-Update-Interval`; the server sees a `sing-box` User-Agent with the pinned version;
+- **the config is yours to edit**: the subscription is kept as it arrived (`subscription.json`) and `config.json` starts as its copy. A new version replaces an unedited config silently; over your edits it waits (`subscription.new.json`) and you choose — carry your edits over to it (a three-way merge: objects key by key, tagged lists like `outbounds` by tag, route rules keeping your additions and removals in place; where both sides changed the same thing yours wins and it's listed), take the new one, or keep yours. "Back to the subscription" drops the edits. Whatever gets replaced goes to `history\` first (the last 20);
 - **protocol**: pick any option of the subscription's selector (or `auto`), with each server's latency - sing-box's own URL test through every option, run on each connect and on demand;
 - **per-app routing**: everything except a list of programs, or only the list;
 - start at sign-in, the main window.

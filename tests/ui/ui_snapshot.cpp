@@ -100,6 +100,24 @@ int Snapshots(const std::wstring& dir) {
   sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 980, 660, 96, dir + L"\\overview-error.png");
   sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Subscription, logs, 980, 660, 96,
                                             dir + L"\\subscription-error.png");
+
+  // A newer subscription over the user's edits: the choice; then, narrow,
+  // the buttons stacked; and after a carry-over, where both sides met.
+  UiContent waiting = content;
+  waiting.configEdited = true;
+  waiting.subscriptionWaiting = true;
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 980, 660, 96,
+                                            dir + L"\\subscription-waiting.png");
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Overview, logs, 980, 660, 96,
+                                            dir + L"\\overview-waiting.png");
+  waiting.choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 760, 720, 96,
+                                            dir + L"\\subscription-waiting-narrow.png");
+  UiContent merged = content;
+  merged.configEdited = true;
+  merged.mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};
+  sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Subscription, logs, 980, 660, 96,
+                                            dir + L"\\subscription-merged.png");
   return 0;
 }
 

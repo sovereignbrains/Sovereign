@@ -45,6 +45,10 @@ struct UiContent {
   std::wstring subscriptionHost; // the server's name only - the URL's path is a secret
   std::wstring subscriptionError;
   int updateHours = 0;           // the refresh interval; 0 = unknown
+  bool configEdited = false;     // config.json has edits of the user's own (config_sync.h)
+  bool subscriptionWaiting = false;  // a newer subscription waits for the user's choice
+  std::wstring choiceError;          // why that choice didn't go through
+  std::vector<std::wstring> mergeNotes;  // where carrying the edits over met the subscription's changes
 
   bool appsInclude = false;      // per-app mode: false = all except the list
   std::vector<std::wstring> apps;
@@ -69,6 +73,10 @@ enum class UiCommand : std::uint8_t {
   Toggle,
   PasteSubscription,
   RefreshSubscription,
+  TakeSubscription,  // the waiting subscription replaces the edited config
+  KeepConfig,        // the edited config stays
+  CarryOverEdits,    // the edits, merged into the waiting subscription
+  RevertConfig,      // the config back to the subscription as it arrived
   SetAppsMode,   // index: 0 all except the list, 1 only the list
   RemoveApp,     // index into apps
   AddRunning,    // anchor: where to open the list of running programs

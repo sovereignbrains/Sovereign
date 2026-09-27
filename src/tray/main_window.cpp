@@ -12,6 +12,7 @@
 #include <wil/result.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -83,6 +85,7 @@ constexpr const wchar_t* kGlyphWarning = L"\xE7BA";
 constexpr const wchar_t* kGlyphProgram = L"\xE7C4";
 constexpr const wchar_t* kGlyphStopwatch = L"\xE916";
 constexpr const wchar_t* kGlyphDownload = L"\xE896";
+constexpr const wchar_t* kGlyphUndo = L"\xE7A7";
 
 struct PageInfo {
   const wchar_t* glyph;
@@ -526,6 +529,18 @@ class Painter {
       y += 64 + kGap;
     }
 
+    // A newer subscription waits for the user's choice (the subscription page).
+    if (c.subscriptionWaiting) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
+      l.items.push_back(Make(Kind::Text, {x0 + 20, y + 10, x1 - 260, y + 34}, L"Пришла новая версия подписки"));
+      l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 34, x1 - 260, y + 56}, L"В конфиге твои правки — выбери, что оставить."));
+      Item choose = Make(Kind::Button, {x1 - 236, y + 15, x1 - 20, y + 15 + kButton}, L"Выбрать", kGlyphSync);
+      choose.action = ItemAction::Page;
+      choose.index = static_cast<int>(UiPage::Subscription);
+      l.items.push_back(std::move(choose));
+      y += 64 + kGap;
+    }
+
     // Nothing to connect with yet: the way to fix that comes first.
     if (!c.hasSubscription && c.protocols.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 76}));
@@ -610,11 +625,14 @@ class Painter {
     } else {
       state = c.subscription;
     }
-    const std::vector<std::pair<const wchar_t*, std::wstring>> fields = {
+    std::vector<std::pair<const wchar_t*, std::wstring>> fields = {
         {L"Обновлена", state},
         {L"Сервер", c.subscriptionHost.empty() ? std::wstring(L"—") : c.subscriptionHost},
         {L"Интервал", c.updateHours > 0 ? std::format(L"каждые {} ч", c.updateHours) : std::wstring(L"—")},
     };
+    if (c.hasSubscription) {
+      fields.emplace_back(L"Конфиг", c.configEdited ? L"изменён тобой" : L"как в подписке");
+    }
     const float h = static_cast<float>(fields.size()) * kRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
     for (std::size_t i = 0; i < fields.size(); ++i) {
@@ -631,6 +649,20 @@ class Painter {
     if (!c.subscriptionError.empty()) {
       y = Paragraph(l, Kind::ErrorText, c.subscriptionError, x0, x1, y) + kGap;
     }
+    if (c.subscriptionWaiting) {
+      y = Waiting(l, c, x0, x1, y) + kGap;
+    }
+    if (!c.mergeNotes.empty()) {
+      std::wstring where;
+      for (std::size_t i = 0; i < c.mergeNotes.size() && i < 5; ++i) {
+        where += (i > 0 ? L", " : L"") + c.mergeNotes[i];
+      }
+      if (c.mergeNotes.size() > 5) {
+        where += std::format(L" и ещё {}", c.mergeNotes.size() - 5);
+      }
+      y = Paragraph(l, Kind::Wrap, L"Правки перенесены. Там, где вы с подпиской изменили одно и то же, осталось твоё — проверь: " + where,
+                    x0, x1, y) + kGap;
+    }
 
     l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x0 + 260, y + kButton}, L"Вставить ссылку из буфера",
                                   kGlyphPaste, UiCommand::PasteSubscription));
@@ -638,7 +670,51 @@ class Painter {
                                UiCommand::RefreshSubscription);
     refresh.enabled = c.hasSubscription;
     l.items.push_back(std::move(refresh));
-    return y + kButton;
+    y += kButton;
+    if (c.hasSubscription && (c.configEdited || c.subscriptionWaiting)) {
+      y += 12;
+      l.items.push_back(CommandItem(Kind::Button, {x0, y, x0 + 260, y + kButton}, L"Вернуть как в подписке", kGlyphUndo,
+                                    UiCommand::RevertConfig));
+      y += kButton;
+    }
+    return y;
+  }
+
+  // A newer subscription met the user's edits: the three ways on.
+  float Waiting(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    const float left = x0 + 20;
+    const float right = x1 - 20;
+    const wchar_t* explain = L"В конфиге есть твои правки, поэтому он не заменён сам — пока работает прежний. "
+                             L"Перенести: твои правки лягут поверх новой версии. Что бы ты ни выбрал, "
+                             L"прежний конфиг сохранится в папке history.";
+    const float textHeight = TextHeight(explain, wrap_.get(), right - left);
+    const bool inRow = right - left >= 3 * 180 + 2 * 12;
+    const float buttons = inRow ? kButton : 3 * kButton + 2 * 8;
+    const std::wstring& error = c.choiceError;
+    const float errorHeight = error.empty() ? 0 : TextHeight(error, wrap_.get(), right - left - 28) + 12;
+    const float h = 16 + 28 + 6 + textHeight + 16 + errorHeight + buttons + 20;
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+    float top = y + 16;
+    l.items.push_back(Make(Kind::Heading, {left, top, right, top + 28}, L"Пришла новая версия подписки"));
+    top += 28 + 6;
+    l.items.push_back(Make(Kind::Wrap, {left, top, right, top + textHeight}, explain));
+    top += textHeight + 16;
+    if (!error.empty()) {
+      top = Paragraph(l, Kind::ErrorText, error, left, right, top) + 12;
+    }
+    const std::array<std::tuple<Kind, const wchar_t*, const wchar_t*, UiCommand>, 3> choices = {{
+        {Kind::AccentButton, L"Перенести правки", kGlyphSync, UiCommand::CarryOverEdits},
+        {Kind::Button, L"Взять новую", kGlyphDownload, UiCommand::TakeSubscription},
+        {Kind::Button, L"Оставить мою", kGlyphCheck, UiCommand::KeepConfig},
+    }};
+    const float width = inRow ? (right - left - 2 * 12) / 3 : right - left;
+    for (std::size_t i = 0; i < choices.size(); ++i) {
+      const auto& [kind, label, glyph, command] = choices[i];
+      const float bx = inRow ? left + static_cast<float>(i) * (width + 12) : left;
+      const float by = inRow ? top : top + static_cast<float>(i) * (kButton + 8);
+      l.items.push_back(CommandItem(kind, {bx, by, bx + width, by + kButton}, label, glyph, command));
+    }
+    return y + h;
   }
 
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {

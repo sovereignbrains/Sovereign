@@ -7,10 +7,12 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 namespace sovereign::tray {
 
@@ -103,5 +105,44 @@ void SaveSettings(const TraySettings& settings) {
 std::optional<std::string> LoadConfig() { return ReadText(DataDir() / L"config.json"); }
 
 void SaveConfig(const std::string& text) { WriteTextAtomically(DataDir() / L"config.json", text); }
+
+std::optional<std::string> LoadOriginal() { return ReadText(DataDir() / L"subscription.json"); }
+
+void SaveOriginal(const std::string& text) { WriteTextAtomically(DataDir() / L"subscription.json", text); }
+
+std::optional<std::string> LoadPending() { return ReadText(DataDir() / L"subscription.new.json"); }
+
+void SavePending(const std::string& text) { WriteTextAtomically(DataDir() / L"subscription.new.json", text); }
+
+void ClearPending() {
+  std::error_code ec;
+  std::filesystem::remove(DataDir() / L"subscription.new.json", ec);  // no file: false, not an error
+  THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
+}
+
+void SaveHistory(const std::string& text) {
+  const std::filesystem::path dir = DataDir() / L"history";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
+  SYSTEMTIME now{};
+  GetSystemTime(&now);
+  WriteTextAtomically(dir / std::format(L"{:04}{:02}{:02}-{:02}{:02}{:02}-{:03}.json", now.wYear, now.wMonth, now.wDay,
+                                         now.wHour, now.wMinute, now.wSecond, now.wMilliseconds),
+                      text);
+
+  // The names sort by time: drop the oldest. A file that won't go stays for
+  // the next time.
+  std::vector<std::filesystem::path> kept;
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (entry.path().extension() == L".json") {
+      kept.push_back(entry.path());
+    }
+  }
+  std::sort(kept.begin(), kept.end());
+  for (std::size_t i = 0; i + kHistoryKeep < kept.size(); ++i) {
+    std::filesystem::remove(kept[i], ec);
+  }
+}
 
 }  // namespace sovereign::tray

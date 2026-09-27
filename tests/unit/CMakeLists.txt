@@ -46,6 +46,11 @@ target_link_libraries(unit-update PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-update)
 add_test(NAME unit-update COMMAND unit-update)
 
+add_executable(unit-config-sync config_sync_test.cpp check.h)
+target_link_libraries(unit-config-sync PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-config-sync)
+add_test(NAME unit-config-sync COMMAND unit-config-sync)
+
 add_executable(unit-log-lines log_lines_test.cpp check.h)
 target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-lines)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -17,8 +18,17 @@ namespace sovereign::tray {
 //
 //   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours",
 //                 "appsMode", "apps", "protocol"}
-//   config.json  the sing-box config box_start sends: written by the
-//                subscription refresh, or by hand when there's no subscription
+//   config.json            the sing-box config: the subscription's copy, the
+//                          user's edits on it, or by hand when there's no
+//                          subscription; the tray adds its own bits (the
+//                          protocol pick, the apps, the cache file) when it
+//                          sends it to box_start
+//   subscription.json      the subscription as it last arrived and was taken:
+//                          what config.json is based on (config_sync.h)
+//   subscription.new.json  a newer one that waits for the user's choice,
+//                          because config.json has edits of their own
+//   history\               config.json as it was before each replacement,
+//                          the newest kHistoryKeep, named by UTC time
 
 std::filesystem::path DataDir();  // created if missing
 
@@ -42,5 +52,16 @@ void SaveSettings(const TraySettings& settings);
 std::optional<std::string> LoadConfig();
 // Atomic, like SaveSettings.
 void SaveConfig(const std::string& text);
+
+std::optional<std::string> LoadOriginal();
+void SaveOriginal(const std::string& text);
+std::optional<std::string> LoadPending();
+void SavePending(const std::string& text);
+void ClearPending();  // no error if there is none
+
+// Keeps `text` (config.json about to be replaced) in history\, dropping the
+// oldest beyond kHistoryKeep.
+inline constexpr std::size_t kHistoryKeep = 20;
+void SaveHistory(const std::string& text);
 
 }  // namespace sovereign::tray
