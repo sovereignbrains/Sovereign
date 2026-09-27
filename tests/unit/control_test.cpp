@@ -55,9 +55,21 @@ class FakeCore final : public ICore {
     return result;
   }
 
+  std::string StartUrlTest(const sovereign::service::UrlTestRequest& request) override {
+    if (!running) {
+      return "box not running";
+    }
+    urlTest = request;
+    return {};
+  }
+
+  std::vector<sovereign::service::DelayResult> Delays() override { return delays; }
+
   void SetLogSink(LogSink sink) override { installedSink = std::move(sink); }
 
   bool running = false;
+  std::optional<sovereign::service::UrlTestRequest> urlTest;
+  std::vector<sovereign::service::DelayResult> delays;
   std::string startError;
   std::string stopError;
   std::string startedWith;
@@ -106,13 +118,60 @@ void TestNoCoreLoaded() {
   std::optional<std::string> lastConfig;
   ControlHandler handler(nullptr, log, lastConfig);
 
-  for (const char* cmd : {"box_ping", "box_stop", "box_stats"}) {
+  for (const char* cmd : {"box_ping", "box_stop", "box_stats", "box_delays"}) {
     CHECK(IsError(Send(handler, json{{"cmd", cmd}}.dump()), "gocore not loaded"));
   }
   CHECK(IsError(Send(handler, R"({"cmd":"box_start","config":{}})"), "gocore not loaded"));
   // The log ring belongs to the service and keeps answering without a core.
   const json logs = Send(handler, R"({"cmd":"box_logs"})");
   CHECK(logs.value("cmd", "") == "box_logs" && logs["entries"].size() == 1);
+}
+
+// box_urltest checks what it passes on to the core; box_delays reports the
+// core's results in the pipe's shape.
+void TestUrlTest() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  ControlHandler handler(&core, log, lastConfig);
+  const auto rejected = [&](const std::string& request) {
+    return Send(handler, request).value("cmd", "") == "error" && !core.urlTest;
+  };
+  CHECK(IsError(Send(handler, R"({"cmd":"box_urltest","tags":["a"]})"), "box not running"));
+  core.running = true;
+  CHECK(rejected(R"({"cmd":"box_urltest"})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":[]})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":"a"})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a",5]})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":[""]})"));
+  CHECK(rejected(json{{"cmd", "box_urltest"}, {"tags", {std::string(300, 'x')}}}.dump()));
+  CHECK(rejected(json{{"cmd", "box_urltest"}, {"tags", std::vector<std::string>(257, "a")}}.dump()));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a"],"url":"file:///c:/x"})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a"],"url":"https:///path"})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a"],"url":"http://h/a b"})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a"],"url":7})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a"],"timeout_ms":999})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a"],"timeout_ms":30001})"));
+  CHECK(rejected(R"({"cmd":"box_urltest","tags":["a"],"timeout_ms":"5000"})"));
+
+  // Defaults: sing-box's own test URL, five seconds.
+  CHECK(Send(handler, R"({"cmd":"box_urltest","tags":["nl","fi"]})").value("cmd", "") == "box_urltest_started");
+  CHECK(core.urlTest && core.urlTest->tags == std::vector<std::string>({"nl", "fi"}));
+  CHECK(core.urlTest && core.urlTest->url == "https://www.gstatic.com/generate_204");
+  CHECK(core.urlTest && core.urlTest->timeout == std::chrono::milliseconds(5000));
+  CHECK(Send(handler, R"({"cmd":"box_urltest","tags":["nl"],"url":"http://cp.cloudflare.com/","timeout_ms":2000})")
+            .value("cmd", "") == "box_urltest_started");
+  CHECK(core.urlTest && core.urlTest->url == "http://cp.cloudflare.com/" &&
+        core.urlTest->timeout == std::chrono::milliseconds(2000));
+
+  using sovereign::service::DelayResult;
+  core.delays = {{"nl", DelayResult::State::Ok, 48, {}},
+                 {"fi", DelayResult::State::Failed, 0, "i/o timeout"},
+                 {"de", DelayResult::State::Pending, 0, {}}};
+  const json delays = Send(handler, R"({"cmd":"box_delays"})");
+  CHECK(delays.value("cmd", "") == "box_delays");
+  CHECK(delays["results"] == json::parse(R"([{"tag":"nl","delay":48},{"tag":"fi","error":"i/o timeout"},)"
+                                         R"({"tag":"de","pending":true}])"));
 }
 
 void TestSha256KnownVectors() {
@@ -327,6 +386,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestReaderBehindRingDrop();
     TestReaderAheadAfterRestart();
     TestLogsCarryTime();
+    TestUrlTest();
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;

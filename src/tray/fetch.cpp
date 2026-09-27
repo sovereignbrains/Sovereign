@@ -6,7 +6,9 @@
 #include <wil/resource.h>
 
 #include <format>
+#include <optional>
 #include <string_view>
+#include <utility>
 
 #include "subscription.h"
 
@@ -30,7 +32,18 @@ std::string Narrow(std::wstring_view wide) {
 
 }  // namespace
 
-std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent) {
+namespace {
+
+struct Response {
+  DWORD status = 0;
+  std::string body;
+  std::optional<std::string> header;  // `headerName`'s value, if asked for and sent
+};
+
+// One GET over https; `what` names the server in errors ("сервер подписки").
+// Redirects are followed https to https only (WinHTTP's default policy).
+std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std::wstring& userAgent,
+                                              std::size_t maxBytes, const wchar_t* headerName, std::string_view what) {
   if (!IsHttpsUrl(url)) {
     return std::unexpected("ссылка должна быть https://");
   }
@@ -56,7 +69,7 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
 
   const wil::unique_winhttp_hinternet connection(WinHttpConnect(session.get(), host.c_str(), parts.nPort, 0));
   if (!connection) {
-    return std::unexpected(Failure("не удалось подключиться к серверу подписки"));
+    return std::unexpected(Failure(std::format("не удалось подключиться: {}", what)));
   }
   const wil::unique_winhttp_hinternet request(WinHttpOpenRequest(connection.get(), L"GET", path.c_str(), nullptr,
                                                                  WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
@@ -66,26 +79,25 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
   }
   if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
       !WinHttpReceiveResponse(request.get(), nullptr)) {
-    return std::unexpected(Failure("сервер подписки не ответил"));
+    return std::unexpected(Failure(std::format("{} не ответил", what)));
   }
 
-  DWORD status = 0;
-  DWORD statusSize = sizeof status;
+  Response response;
+  DWORD statusSize = sizeof response.status;
   if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                           WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX)) {
+                           WINHTTP_HEADER_NAME_BY_INDEX, &response.status, &statusSize, WINHTTP_NO_HEADER_INDEX)) {
     return std::unexpected(Failure("нет кода ответа"));
   }
-  if (status != 200) {
-    return std::unexpected(status == 404 ? std::string("сервер не знает такую подписку (404) - ссылку сменили?")
-                                         : std::format("сервер ответил {}", status));
+  if (response.status != 200) {
+    return response;
   }
-
-  FetchResult result;
-  wchar_t header[64]{};
-  DWORD headerSize = sizeof header;
-  if (WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CUSTOM, L"Profile-Update-Interval", header, &headerSize,
-                          WINHTTP_NO_HEADER_INDEX)) {
-    result.updateInterval = ParseUpdateInterval(Narrow(std::wstring_view(header, headerSize / sizeof(wchar_t))));
+  if (headerName != nullptr) {
+    wchar_t header[64]{};
+    DWORD headerSize = sizeof header;
+    if (WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CUSTOM, headerName, header, &headerSize,
+                            WINHTTP_NO_HEADER_INDEX)) {
+      response.header = Narrow(std::wstring_view(header, headerSize / sizeof(wchar_t)));
+    }
   }
 
   for (;;) {
@@ -96,18 +108,50 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
     if (available == 0) {
       break;
     }
-    if (result.body.size() + available > kMaxSubscriptionBytes) {
-      return std::unexpected("ответ больше 4 МБ - это не конфиг");
+    if (response.body.size() + available > maxBytes) {
+      return std::unexpected(std::format("ответ больше {} МБ", maxBytes / (std::size_t{1024} * 1024)));
     }
-    const std::size_t offset = result.body.size();
-    result.body.resize(offset + available);
+    const std::size_t offset = response.body.size();
+    response.body.resize(offset + available);
     DWORD read = 0;
-    if (!WinHttpReadData(request.get(), result.body.data() + offset, available, &read)) {
+    if (!WinHttpReadData(request.get(), response.body.data() + offset, available, &read)) {
       return std::unexpected(Failure("обрыв при чтении ответа"));
     }
-    result.body.resize(offset + read);
+    response.body.resize(offset + read);
+  }
+  return response;
+}
+
+}  // namespace
+
+std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent) {
+  auto response = HttpsGet(url, userAgent, kMaxSubscriptionBytes, L"Profile-Update-Interval", "сервер подписки");
+  if (!response) {
+    return std::unexpected(response.error());
+  }
+  if (response->status != 200) {
+    return std::unexpected(response->status == 404
+                               ? std::string("сервер не знает такую подписку (404) - ссылку сменили?")
+                               : std::format("сервер ответил {}", response->status));
+  }
+  FetchResult result;
+  result.body = std::move(response->body);
+  if (response->header) {
+    result.updateInterval = ParseUpdateInterval(*response->header);
   }
   return result;
+}
+
+std::expected<std::string, std::string> Download(const std::wstring& url, const std::wstring& userAgent,
+                                                 std::size_t maxBytes) {
+  auto response = HttpsGet(url, userAgent, maxBytes, nullptr, "сервер");
+  if (!response) {
+    return std::unexpected(response.error());
+  }
+  if (response->status != 200) {
+    return std::unexpected(std::format("сервер ответил {}", response->status));
+  }
+  return std::move(response->body);
 }
 
 }  // namespace sovereign::tray

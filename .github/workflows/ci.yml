@@ -96,6 +96,16 @@ jobs:
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure
 
+      # The main window's pages as the ui-snapshot test drew them (tests/ui): a
+      # change to the window can be looked at without building it.
+      - name: Keep the UI snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-snapshots
+          path: build/ci/tests/ui/snapshots
+          if-no-files-found: ignore
+
       # Real GoCore (the ASan job can't host the Go runtime, issue #9), recorded by an ETW
       # session: trace_smoke.ps1 runs core_smoke.ps1 -Mode gocore inside it and checks the
       # decoded events, including that a config's password reaches none of them. Needs
@@ -109,6 +119,87 @@ jobs:
       - name: Smoke test - ETW flight recorder (install, service, uninstall)
         shell: pwsh
         run: pwsh tests/smoke/autologger_smoke.ps1 -Exe build/ci/src/service/sovereign-core.exe
+
+  # The installer as a release ships it (installer/build.ps1: Release build,
+  # Inno Setup), then installed, updated in place and uninstalled on the
+  # runner the way a user and the tray's updater would (installer/smoke.ps1).
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Locate MinGW-w64 gcc (needed for gocore's cgo build; MSVC can't compile cgo's C side)
+        shell: pwsh
+        run: |
+          # windows-latest ships a MinGW-w64 toolchain at C:\mingw64 already
+          # (visible via __VSCMD_PREINIT_PATH) — no need to install one via
+          # egor-tensin/setup-mingw, which as of this writing fails outright
+          # (it tries to delete libpthread.dll.a to force static linking,
+          # a file that doesn't exist in the current chocolatey mingw
+          # package layout).
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) {
+            $gcc = Get-ChildItem "C:\mingw64\bin\gcc.exe" -ErrorAction SilentlyContinue
+            if ($gcc) { Add-Content -Path $env:GITHUB_PATH -Value "C:\mingw64\bin" }
+          }
+          if (-not (Get-Command gcc -ErrorAction SilentlyContinue) -and -not $gcc) {
+            throw "no gcc found on PATH or at C:\mingw64\bin"
+          }
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            if (-not (Test-Path "C:\vcpkg\.git")) {
+              git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            }
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
+
+      - name: Fetch pinned sing-box (gocore depends on it via go.mod replace)
+        shell: pwsh
+        run: |
+          $tag = (Get-Content tools/codegen/sing-box.version)[0]
+          git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
+
+      - name: Fetch pinned wintun.dll (sing-tun loads it at runtime; see tools/codegen/wintun.version)
+        shell: pwsh
+        run: |
+          $version = (Get-Content tools/codegen/wintun.version)[0]
+          $expectedHash = (Get-Content tools/codegen/wintun.version)[1]
+          $zipPath = "$env:RUNNER_TEMP\wintun-$version.zip"
+          # Retries + an explicit check: one silent failed download (25.09.2026) surfaced
+          # only as "cannot find path" from Get-FileHash below.
+          curl.exe -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 -o $zipPath "https://www.wintun.net/builds/wintun-$version.zip"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipPath)) { throw "wintun-$version.zip download failed (curl exit $LASTEXITCODE)" }
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          if ($actualHash -ne $expectedHash) {
+            throw "wintun-$version.zip sha256 mismatch: expected $expectedHash, got $actualHash"
+          }
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\wintun-extracted" -Force
+          New-Item -ItemType Directory -Force -Path vendor/wintun/amd64 | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\wintun-extracted\wintun\bin\amd64\wintun.dll" vendor/wintun/amd64/wintun.dll
+
+      # The conformance reference (tests/conformance): the official release of the pinned
+      # version, exactly the binary the golden ClientHellos were recorded from. A sing-box
+      # bump fails here until the pin and the golden files are renewed on purpose.
+      - name: Build the installer
+        shell: pwsh
+        run: pwsh installer/build.ps1 -Version 0.1.0 -OutDir out
+
+      - name: Install, update, uninstall
+        shell: pwsh
+        run: pwsh installer/smoke.ps1 -Installer out/Sovereign-Setup-0.1.0.exe
+
+      - name: Keep the installer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: out
+          if-no-files-found: ignore
 
   analyze:
     runs-on: windows-latest
@@ -295,7 +386,7 @@ jobs:
         run: cmake --preset ci
 
       - name: clang-tidy
-        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/trace.cpp src/service/autologger.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/golden/duration_test.cpp tests/golden/integer_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp tests/unit/tray_model_test.cpp tests/unit/subscription_test.cpp tests/unit/app_rules_test.cpp tests/unit/protocol_choice_test.cpp tests/unit/log_lines_test.cpp tests/unit/cache_file_test.cpp src/tray/cache_file.cpp src/tray/tray_model.cpp src/tray/subscription.cpp src/tray/app_rules.cpp src/tray/protocol_choice.cpp src/tray/flyout.cpp src/tray/fetch.cpp src/tray/pipe_client.cpp src/tray/settings.cpp src/tray/icons.cpp src/tray/log_lines.cpp src/tray/autostart.cpp src/tray/log_window.cpp src/conformance/client_hello.cpp tests/conformance/client_hello_test.cpp tests/conformance/harness.cpp tests/fuzz/client_hello_fuzz.cpp tests/fuzz/config_fuzz.cpp tests/fuzz/tray_input_fuzz.cpp tests/fuzz/control_fuzz.cpp
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/trace.cpp src/service/autologger.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/golden/duration_test.cpp tests/golden/integer_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp tests/unit/tray_model_test.cpp tests/unit/subscription_test.cpp tests/unit/app_rules_test.cpp tests/unit/protocol_choice_test.cpp tests/unit/log_lines_test.cpp tests/unit/cache_file_test.cpp tests/unit/delays_test.cpp tests/unit/update_test.cpp src/tray/cache_file.cpp src/tray/delays.cpp src/tray/update.cpp src/tray/updater.cpp src/tray/tray_model.cpp src/tray/subscription.cpp src/tray/app_rules.cpp src/tray/protocol_choice.cpp src/tray/flyout.cpp src/tray/fetch.cpp src/tray/pipe_client.cpp src/tray/settings.cpp src/tray/icons.cpp src/tray/log_lines.cpp src/tray/autostart.cpp src/tray/main_window.cpp tests/ui/ui_snapshot.cpp src/conformance/client_hello.cpp tests/conformance/client_hello_test.cpp tests/conformance/harness.cpp tests/fuzz/client_hello_fuzz.cpp tests/fuzz/config_fuzz.cpp tests/fuzz/tray_input_fuzz.cpp tests/fuzz/control_fuzz.cpp
 
   # libFuzzer targets (tests/fuzz): a minute each on every push, twenty minutes each
   # in the nightly run. A finding fails the job and its inputs are kept as an artifact;

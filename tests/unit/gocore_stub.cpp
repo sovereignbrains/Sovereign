@@ -44,6 +44,7 @@ std::mutex stateMutex;  // running/generation/lastConfig
 bool running = false;
 std::int64_t generation = 0;
 std::string lastConfig;
+std::string lastUrlTest;
 
 // Held for the whole callback invocation and for the swap - the same
 // guarantee gocore gives with its RWMutex (gocore/log_bridge.go).
@@ -103,6 +104,22 @@ __declspec(dllexport) int __cdecl box_stats(std::int64_t* uplink, std::int64_t* 
   return running ? 1 : 0;
 }
 
+// Starts nothing: remembers the request and answers what gocore would.
+__declspec(dllexport) char* __cdecl box_urltest(const char* request) {
+  const std::scoped_lock lock(stateMutex);
+  if (!running) {
+    return Allocate("box not running");
+  }
+  lastUrlTest = (request != nullptr) ? request : "";
+  return Allocate("");
+}
+
+// A fixed answer covering every result shape.
+__declspec(dllexport) char* __cdecl box_delays() {
+  return Allocate(R"({"results":[{"tag":"nl","delay":48},{"tag":"fi","error":"i/o timeout"},)"
+                  R"({"tag":"de","pending":true},{"delay":5},"junk"]})");
+}
+
 __declspec(dllexport) void __cdecl box_set_log_callback(LogCallback callback, void* context) {
   const std::scoped_lock lock(logMutex);
   logCallback = callback;
@@ -134,6 +151,17 @@ __declspec(dllexport) void __cdecl stub_last_config(char* buffer, std::size_t si
   }
   const std::size_t n = (lastConfig.size() < size - 1) ? lastConfig.size() : size - 1;
   std::memcpy(buffer, lastConfig.data(), n);
+  buffer[n] = '\0';
+}
+
+// Copies the request of the last accepted box_urltest into `buffer`.
+__declspec(dllexport) void __cdecl stub_last_urltest(char* buffer, std::size_t size) {
+  const std::scoped_lock lock(stateMutex);
+  if (size == 0) {
+    return;
+  }
+  const std::size_t n = (lastUrlTest.size() < size - 1) ? lastUrlTest.size() : size - 1;
+  std::memcpy(buffer, lastUrlTest.data(), n);
   buffer[n] = '\0';
 }
 

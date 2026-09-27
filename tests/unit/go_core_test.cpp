@@ -9,6 +9,9 @@
 #include <wil/resource.h>
 #include <wil/result.h>
 
+#include <nlohmann/json.hpp>
+
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -58,6 +61,7 @@ struct StubControls {
   int(__cdecl* outstanding)() = nullptr;
   int(__cdecl* hasLogCallback)() = nullptr;
   void(__cdecl* lastConfig)(char*, std::size_t) = nullptr;
+  void(__cdecl* lastUrlTest)(char*, std::size_t) = nullptr;
   void(__cdecl* emitLog)(int, const char*) = nullptr;
   void(__cdecl* emitLogFromThread)(int, const char*) = nullptr;
 };
@@ -67,6 +71,7 @@ StubControls ResolveControls(HMODULE stub) {
   c.outstanding = StubExport<decltype(c.outstanding)>(stub, "stub_outstanding");
   c.hasLogCallback = StubExport<decltype(c.hasLogCallback)>(stub, "stub_has_log_callback");
   c.lastConfig = StubExport<decltype(c.lastConfig)>(stub, "stub_last_config");
+  c.lastUrlTest = StubExport<decltype(c.lastUrlTest)>(stub, "stub_last_urltest");
   c.emitLog = StubExport<decltype(c.emitLog)>(stub, "stub_emit_log");
   c.emitLogFromThread = StubExport<decltype(c.emitLogFromThread)>(stub, "stub_emit_log_from_thread");
   return c;
@@ -110,6 +115,26 @@ void TestBridge(const std::wstring& stubPath) {
     CHECK(core->Start(config) == "box already started; call box_stop first");
     CHECK(stub.outstanding() == 0);
 
+    // The latency test: the request crosses as JSON, the results come back
+    // parsed, and whatever of them isn't a result is skipped.
+    sovereign::service::UrlTestRequest test;
+    test.tags = {"nl", "fi"};
+    test.url = "https://example.com/204";
+    test.timeout = std::chrono::milliseconds(3000);
+    CHECK(core->StartUrlTest(test).empty());
+    char request[256]{};
+    stub.lastUrlTest(request, sizeof request);
+    const auto sent = nlohmann::json::parse(request);
+    CHECK(sent["tags"] == nlohmann::json({"nl", "fi"}) && sent["url"] == "https://example.com/204" &&
+          sent["timeout_ms"] == 3000);
+    using State = sovereign::service::DelayResult::State;
+    const auto delays = core->Delays();
+    CHECK(delays.size() == 3);
+    CHECK(delays.size() == 3 && delays[0].tag == "nl" && delays[0].state == State::Ok && delays[0].delayMs == 48);
+    CHECK(delays.size() == 3 && delays[1].state == State::Failed && delays[1].error == "i/o timeout");
+    CHECK(delays.size() == 3 && delays[2].tag == "de" && delays[2].state == State::Pending);
+    CHECK(stub.outstanding() == 0);
+
     const auto running = core->Stats();
     CHECK(running.running);
     CHECK(running.uplinkBytes == 1000);
@@ -118,6 +143,7 @@ void TestBridge(const std::wstring& stubPath) {
     CHECK(running.generation == 1);
 
     CHECK(core->Stop().empty());
+    CHECK(core->StartUrlTest(test) == "box not running");
     const auto stopped = core->Stats();
     CHECK(!stopped.running);
     CHECK(stopped.generation == 1);

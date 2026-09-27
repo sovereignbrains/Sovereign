@@ -3,6 +3,7 @@
 #include <wil/resource.h>
 #include <wil/result.h>
 
+#include <array>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -178,6 +179,10 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
   ReportStatus(state.statusHandle, SERVICE_STOPPED);
 }
 
+// Registers the service to start with Windows, or - when it exists already, a
+// reinstall or an update by the installer - points it at this exe again.
+// Idempotent, like InstallAutoLogger. Doesn't start it: the installer does,
+// and a developer runs --run or Start-Service.
 void InstallService() {
   wil::unique_schandle scm(
       OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE));
@@ -189,14 +194,50 @@ void InstallService() {
 
   wil::unique_schandle service(CreateServiceW(
       scm.get(), kServiceName, kServiceDisplayName, SERVICE_ALL_ACCESS,
-      SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+      SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
       quotedPath.c_str(), nullptr, nullptr, nullptr, nullptr, nullptr));
-  THROW_LAST_ERROR_IF(!service);
-  std::wcout << L"Служба " << kServiceName << L" установлена.\n";
+  if (!service && GetLastError() == ERROR_SERVICE_EXISTS) {
+    service.reset(OpenServiceW(scm.get(), kServiceName, SERVICE_ALL_ACCESS));
+    THROW_LAST_ERROR_IF(!service);
+    THROW_IF_WIN32_BOOL_FALSE(ChangeServiceConfigW(service.get(), SERVICE_NO_CHANGE, SERVICE_AUTO_START,
+                                                   SERVICE_NO_CHANGE, quotedPath.c_str(), nullptr, nullptr,
+                                                   nullptr, nullptr, nullptr, kServiceDisplayName));
+    std::wcout << L"Служба " << kServiceName << L" уже была - обновлена.\n";
+  } else {
+    THROW_LAST_ERROR_IF(!service);
+    std::wcout << L"Служба " << kServiceName << L" установлена.\n";
+  }
+
+  // A core that crashes comes back by itself: twice after 5 s, then it stays
+  // down until the counter resets a day later (a crash loop shouldn't spin).
+  std::array<SC_ACTION, 3> actions{{{SC_ACTION_RESTART, 5000}, {SC_ACTION_RESTART, 5000}, {SC_ACTION_NONE, 0}}};
+  SERVICE_FAILURE_ACTIONSW failure{};
+  failure.dwResetPeriod = 24 * 60 * 60;
+  failure.cActions = static_cast<DWORD>(actions.size());
+  failure.lpsaActions = actions.data();
+  THROW_IF_WIN32_BOOL_FALSE(ChangeServiceConfig2W(service.get(), SERVICE_CONFIG_FAILURE_ACTIONS, &failure));
 
   sovereign::service::InstallAutoLogger();
   std::wcout << L"ETW flight recorder " << sovereign::service::kAutoLoggerName
              << L" -> %ProgramData%\\Sovereign\\Logs\\sovereign.etl (tools/trace/sovtrace.ps1).\n";
+}
+
+// Stops the service if it runs and waits for it (its exe and DLLs stay locked
+// until it exits - the installer replaces them next).
+void StopService(SC_HANDLE service) {
+  SERVICE_STATUS status{};
+  if (!ControlService(service, SERVICE_CONTROL_STOP, &status)) {
+    const DWORD error = GetLastError();
+    THROW_WIN32_IF(error, error != ERROR_SERVICE_NOT_ACTIVE && error != ERROR_SERVICE_CANNOT_ACCEPT_CTRL);
+  }
+  for (int waited = 0; waited < 300; ++waited) {
+    THROW_IF_WIN32_BOOL_FALSE(QueryServiceStatus(service, &status));
+    if (status.dwCurrentState == SERVICE_STOPPED) {
+      return;
+    }
+    Sleep(100);
+  }
+  THROW_WIN32(ERROR_SERVICE_REQUEST_TIMEOUT);
 }
 
 void UninstallService() {
@@ -208,8 +249,13 @@ void UninstallService() {
   THROW_LAST_ERROR_IF(!scm);
 
   wil::unique_schandle service(
-      OpenServiceW(scm.get(), kServiceName, DELETE));
+      OpenServiceW(scm.get(), kServiceName, DELETE | SERVICE_STOP | SERVICE_QUERY_STATUS));
+  if (!service && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST) {
+    std::wcout << L"Службы " << kServiceName << L" нет.\n";
+    return;
+  }
   THROW_LAST_ERROR_IF(!service);
+  StopService(service.get());
   THROW_LAST_ERROR_IF(!DeleteService(service.get()));
 
   std::wcout << L"Служба " << kServiceName << L" удалена.\n";

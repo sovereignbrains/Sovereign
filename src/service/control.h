@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -35,9 +36,20 @@ using CommandObserver = std::function<void(const CommandRecord&)>;
 // exercised with a fake ICore (tests/unit/control_test.cpp).
 //
 // Commands: ping (echo), box_ping, box_start {config}, box_stop,
-// box_stats, box_logs {since}.
+// box_stats, box_logs {since}, box_urltest {tags, url?, timeout_ms?},
+// box_delays.
 class ControlHandler {
  public:
+  // box_urltest's limits: what one test may ask of the core.
+  static constexpr std::size_t kMaxUrlTestTags = 256;
+  static constexpr std::size_t kMaxTagBytes = 256;
+  static constexpr std::size_t kMaxUrlBytes = 2048;
+  static constexpr std::int64_t kMinUrlTestTimeoutMs = 1000;
+  static constexpr std::int64_t kMaxUrlTestTimeoutMs = 30000;
+  static constexpr std::int64_t kDefaultUrlTestTimeoutMs = 5000;
+  // sing-box's own default (common/urltest).
+  static constexpr std::string_view kDefaultUrlTestUrl = "https://www.gstatic.com/generate_204";
+
   // A box_logs response is capped so it always fits one read of the tray's
   // pipe buffer; the rest is fetched with the returned `next`.
   static constexpr std::size_t kMaxLogsResponseBytes = 3584;

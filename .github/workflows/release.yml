@@ -1,0 +1,108 @@
+name: Release
+
+# A release: the installer and its checksum on a GitHub release, which the
+# tray's updater picks up (src/tray/updater.h). Either push a tag
+#   git tag v0.2.0 && git push origin v0.2.0
+# or run this workflow by hand with the version: it tags the commit it runs on.
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, MAJOR.MINOR.PATCH (the tag v<version> is created on the chosen branch)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Locate MinGW-w64 gcc (needed for gocore's cgo build; MSVC can't compile cgo's C side)
+        shell: pwsh
+        run: |
+          # windows-latest ships a MinGW-w64 toolchain at C:\mingw64 already
+          # (visible via __VSCMD_PREINIT_PATH) — no need to install one via
+          # egor-tensin/setup-mingw, which as of this writing fails outright
+          # (it tries to delete libpthread.dll.a to force static linking,
+          # a file that doesn't exist in the current chocolatey mingw
+          # package layout).
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) {
+            $gcc = Get-ChildItem "C:\mingw64\bin\gcc.exe" -ErrorAction SilentlyContinue
+            if ($gcc) { Add-Content -Path $env:GITHUB_PATH -Value "C:\mingw64\bin" }
+          }
+          if (-not (Get-Command gcc -ErrorAction SilentlyContinue) -and -not $gcc) {
+            throw "no gcc found on PATH or at C:\mingw64\bin"
+          }
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            if (-not (Test-Path "C:\vcpkg\.git")) {
+              git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            }
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
+
+      - name: Fetch pinned sing-box (gocore depends on it via go.mod replace)
+        shell: pwsh
+        run: |
+          $tag = (Get-Content tools/codegen/sing-box.version)[0]
+          git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
+
+      - name: Fetch pinned wintun.dll (sing-tun loads it at runtime; see tools/codegen/wintun.version)
+        shell: pwsh
+        run: |
+          $version = (Get-Content tools/codegen/wintun.version)[0]
+          $expectedHash = (Get-Content tools/codegen/wintun.version)[1]
+          $zipPath = "$env:RUNNER_TEMP\wintun-$version.zip"
+          # Retries + an explicit check: one silent failed download (25.09.2026) surfaced
+          # only as "cannot find path" from Get-FileHash below.
+          curl.exe -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 -o $zipPath "https://www.wintun.net/builds/wintun-$version.zip"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipPath)) { throw "wintun-$version.zip download failed (curl exit $LASTEXITCODE)" }
+          $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+          if ($actualHash -ne $expectedHash) {
+            throw "wintun-$version.zip sha256 mismatch: expected $expectedHash, got $actualHash"
+          }
+          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP\wintun-extracted" -Force
+          New-Item -ItemType Directory -Force -Path vendor/wintun/amd64 | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\wintun-extracted\wintun\bin\amd64\wintun.dll" vendor/wintun/amd64/wintun.dll
+
+      # The conformance reference (tests/conformance): the official release of the pinned
+      # version, exactly the binary the golden ClientHellos were recorded from. A sing-box
+      # bump fails here until the pin and the golden files are renewed on purpose.
+      - name: Version
+        shell: pwsh
+        env:
+          # Through the environment, not pasted into the script: the input is free text.
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $version = if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_VERSION } else { $env:GITHUB_REF_NAME.TrimStart('v') }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "not a MAJOR.MINOR.PATCH version: '$version'" }
+          Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$version"
+
+      - name: Build the installer
+        shell: pwsh
+        run: pwsh installer/build.ps1 -Version $env:VERSION -OutDir out
+
+      # The same check the CI's installer job runs: a release never ships an
+      # installer that didn't install, update and uninstall cleanly.
+      - name: Install, update, uninstall
+        shell: pwsh
+        run: pwsh installer/smoke.ps1 -Installer "out/Sovereign-Setup-$env:VERSION.exe"
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$env:VERSION" out/* --title "Sovereign $env:VERSION" --generate-notes --target $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }

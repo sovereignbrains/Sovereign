@@ -42,6 +42,7 @@ var (
 	boxMu         sync.Mutex
 	boxInstance   *box.Box
 	boxTraffic    *trafficcontrol.Manager
+	boxContext    context.Context
 	boxGeneration int64
 )
 
@@ -111,6 +112,8 @@ func box_start(configJSON *C.char) *C.char {
 
 	boxInstance = instance
 	boxTraffic = traffic
+	boxContext = ctx
+	resetDelays()
 	boxGeneration++
 	return C.CString("")
 }
@@ -132,6 +135,7 @@ func box_stop() *C.char {
 	boxTraffic.Close()
 	boxInstance = nil
 	boxTraffic = nil
+	boxContext = nil
 	if err != nil {
 		return C.CString(fmt.Sprintf("stop box: %s", err))
 	}

@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "control.h"
 #include "core.h"
@@ -36,6 +37,15 @@ class FakeCore final : public ICore {
     CoreStats stats;
     stats.running = running_;
     return stats;
+  }
+  std::string StartUrlTest(const UrlTestRequest& /*request*/) override {
+    return running_ ? std::string{} : std::string("box not running");
+  }
+  std::vector<DelayResult> Delays() override {
+    // Tags come from configs: any bytes, bad UTF-8 included.
+    return {{"nl", DelayResult::State::Ok, 48, {}},
+            {"bad \xFF tag", DelayResult::State::Failed, 0, "err \xFE"},
+            {"de", DelayResult::State::Pending, 0, {}}};
   }
   void SetLogSink(LogSink /*sink*/) override {}
 
