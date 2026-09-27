@@ -16,6 +16,7 @@ struct LogEntry {
   std::uint64_t seq = 0;
   LogLevel level = LogLevel::Info;
   std::string message;
+  std::int64_t timeMs = 0;  // when it was appended, Unix time in milliseconds
 };
 
 // The core's recent log lines, kept in the service so the tray can page

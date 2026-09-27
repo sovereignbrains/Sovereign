@@ -31,6 +31,11 @@ target_link_libraries(unit-protocol-choice PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-protocol-choice)
 add_test(NAME unit-protocol-choice COMMAND unit-protocol-choice)
 
+add_executable(unit-log-lines log_lines_test.cpp check.h)
+target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-log-lines)
+add_test(NAME unit-log-lines COMMAND unit-log-lines)
+
 # gocore-stub.dll: sovereign-gocore.dll's C ABI with no Go runtime behind it, so
 # GoCore's C++ side runs under ASan too (why the real DLL can't: issue #9).
 add_library(gocore-stub SHARED gocore_stub.cpp)

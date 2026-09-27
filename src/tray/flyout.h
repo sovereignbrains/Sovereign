@@ -27,6 +27,7 @@ struct FlyoutContent {
   std::vector<std::wstring> apps;
   std::vector<std::wstring> protocols;  // the selector's options; empty = no choice
   int protocol = -1;                    // index of the one in use
+  bool autostart = false;               // the tray starts when the user signs in
 };
 
 enum class FlyoutCommand : std::uint8_t {
@@ -38,6 +39,8 @@ enum class FlyoutCommand : std::uint8_t {
   AddRunning,    // anchor: where to open the list of running programs
   AddExe,
   SetProtocol,   // index into protocols
+  ToggleAutostart,
+  OpenLogs,
   OpenFolder,
   Exit,
 };

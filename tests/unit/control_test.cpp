@@ -3,6 +3,7 @@
 // request/response shape without a DLL, a pipe or a running sing-box.
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -281,6 +282,33 @@ void TestReaderBehindRingDrop() {
   CHECK(response["entries"].size() == 2 && response["next"] == 5);
 }
 
+void TestReaderAheadAfterRestart() {
+  LogRing log(10);
+  log.Append(LogLevel::Info, "first");
+  log.Append(LogLevel::Warn, "second");
+  std::optional<std::string> lastConfig;
+  ControlHandler handler(nullptr, log, lastConfig);
+  // A tray that read up to 40 before the service restarted gets the new
+  // service's lines from the start instead of waiting for seq 41.
+  const json response = Send(handler, R"({"cmd":"box_logs","since":40})");
+  CHECK(response["entries"].size() == 2 && response["next"] == 2);
+  CHECK(response["entries"][0]["message"] == "first");
+}
+
+void TestLogsCarryTime() {
+  LogRing log(10);
+  const auto before = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count();
+  log.Append(LogLevel::Info, "x");
+  std::optional<std::string> lastConfig;
+  ControlHandler handler(nullptr, log, lastConfig);
+  const json response = Send(handler, R"({"cmd":"box_logs"})");
+  const json& time = response["entries"][0]["time"];
+  CHECK(time.is_number_integer() && time.get<std::int64_t>() >= before &&
+        time.get<std::int64_t>() < before + 60'000);
+}
+
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
@@ -294,6 +322,8 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestLogsPaging();
     TestLogsSurviveBadUtf8();
     TestReaderBehindRingDrop();
+    TestReaderAheadAfterRestart();
+    TestLogsCarryTime();
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;

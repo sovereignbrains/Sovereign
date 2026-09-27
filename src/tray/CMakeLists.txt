@@ -2,7 +2,8 @@
 enable_language(RC)
 
 # The tray's decisions, apart from Win32 - linked by the tray and by
-# tests/unit (tray_model_test, subscription_test, app_rules_test).
+# tests/unit (tray_model_test, subscription_test, app_rules_test,
+# protocol_choice_test, log_lines_test).
 add_library(sovereign_tray_lib STATIC
   tray_model.cpp
   tray_model.h
@@ -12,12 +13,18 @@ add_library(sovereign_tray_lib STATIC
   app_rules.h
   protocol_choice.cpp
   protocol_choice.h
+  log_lines.cpp
+  log_lines.h
 )
 target_include_directories(sovereign_tray_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_lib PUBLIC sovereign_common)
 
 add_executable(sovereign-tray WIN32
   main.cpp
+  autostart.cpp
+  autostart.h
+  log_window.cpp
+  log_window.h
   fetch.cpp
   fetch.h
   flyout.cpp
@@ -39,5 +46,5 @@ string(REGEX REPLACE "^v" "" SOVEREIGN_TRAY_SINGBOX_VERSION "${SOVEREIGN_TRAY_SI
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tools/codegen/sing-box.version")
 target_compile_definitions(sovereign-tray PRIVATE "SOVEREIGN_SINGBOX_VERSION_W=L\"${SOVEREIGN_TRAY_SINGBOX_VERSION}\"")
 
-target_link_libraries(sovereign-tray PRIVATE sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid d2d1 dwrite dwmapi shcore windowscodecs)
+target_link_libraries(sovereign-tray PRIVATE sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid d2d1 dwrite dwmapi shcore windowscodecs uxtheme)
 sovereign_copy_asan_runtime(sovereign-tray)

@@ -28,6 +28,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <ctime>
+#include <deque>
 #include <format>
 #include <mutex>
 #include <optional>
@@ -38,10 +39,13 @@
 #include <vector>
 
 #include "app_rules.h"
+#include "autostart.h"
 #include "fetch.h"
 #include "protocol_choice.h"
 #include "flyout.h"
 #include "icons.h"
+#include "log_lines.h"
+#include "log_window.h"
 #include "pipe_client.h"
 #include "settings.h"
 #include "sha256.h"
@@ -69,6 +73,11 @@ constexpr wchar_t kUserAgent[] = L"Sovereign/0.1 (sing-box " SOVEREIGN_SINGBOX_V
 
 // After a failed refresh, when to try again (the old config keeps working).
 constexpr std::chrono::minutes kRefreshRetry{30};
+
+// Log lines the tray keeps for its log window, and how many box_logs pages
+// one poll reads at most (a flood is read on over the next seconds).
+constexpr std::size_t kLogKeep = 5000;
+constexpr int kLogPagesPerPoll = 20;
 
 std::wstring Widen(const std::string& utf8) {
   if (utf8.empty()) {
@@ -107,6 +116,23 @@ std::wstring LocalTime(std::int64_t unixSeconds) {
   wchar_t text[32]{};
   wcsftime(text, 32, L"%d.%m %H:%M", &tm);
   return text;
+}
+
+// "05:07:30  ERROR  outbound/naive[Naive]: ..." - a line of the log window.
+std::wstring FormatLogLine(const sovereign::tray::LogLine& line) {
+  std::wstring time = L"--:--:--";
+  if (line.timeMs > 0) {
+    const auto t = static_cast<std::time_t>(line.timeMs / 1000);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+    wchar_t text[16]{};
+    wcsftime(text, 16, L"%H:%M:%S", &tm);
+    time = text;
+  }
+  std::wstring level = Widen(line.level);
+  std::transform(level.begin(), level.end(), level.begin(),
+                 [](wchar_t c) { return c >= L'a' && c <= L'z' ? static_cast<wchar_t>(c - L'a' + L'A') : c; });
+  return std::format(L"{}  {:<5}  {}", time, level, Widen(line.message));
 }
 
 // What the UI thread draws; the worker publishes a fresh copy after each poll.
@@ -160,6 +186,10 @@ struct Shared {
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   View view;
   HWND window = nullptr;
+  // The log window's lines, newest last, and how many were ever added (the
+  // UI shows what came after the count it last saw).
+  std::deque<std::wstring> logs;
+  std::uint64_t logsAdded = 0;
 
   bool HasRequests() const {
     return pendingWant || pendingImport || pendingRefresh || pendingApps || pendingProtocol;
@@ -320,6 +350,7 @@ class Worker {
       const auto config = EffectiveConfig();
       model_.SetExpectedConfig(ExpectedConfigHash(config));
       Execute(model_, model_.OnPoll(PollStats(), TrayModel::Clock::now()), config);
+      CollectLogs();
       Publish();
 
       std::unique_lock lock(shared.mutex);
@@ -427,6 +458,48 @@ class Worker {
     // the service reports no longer matches (ExpectedConfigHash).
   }
 
+  // The core's new log lines from the service, plus the tray's own errors
+  // (a box that never started has no log of its own to explain why), into the
+  // lines the log window shows.
+  void CollectLogs() {
+    std::vector<std::wstring> fresh;
+    for (int page = 0; page < kLogPagesPerPoll; ++page) {
+      const auto response =
+          sovereign::tray::RequestService(nlohmann::json{{"cmd", "box_logs"}, {"since", logSince_}}.dump());
+      const auto parsed = response ? sovereign::tray::ParseLogsResponse(*response) : std::nullopt;
+      if (!parsed) {
+        break;
+      }
+      for (const auto& line : parsed->lines) {
+        fresh.push_back(FormatLogLine(line));
+      }
+      logSince_ = parsed->next;
+      if (!parsed->more) {
+        break;
+      }
+    }
+    if (const std::string& error = model_.LastError(); error != loggedError_) {
+      loggedError_ = error;
+      if (!error.empty()) {
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        fresh.push_back(FormatLogLine(
+            {std::chrono::duration_cast<std::chrono::milliseconds>(now).count(), "error", "трей: " + error}));
+      }
+    }
+    if (fresh.empty()) {
+      return;
+    }
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    for (auto& line : fresh) {
+      shared.logs.push_back(std::move(line));
+    }
+    while (shared.logs.size() > kLogKeep) {
+      shared.logs.pop_front();
+    }
+    shared.logsAdded += fresh.size();
+  }
+
   void Publish() {
     auto& shared = State();
     auto protocols = Protocols();  // reads config.json: outside the lock
@@ -463,6 +536,8 @@ class Worker {
   std::wstring noticeTitle_;
   std::wstring noticeText_;
   bool noticeIsError_ = false;
+  std::uint64_t logSince_ = 0;  // box_logs cursor
+  std::string loggedError_;     // the model's error last put into the log
 };
 
 // NOTIFYICONDATA as RAII: the icon leaves the notification area whatever
@@ -728,10 +803,46 @@ sovereign::tray::FlyoutContent FlyoutFrom(const View& v) {
     c.protocols.push_back(Widen(p));
   }
   c.protocol = v.protocol;
+  c.autostart = sovereign::tray::AutostartEnabled();
   return c;
 }
 
 sovereign::tray::Flyout* g_flyout = nullptr;
+sovereign::tray::LogWindow* g_logWindow = nullptr;
+std::uint64_t g_logsShown = 0;  // Shared::logsAdded as of the log window's last update
+
+void OpenLogs() {
+  if (g_logWindow == nullptr) {
+    return;
+  }
+  std::vector<std::wstring> lines;
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    lines.assign(shared.logs.begin(), shared.logs.end());
+    g_logsShown = shared.logsAdded;
+  }
+  if (lines.empty()) {
+    lines.emplace_back(L"пока пусто: служба ещё ничего не написала");
+  }
+  g_logWindow->Show(lines);
+}
+
+// The lines added since the open log window was last updated.
+void UpdateLogs() {
+  if (g_logWindow == nullptr || !g_logWindow->IsOpen()) {
+    return;
+  }
+  std::vector<std::wstring> lines;
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    const auto fresh = static_cast<std::size_t>(std::min<std::uint64_t>(shared.logsAdded - g_logsShown, shared.logs.size()));
+    lines.assign(shared.logs.end() - static_cast<std::ptrdiff_t>(fresh), shared.logs.end());
+    g_logsShown = shared.logsAdded;
+  }
+  g_logWindow->Append(lines);
+}
 
 // The tray icon's rectangle on screen (the flyout opens next to it); the
 // cursor if the shell can't tell.
@@ -783,6 +894,17 @@ void OnFlyoutCommand(HWND window, sovereign::tray::FlyoutCommand command, const 
         RequestProtocol(view.protocols[static_cast<std::size_t>(args.index)]);
       }
       break;
+    case FlyoutCommand::ToggleAutostart:
+      if (!sovereign::tray::SetAutostart(!sovereign::tray::AutostartEnabled()) && g_trayIcon != nullptr) {
+        g_trayIcon->Balloon(L"Sovereign", L"Не удалось изменить автозапуск (реестр отказал).");
+      }
+      if (g_flyout != nullptr) {
+        g_flyout->Update(FlyoutFrom(view));
+      }
+      break;
+    case FlyoutCommand::OpenLogs:
+      OpenLogs();
+      break;
     case FlyoutCommand::OpenFolder:
       try {
         ShellExecuteW(nullptr, L"open", sovereign::tray::DataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -817,6 +939,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       if (g_flyout != nullptr) {
         g_flyout->Update(FlyoutFrom(view));
       }
+      UpdateLogs();
       return 0;
     }
     case kTrayCallbackMessage:
@@ -882,6 +1005,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     OnFlyoutCommand(window, command, args);
   });
   g_flyout = &flyout;
+  sovereign::tray::LogWindow logWindow(instance);
+  g_logWindow = &logWindow;
 
   int exitCode = 0;
   {
@@ -895,6 +1020,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     exitCode = static_cast<int>(msg.wParam);
     thread.request_stop();
   }  // joins the worker before its state goes away
+  g_logWindow = nullptr;
   g_flyout = nullptr;
   return exitCode;
 }

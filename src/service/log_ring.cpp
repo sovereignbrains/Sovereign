@@ -1,6 +1,7 @@
 #include "log_ring.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <utility>
 
@@ -22,7 +23,9 @@ std::string_view TruncateUtf8(std::string_view text, std::size_t maxBytes) {
 LogRing::LogRing(std::size_t capacity) : capacity_(std::max<std::size_t>(capacity, 1)) {}
 
 void LogRing::Append(LogLevel level, std::string_view message) {
-  LogEntry entry{0, level, std::string(TruncateUtf8(message, kMaxMessageBytes))};
+  const auto now = std::chrono::system_clock::now().time_since_epoch();
+  LogEntry entry{0, level, std::string(TruncateUtf8(message, kMaxMessageBytes)),
+                 std::chrono::duration_cast<std::chrono::milliseconds>(now).count()};
   const std::scoped_lock lock(mutex_);
   entry.seq = ++lastSeq_;
   if (entries_.size() == capacity_) {

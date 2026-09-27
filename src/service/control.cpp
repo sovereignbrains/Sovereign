@@ -41,6 +41,12 @@ Json StatsResponse(const CoreStats& stats) {
 }
 
 Json LogsResponse(const LogRing& log, std::uint64_t since) {
+  // A reader ahead of the newest line kept its place from before a service
+  // restart (numbering starts over with the service): read from the start,
+  // or it would wait for the new numbers to catch up with the old ones.
+  if (since > log.LastSeq()) {
+    since = 0;
+  }
   Json entries = Json::array();
   std::uint64_t next = since;
   bool more = false;
@@ -51,6 +57,7 @@ Json LogsResponse(const LogRing& log, std::uint64_t since) {
     item["seq"] = entry.seq;
     item["level"] = std::string(LogLevelName(entry.level));
     item["message"] = entry.message;
+    item["time"] = entry.timeMs;
     const std::size_t itemSize = Dump(item).size() + 1;
     if (size + itemSize > ControlHandler::kMaxLogsResponseBytes) {
       more = true;

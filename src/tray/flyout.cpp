@@ -56,6 +56,8 @@ constexpr const wchar_t* kGlyphRemove = L"\xE711";
 constexpr const wchar_t* kGlyphAdd = L"\xE710";
 constexpr const wchar_t* kGlyphFile = L"\xE8E5";
 constexpr const wchar_t* kGlyphCheck = L"\xE73E";
+constexpr const wchar_t* kGlyphStartup = L"\xE823";
+constexpr const wchar_t* kGlyphLog = L"\xE8A5";
 
 // Clicking the tray icon while the panel is open first deactivates the panel
 // (it hides), then delivers the click - which must not reopen it.
@@ -173,13 +175,23 @@ Layout MainPage(const FlyoutContent& c) {
                                 : L"Приложения (" + std::to_wstring(c.apps.size()) + L") · " +
                                       (c.appsInclude ? L"только список" : L"кроме списка");
   l.items.push_back(Link(Kind::Nav, Row(y, kRow), kGlyphApps, apps, Target::OpenApps));
+  y += kRow;
+
+  Item autostart =
+      Command(Kind::Toggle, Row(y, kRow), kGlyphStartup, L"Запуск при входе", FlyoutCommand::ToggleAutostart);
+  autostart.checked = c.autostart;
+  l.items.push_back(std::move(autostart));
   y += kRow + kGap;
 
   l.separators.push_back(y - kGap / 2);
-  l.items.push_back(Command(Kind::Footer, {kPad, y, kWidth / 2 - 2, y + kFooter}, kGlyphFolder, L"Папка настроек",
-                            FlyoutCommand::OpenFolder));
-  l.items.push_back(Command(Kind::Footer, {kWidth / 2 + 2, y, right, y + kFooter}, kGlyphExit, L"Выход",
-                            FlyoutCommand::Exit));
+  const float cell = (right - kPad - 8) / 3;
+  const auto footer = [&](int n, const wchar_t* glyph, const wchar_t* caption, FlyoutCommand command) {
+    const float left = kPad + static_cast<float>(n) * (cell + 4);
+    l.items.push_back(Command(Kind::Footer, {left, y, left + cell, y + kFooter}, glyph, caption, command));
+  };
+  footer(0, kGlyphLog, L"Журнал", FlyoutCommand::OpenLogs);
+  footer(1, kGlyphFolder, L"Папка", FlyoutCommand::OpenFolder);
+  footer(2, kGlyphExit, L"Выход", FlyoutCommand::Exit);
   l.height = y + kFooter + kPad;
   return l;
 }
@@ -454,6 +466,7 @@ struct Flyout::Impl {
       // These take the focus (a menu, a file dialog) or end the tray: close first.
       case FlyoutCommand::AddRunning:
       case FlyoutCommand::AddExe:
+      case FlyoutCommand::OpenLogs:
       case FlyoutCommand::OpenFolder:
       case FlyoutCommand::Exit:
         HideNow();
