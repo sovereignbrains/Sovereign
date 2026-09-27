@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -80,6 +81,29 @@ Json LogsResponse(const LogRing& log, std::uint64_t since) {
   return response;
 }
 
+// A URL for box_urltest: http(s), with a host, nothing that could split a
+// request line - the core dials it as given.
+bool IsTestUrl(const Json& url) {
+  if (!url.is_string()) {
+    return false;
+  }
+  const std::string& text = url.get_ref<const std::string&>();
+  if (text.size() > ControlHandler::kMaxUrlBytes) {
+    return false;
+  }
+  const std::string_view view(text);
+  std::size_t host = 0;
+  if (view.starts_with("https://")) {
+    host = 8;
+  } else if (view.starts_with("http://")) {
+    host = 7;
+  } else {
+    return false;
+  }
+  return view.size() > host && view[host] != '/' &&
+         std::none_of(view.begin(), view.end(), [](char c) { return static_cast<unsigned char>(c) <= ' ' || c == 0x7F; });
+}
+
 }  // namespace
 
 ControlHandler::ControlHandler(ICore* core, const LogRing& coreLog,
@@ -129,7 +153,8 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
   // outcome.cmd only ever points at these literals, never at request text.
   const std::string cmd = parsed.value("cmd", "");
-  for (const std::string_view known : {"box_ping", "box_start", "box_stop", "box_stats", "box_logs"}) {
+  for (const std::string_view known :
+       {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays"}) {
     if (cmd == known) {
       outcome.cmd = known;
     }
@@ -139,7 +164,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
 
   const bool isCoreCommand = cmd == "box_ping" || cmd == "box_start" || cmd == "box_stop" ||
-                             cmd == "box_stats";
+                             cmd == "box_stats" || cmd == "box_urltest" || cmd == "box_delays";
   if (isCoreCommand && core_ == nullptr) {
     return fail("gocore not loaded");
   }
@@ -200,6 +225,57 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
       return fail("since must be a non-negative integer");
     }
     return Dump(LogsResponse(coreLog_, since.get<std::uint64_t>()));
+  }
+
+  if (cmd == "box_urltest") {
+    UrlTestRequest test;
+    const Json tags = parsed.value("tags", Json());
+    if (!tags.is_array() || tags.empty() || tags.size() > kMaxUrlTestTags) {
+      return fail("tags must be an array of 1.." + std::to_string(kMaxUrlTestTags) + " outbound tags");
+    }
+    for (const Json& tag : tags) {
+      if (!tag.is_string() || tag.get<std::string>().empty() || tag.get<std::string>().size() > kMaxTagBytes) {
+        return fail("every tag must be a non-empty string");
+      }
+      test.tags.push_back(tag.get<std::string>());
+    }
+    const Json url = parsed.value("url", Json(std::string(kDefaultUrlTestUrl)));
+    if (!IsTestUrl(url)) {
+      return fail("url must be an http(s) URL");
+    }
+    test.url = url.get<std::string>();
+    const Json timeout = parsed.value("timeout_ms", Json(kDefaultUrlTestTimeoutMs));
+    if (!timeout.is_number_integer() || timeout.get<std::int64_t>() < kMinUrlTestTimeoutMs ||
+        timeout.get<std::int64_t>() > kMaxUrlTestTimeoutMs) {
+      return fail("timeout_ms must be " + std::to_string(kMinUrlTestTimeoutMs) + ".." +
+                  std::to_string(kMaxUrlTestTimeoutMs));
+    }
+    test.timeout = std::chrono::milliseconds(timeout.get<std::int64_t>());
+    const std::string error = core_->StartUrlTest(test);
+    if (!error.empty()) {
+      return fail(error);
+    }
+    Json response;
+    response["cmd"] = "box_urltest_started";
+    return Dump(response);
+  }
+
+  if (cmd == "box_delays") {
+    Json results = Json::array();
+    for (const DelayResult& result : core_->Delays()) {
+      Json item;
+      item["tag"] = result.tag;
+      switch (result.state) {
+        case DelayResult::State::Pending: item["pending"] = true; break;
+        case DelayResult::State::Ok: item["delay"] = result.delayMs; break;
+        case DelayResult::State::Failed: item["error"] = result.error; break;
+      }
+      results.push_back(std::move(item));
+    }
+    Json response;
+    response["cmd"] = "box_delays";
+    response["results"] = std::move(results);
+    return Dump(response);
   }
 
   // Anything else echoes back (the P0 contract the smoke tests still use).

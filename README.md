@@ -30,7 +30,7 @@ The client works and is in daily use; the project is between its MVP and its con
 
 - on/off, with live speed and connection count;
 - **subscription**: paste an `https://` link from the clipboard, refresh by hand or on the server's `Profile-Update-Interval`; the server sees a `sing-box` User-Agent with the pinned version;
-- **protocol**: pick any option of the subscription's selector (or `auto`);
+- **protocol**: pick any option of the subscription's selector (or `auto`), with each server's latency - sing-box's own URL test through every option, run on each connect and on demand;
 - **per-app routing**: everything except a list of programs, or only the list;
 - start at sign-in, the main window.
 

@@ -81,6 +81,7 @@ constexpr const wchar_t* kGlyphExit = L"\xE8BB";
 constexpr const wchar_t* kGlyphCheck = L"\xE73E";
 constexpr const wchar_t* kGlyphWarning = L"\xE7BA";
 constexpr const wchar_t* kGlyphProgram = L"\xE7C4";
+constexpr const wchar_t* kGlyphStopwatch = L"\xE916";
 
 struct PageInfo {
   const wchar_t* glyph;
@@ -218,7 +219,11 @@ std::wstring StateDetail(const UiContent& c) {
                                                        : L"Сначала добавь подписку: скопируй ссылку и нажми «Вставить».";
     case Display::Starting: return L"Запускается ядро sing-box…";
     case Display::On: {
-      const std::wstring protocol = CurrentProtocol(c);
+      std::wstring protocol = CurrentProtocol(c);
+      if (!protocol.empty() && static_cast<std::size_t>(c.protocol) < c.delays.size() &&
+          c.delays[static_cast<std::size_t>(c.protocol)].state == UiDelay::State::Ok) {
+        protocol += std::format(L" ({} мс)", c.delays[static_cast<std::size_t>(c.protocol)].ms);
+      }
       return (protocol.empty() ? std::wstring() : L"Протокол: " + protocol + L" · ") +
              std::format(L"соединений: {}", c.connections);
     }
@@ -241,6 +246,8 @@ class Painter {
     title_ = MakeFormat(kDisplay, 26, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     state_ = MakeFormat(kDisplay, 24, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     value_ = MakeFormat(kDisplay, 21, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    delay_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    delay_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     brand_ = MakeFormat(kDisplay, 17, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     heading_ = MakeFormat(kText, 15, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     body_ = MakeFormat(kText, 14);
@@ -532,6 +539,21 @@ class Painter {
                              c.hasSubscription ? L"В конфиге подписки нет выбора протокола." : L"Нет подписки — нечего выбирать."));
       return y + 64;
     }
+    // The latency test: a button and a line on how it went.
+    Item test = CommandItem(Kind::Button, {x0, y, x0 + 236, y + kButton},
+                            c.delaysTesting ? L"Проверяю…" : L"Проверить задержку", kGlyphStopwatch,
+                            UiCommand::TestDelays);
+    test.enabled = c.canTestDelays && !c.delaysTesting;
+    l.items.push_back(std::move(test));
+    std::wstring note = L"Запрос через каждый сервер; меньше — лучше.";
+    if (!c.canTestDelays) {
+      note = L"Задержку можно проверить, когда подключение включено.";
+    } else if (!c.delayError.empty()) {
+      note = L"Не удалось: " + c.delayError;
+    }
+    l.items.push_back(Make(Kind::Muted, {x0 + 252, y, x1, y + kButton}, std::move(note)));
+    y += kButton + 12;
+
     const float h = static_cast<float>(c.protocols.size()) * kRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
     for (std::size_t i = 0; i < c.protocols.size(); ++i) {
@@ -789,8 +811,13 @@ class Painter {
         } else {
           k.t->DrawEllipse(D2D1::Ellipse(dot, 8.5f, 8.5f), k.Color(secondary), 1.2f);
         }
-        k.Text(it.text, body_.get(), {r.left + 50, r.top, r.right - 180, r.bottom}, primary);
-        k.Text(it.detail, caption_.get(), {r.right - 180, r.top, r.right - 16, r.bottom}, secondary);
+        k.Text(it.text, body_.get(), {r.left + 50, r.top, r.right - 290, r.bottom}, primary);
+        k.Text(it.detail, caption_.get(), {r.right - 280, r.top, r.right - 110, r.bottom}, secondary);
+        if (it.index >= 0 && static_cast<std::size_t>(it.index) < c.delays.size()) {
+          const UiDelay& delay = c.delays[static_cast<std::size_t>(it.index)];
+          k.Text(DelayLabel(delay), delay_.get(), {r.right - 110, r.top, r.right - 16, r.bottom},
+                 FromColorRef(ui::DelayColor(delay)));
+        }
         break;
       }
       case Kind::Segment: {
@@ -1024,6 +1051,7 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> title_;
   wil::com_ptr<IDWriteTextFormat> state_;
   wil::com_ptr<IDWriteTextFormat> value_;
+  wil::com_ptr<IDWriteTextFormat> delay_;
   wil::com_ptr<IDWriteTextFormat> brand_;
   wil::com_ptr<IDWriteTextFormat> heading_;
   wil::com_ptr<IDWriteTextFormat> body_;

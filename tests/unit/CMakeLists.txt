@@ -36,6 +36,11 @@ target_link_libraries(unit-cache-file PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-cache-file)
 add_test(NAME unit-cache-file COMMAND unit-cache-file)
 
+add_executable(unit-delays delays_test.cpp check.h)
+target_link_libraries(unit-delays PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-delays)
+add_test(NAME unit-delays COMMAND unit-delays)
+
 add_executable(unit-log-lines log_lines_test.cpp check.h)
 target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-lines)

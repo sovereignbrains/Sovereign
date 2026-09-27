@@ -13,6 +13,8 @@
 
 #include <string>
 
+#include "ui_content.h"
+
 namespace sovereign::tray::ui {
 
 // The tray's look, shared by the flyout and the main window: dark only,
@@ -35,6 +37,22 @@ inline constexpr COLORREF kAccent = RGB(76, 146, 255);
 inline constexpr COLORREF kUpload = RGB(64, 196, 140);
 inline constexpr COLORREF kDanger = RGB(240, 96, 96);
 inline constexpr COLORREF kBorder = RGB(46, 74, 128);  // the DWM frame of the flyout
+
+inline constexpr COLORREF kWarning = RGB(235, 180, 60);
+
+// A latency's color: fast green, slow amber, very slow or dead red.
+inline COLORREF DelayColor(const UiDelay& delay) {
+  if (delay.state == UiDelay::State::Failed) {
+    return kDanger;
+  }
+  if (delay.state != UiDelay::State::Ok) {
+    return kSecondaryText;
+  }
+  if (delay.ms < 200) {
+    return kUpload;
+  }
+  return delay.ms < 500 ? kWarning : kDanger;
+}
 
 // A glyph font that exists here: Fluent Icons on Windows 11, MDL2 on 10 (the
 // same code points).

@@ -51,6 +51,9 @@ UiContent SampleContent() {
   c.apps = {L"steam.exe", L"Telegram.exe", L"qbittorrent.exe", L"EpicGamesLauncher.exe"};
   c.protocols = {L"auto", L"AnyTLS · Нидерланды", L"AnyTLS · Финляндия", L"REALITY · Германия", L"REALITY · Польша"};
   c.protocol = 1;
+  using State = sovereign::tray::UiDelay::State;
+  c.delays = {{State::Ok, 48}, {State::Ok, 52}, {State::Ok, 310}, {State::Failed, 0}, {State::Pending, 0}};
+  c.canTestDelays = true;
   c.autostart = true;
   c.version = L"0.1 · sing-box 1.14.1";
   return c;

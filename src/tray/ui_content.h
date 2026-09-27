@@ -16,6 +16,13 @@
 
 namespace sovereign::tray {
 
+// A server's latency as the windows show it.
+struct UiDelay {
+  enum class State : std::uint8_t { None, Pending, Ok, Failed };
+  State state = State::None;  // None: not tested since the box started
+  int ms = 0;
+};
+
 // What the tray's windows show - the flyout and the main window alike; built
 // by main.cpp from the worker's view. Strings are ready to draw.
 struct UiContent {
@@ -40,6 +47,10 @@ struct UiContent {
   std::vector<std::wstring> apps;
   std::vector<std::wstring> protocols;  // the selector's options; empty = no choice
   int protocol = -1;                    // index of the one in use
+  std::vector<UiDelay> delays;          // one per protocol (may be shorter: untested)
+  bool delaysTesting = false;           // a latency test is running
+  bool canTestDelays = false;           // the box runs: its servers can be tested
+  std::wstring delayError;              // why the last test didn't start
   bool autostart = false;               // the tray starts when the user signs in
   std::wstring version;                 // "0.1 · sing-box 1.14.1"
 };
@@ -58,6 +69,7 @@ enum class UiCommand : std::uint8_t {
   AddExe,
   SetProtocol,   // index into protocols
   ToggleAutostart,
+  TestDelays,
   OpenWindow,    // index: the UiPage to show
   OpenFolder,
   Exit,
@@ -68,6 +80,17 @@ struct UiArgs {
   int index = 0;
   HWND owner = nullptr;  // the window a menu or a dialog belongs to
 };
+
+// "48 мс", "нет ответа", "…" or nothing.
+inline std::wstring DelayLabel(const UiDelay& delay) {
+  switch (delay.state) {
+    case UiDelay::State::None: return {};
+    case UiDelay::State::Pending: return L"…";
+    case UiDelay::State::Ok: return std::format(L"{} мс", delay.ms);
+    case UiDelay::State::Failed: return L"нет ответа";
+  }
+  return {};
+}
 
 inline std::wstring FormatRate(double bytesPerSecond) {
   if (bytesPerSecond < 1024) {

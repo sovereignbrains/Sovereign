@@ -15,6 +15,7 @@
 
 #include "app_rules.h"
 #include "cache_file.h"
+#include "delays.h"
 #include "log_lines.h"
 #include "protocol_choice.h"
 #include "subscription.h"
@@ -28,7 +29,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   (void)ParseUpdateInterval(text);
   (void)FindProtocolChoices(text);
   (void)ParseLogsResponse(text);
+  (void)ParseDelaysResponse(text);
   (void)IsHttpsUrl(std::wstring(text.begin(), text.end()));
+  (void)UrlHost(std::wstring(text.begin(), text.end()));
 
   const bool object = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false).is_object();
   const std::vector<std::string> apps{"app.exe"};

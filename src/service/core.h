@@ -1,9 +1,11 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sovereign::service {
 
@@ -34,6 +36,23 @@ struct CoreStats {
   std::int64_t downlinkBytes = 0;
   std::int64_t activeConnections = 0;
   std::int64_t generation = 0;
+};
+
+// A latency test of outbounds: one request to `url` through each of `tags`
+// (the config's outbound tags), each abandoned after `timeout`.
+struct UrlTestRequest {
+  std::vector<std::string> tags;
+  std::string url;
+  std::chrono::milliseconds timeout{5000};
+};
+
+// Where one outbound's latency test is.
+struct DelayResult {
+  enum class State : std::uint8_t { Pending, Ok, Failed };
+  std::string tag;
+  State state = State::Pending;
+  int delayMs = 0;    // Ok: how long the request took
+  std::string error;  // Failed: why
 };
 
 // Called for every log line the core emits (already filtered by the config's
@@ -68,6 +87,15 @@ class ICore {
   virtual std::string Stop() = 0;
 
   virtual CoreStats Stats() = 0;
+
+  // Starts a latency test in the background and returns at once: empty
+  // string once it runs, otherwise why not (e.g. the engine isn't running).
+  // A test takes seconds, and the service answers its pipe clients one at a
+  // time - so the results come from Delays(), polled.
+  virtual std::string StartUrlTest(const UrlTestRequest& request) = 0;
+  // Every tag tested since the last Start(), in the order first tested; a
+  // retest replaces the tag's result.
+  virtual std::vector<DelayResult> Delays() = 0;
 
   // Installs (or, with an empty sink, removes) the log sink. After this
   // returns, the previous sink is never called again.

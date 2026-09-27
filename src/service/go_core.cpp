@@ -2,6 +2,9 @@
 
 #include <wil/result.h>
 
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -57,6 +60,8 @@ GoCore::GoCore(const std::wstring& dllPath) {
   boxStart_ = ResolveExport<BoxStartFn>(module_.get(), "box_start");
   boxStop_ = ResolveExport<BoxStopFn>(module_.get(), "box_stop");
   boxStats_ = ResolveExport<BoxStatsFn>(module_.get(), "box_stats");
+  boxUrlTest_ = ResolveExport<BoxUrlTestFn>(module_.get(), "box_urltest");
+  boxDelays_ = ResolveExport<BoxDelaysFn>(module_.get(), "box_delays");
   boxSetLogCallback_ = ResolveExport<BoxSetLogCallbackFn>(module_.get(), "box_set_log_callback");
   boxFree_ = ResolveExport<BoxFreeFn>(module_.get(), "box_free");
 
@@ -109,6 +114,40 @@ CoreStats GoCore::Stats() {
   stats.running = boxStats_(&stats.uplinkBytes, &stats.downlinkBytes, &stats.activeConnections,
                             &stats.generation) != 0;
   return stats;
+}
+
+std::string GoCore::StartUrlTest(const UrlTestRequest& request) {
+  nlohmann::json json;
+  json["tags"] = request.tags;
+  json["url"] = request.url;
+  json["timeout_ms"] = request.timeout.count();
+  return TakeOwnedString(boxUrlTest_(json.dump().c_str()));
+}
+
+std::vector<DelayResult> GoCore::Delays() {
+  // gocore/urltest.go writes it; anything unexpected in it is skipped rather
+  // than thrown - a broken answer must not take the control pipe down.
+  const auto json = nlohmann::json::parse(TakeOwnedString(boxDelays_()), nullptr, /*allow_exceptions=*/false);
+  std::vector<DelayResult> results;
+  if (!json.is_object() || !json.contains("results") || !json["results"].is_array()) {
+    return results;
+  }
+  for (const auto& item : json["results"]) {
+    if (!item.is_object() || !item.contains("tag") || !item["tag"].is_string()) {
+      continue;
+    }
+    DelayResult result;
+    result.tag = item["tag"].get<std::string>();
+    if (item.contains("delay") && item["delay"].is_number_unsigned()) {
+      result.state = DelayResult::State::Ok;
+      result.delayMs = static_cast<int>(std::min<std::uint64_t>(item["delay"].get<std::uint64_t>(), 65535));
+    } else if (item.contains("error") && item["error"].is_string()) {
+      result.state = DelayResult::State::Failed;
+      result.error = item["error"].get<std::string>();
+    }
+    results.push_back(std::move(result));
+  }
+  return results;
 }
 
 }  // namespace sovereign::service

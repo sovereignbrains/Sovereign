@@ -3,7 +3,7 @@ enable_language(RC)
 
 # The tray's decisions, apart from Win32 - linked by the tray and by
 # tests/unit (tray_model_test, subscription_test, app_rules_test,
-# protocol_choice_test, log_lines_test).
+# protocol_choice_test, log_lines_test, delays_test).
 add_library(sovereign_tray_lib STATIC
   tray_model.cpp
   tray_model.h
@@ -17,6 +17,8 @@ add_library(sovereign_tray_lib STATIC
   log_lines.h
   cache_file.cpp
   cache_file.h
+  delays.cpp
+  delays.h
 )
 target_include_directories(sovereign_tray_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_lib PUBLIC sovereign_common)

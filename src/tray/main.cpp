@@ -36,6 +36,7 @@
 #include <ctime>
 #include <deque>
 #include <format>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -47,6 +48,7 @@
 #include "app_rules.h"
 #include "autostart.h"
 #include "cache_file.h"
+#include "delays.h"
 #include "fetch.h"
 #include "protocol_choice.h"
 #include "flyout.h"
@@ -95,6 +97,9 @@ constexpr int kLogPagesPerPoll = 20;
 
 // Speed samples the main window's graph shows: two minutes of polls.
 constexpr std::size_t kHistory = 120;
+
+// A latency test the service never finishes stops being waited for.
+constexpr std::chrono::seconds kUrlTestGiveUp{60};
 
 // A second tray start asks the running one to show its window (registered:
 // it crosses processes).
@@ -172,6 +177,9 @@ struct View {
   std::vector<std::string> apps;
   std::vector<std::string> protocols;  // the config selector's options
   int protocol = -1;                   // the one in use
+  std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
+  bool delaysTesting = false;
+  std::string delayError;
 };
 
 // A new per-app setup from the flyout or the main window.
@@ -199,6 +207,7 @@ struct Shared {
   std::optional<bool> pendingWant;
   std::optional<std::string> pendingImport;  // a new subscription URL (UTF-8)
   bool pendingRefresh = false;
+  bool pendingUrlTest = false;
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   View view;
@@ -209,7 +218,7 @@ struct Shared {
   std::uint64_t logsAdded = 0;
 
   bool HasRequests() const {
-    return pendingWant || pendingImport || pendingRefresh || pendingApps || pendingProtocol;
+    return pendingWant || pendingImport || pendingRefresh || pendingUrlTest || pendingApps || pendingProtocol;
   }
 };
 
@@ -346,6 +355,7 @@ class Worker {
       std::optional<AppsChange> apps;
       std::optional<std::string> protocol;
       bool refresh = false;
+      bool urlTest = false;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
@@ -353,6 +363,7 @@ class Worker {
         protocol = std::exchange(shared.pendingProtocol, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
         refresh = std::exchange(shared.pendingRefresh, false);
+        urlTest = std::exchange(shared.pendingUrlTest, false);
       }
       if (want) {
         settings_.wantOn = *want;
@@ -378,8 +389,10 @@ class Worker {
       }
       const auto config = EffectiveConfig();
       model_.SetExpectedConfig(ExpectedConfigHash(config));
-      Execute(model_, model_.OnPoll(PollStats(), TrayModel::Clock::now()), config);
+      const auto stats = PollStats();
+      Execute(model_, model_.OnPoll(stats, TrayModel::Clock::now()), config);
       Sample();
+      UpdateDelays(stats, urlTest);
       CollectLogs();
       Publish();
 
@@ -505,6 +518,61 @@ class Worker {
     }
   }
 
+  // The servers' latency: tested once every time a box starts, and whenever
+  // the user asks; results polled while a test runs (the service only starts
+  // one - it takes seconds, and the pipe answers one request at a time).
+  void UpdateDelays(const std::optional<sovereign::tray::Stats>& stats, bool asked) {
+    if (!stats) {
+      generation_ = -1;  // the service is gone, and its results with it
+    } else if (stats->generation != generation_) {
+      generation_ = stats->generation;  // a new box: the old results are gone with the old one
+      delays_.clear();
+      testing_ = false;
+    }
+    const bool on = model_.GetDisplay() == Display::On;
+    if (on && (asked || testedGeneration_ != generation_)) {
+      testedGeneration_ = generation_;
+      StartUrlTest();
+    } else if (asked) {
+      delayError_ = "подключение выключено";
+    }
+    if (testing_) {
+      PollDelays();
+    }
+  }
+
+  void StartUrlTest() {
+    const std::vector<std::string> tags = Protocols().first;
+    if (tags.empty()) {
+      return;
+    }
+    const std::string error = ServiceCall(nlohmann::json{{"cmd", "box_urltest"}, {"tags", tags}}, "box_urltest_started");
+    delayError_ = error;
+    if (!error.empty()) {
+      return;
+    }
+    testing_ = true;
+    testStarted_ = TrayModel::Clock::now();
+    for (const std::string& tag : tags) {
+      delays_[tag] = sovereign::tray::Delay{};  // pending until the service says
+    }
+  }
+
+  void PollDelays() {
+    const auto response = sovereign::tray::RequestService(R"({"cmd":"box_delays"})");
+    if (const auto results = response ? sovereign::tray::ParseDelaysResponse(*response) : std::nullopt) {
+      for (const auto& [tag, delay] : *results) {
+        delays_[tag] = delay;
+      }
+    }
+    const bool pending = std::any_of(delays_.begin(), delays_.end(), [](const auto& entry) {
+      return entry.second.state == sovereign::tray::Delay::State::Pending;
+    });
+    if (!pending || TrayModel::Clock::now() - testStarted_ > kUrlTestGiveUp) {
+      testing_ = false;
+    }
+  }
+
   // The core's new log lines from the service, plus the tray's own errors
   // (a box that never started has no log of its own to explain why), into the
   // lines the main window's log shows.
@@ -573,6 +641,13 @@ class Worker {
       v.appsMode = settings_.appsMode;
       v.apps = settings_.apps;
       std::tie(v.protocols, v.protocol) = protocols;
+      v.delays.clear();
+      for (const std::string& tag : v.protocols) {
+        const auto it = delays_.find(tag);
+        v.delays.push_back(it == delays_.end() ? std::nullopt : std::optional(it->second));
+      }
+      v.delaysTesting = testing_;
+      v.delayError = delayError_;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -591,6 +666,12 @@ class Worker {
   std::string loggedError_;     // the model's error last put into the log
   std::deque<std::pair<float, float>> history_;
   std::optional<TrayModel::Clock::time_point> lastSample_;
+  std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
+  bool testing_ = false;
+  TrayModel::Clock::time_point testStarted_{};
+  std::int64_t generation_ = -1;        // the box the results belong to
+  std::int64_t testedGeneration_ = -1;  // the box last tested automatically
+  std::string delayError_;
 };
 
 // NOTIFYICONDATA as RAII: the icon leaves the notification area whatever
@@ -828,6 +909,15 @@ void AddExe(HWND window) {
   }
 }
 
+void RequestUrlTest() {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingUrlTest = true;
+  }
+  Wake();
+}
+
 void RequestProtocol(std::string tag) {
   {
     auto& shared = State();
@@ -868,6 +958,20 @@ UiContent ContentFrom(const View& v) {
     c.protocols.push_back(Widen(p));
   }
   c.protocol = v.protocol;
+  for (const auto& delay : v.delays) {
+    sovereign::tray::UiDelay d;
+    if (delay) {
+      using State = sovereign::tray::Delay::State;
+      d.state = delay->state == State::Ok        ? sovereign::tray::UiDelay::State::Ok
+                : delay->state == State::Failed ? sovereign::tray::UiDelay::State::Failed
+                                                 : sovereign::tray::UiDelay::State::Pending;
+      d.ms = delay->ms;
+    }
+    c.delays.push_back(d);
+  }
+  c.delaysTesting = v.delaysTesting;
+  c.canTestDelays = v.display == Display::On && !v.protocols.empty();
+  c.delayError = Widen(v.delayError);
   c.autostart = sovereign::tray::AutostartEnabled();
   c.version = L"0.1 · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
   return c;
@@ -968,6 +1072,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         g_trayIcon->Balloon(L"Sovereign", L"Не удалось изменить автозапуск (реестр отказал).");
       }
       UpdateWindows();
+      break;
+    case UiCommand::TestDelays:
+      RequestUrlTest();
       break;
     case UiCommand::OpenWindow:
       ShowMainWindow(args.index >= 0 && args.index < sovereign::tray::kUiPageCount ? static_cast<UiPage>(args.index)

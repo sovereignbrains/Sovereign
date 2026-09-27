@@ -282,6 +282,7 @@ struct Flyout::Impl {
   wil::com_ptr<IDWriteTextFormat> body;
   wil::com_ptr<IDWriteTextFormat> caption;
   wil::com_ptr<IDWriteTextFormat> centered;
+  wil::com_ptr<IDWriteTextFormat> trailing;
   wil::com_ptr<IDWriteTextFormat> glyph;
   wil::com_ptr<IDWriteInlineObject> ellipsis;
 
@@ -302,6 +303,8 @@ struct Flyout::Impl {
     format(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 12.5f, caption);
     format(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 13, centered);
     centered->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    format(L"Segoe UI Variable Text", DWRITE_FONT_WEIGHT_NORMAL, 12.5f, trailing);
+    trailing->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     format(ui::GlyphFamily(dwrite.get()).c_str(), DWRITE_FONT_WEIGHT_NORMAL, 16, glyph);
     glyph->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     THROW_IF_FAILED(dwrite->CreateEllipsisTrimmingSign(body.get(), ellipsis.put()));
@@ -655,12 +658,20 @@ struct Flyout::Impl {
           text(it.text, centered.get(), r, it.checked ? primary.get() : secondary.get());
           break;
         }
-        case Kind::Choice:
+        case Kind::Choice: {
           if (it.checked) {
             text(it.glyph, glyph.get(), glyphBox, accent.get());
           }
-          text(it.text, body.get(), {r.left + 42, r.top, r.right - 8, r.bottom}, primary.get());
+          const bool delayed = it.index >= 0 && static_cast<std::size_t>(it.index) < content.delays.size() &&
+                               content.delays[static_cast<std::size_t>(it.index)].state != UiDelay::State::None;
+          text(it.text, body.get(), {r.left + 42, r.top, r.right - (delayed ? 84.0f : 8.0f), r.bottom}, primary.get());
+          if (delayed) {
+            const UiDelay& delay = content.delays[static_cast<std::size_t>(it.index)];
+            brush->SetColor(FromColorRef(ui::DelayColor(delay)));
+            text(DelayLabel(delay), trailing.get(), {r.right - 84, r.top, r.right - 8, r.bottom}, brush.get());
+          }
           break;
+        }
         case Kind::Footer:
           text(it.glyph, glyph.get(), {r.left + 4, r.top, r.left + 32, r.bottom}, secondary.get());
           text(it.text, caption.get(), {r.left + 36, r.top, r.right - 4, r.bottom}, secondary.get());
