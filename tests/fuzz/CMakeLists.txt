@@ -45,7 +45,8 @@ sovereign_fuzz_target(fuzz-tray-input tray_input_fuzz.cpp
   "${CMAKE_SOURCE_DIR}/src/tray/app_rules.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/protocol_choice.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/log_lines.cpp"
-  "${CMAKE_SOURCE_DIR}/src/tray/cache_file.cpp")
+  "${CMAKE_SOURCE_DIR}/src/tray/cache_file.cpp"
+  "${CMAKE_SOURCE_DIR}/src/tray/delays.cpp")
 target_include_directories(fuzz-tray-input PRIVATE "${CMAKE_SOURCE_DIR}/src/tray")
 
 # The service's control protocol: what any local user can send a SYSTEM service.
