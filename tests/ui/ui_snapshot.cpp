@@ -36,6 +36,7 @@ UiContent SampleContent() {
   c.connections = 37;
   c.subscription = L"27.09 19:20";
   c.hasSubscription = true;
+  c.hasConfig = true;
   c.subscriptionHost = L"packetlab.tech";
   c.updateHours = 12;
   c.appsInclude = false;

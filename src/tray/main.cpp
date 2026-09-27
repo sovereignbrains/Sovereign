@@ -36,7 +36,10 @@
 #include <condition_variable>
 #include <ctime>
 #include <deque>
+#include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -169,6 +172,8 @@ struct View {
   std::int64_t connections = 0;
   std::string error;
   bool hasSubscription = false;
+  std::string subscriptionUrl;    // for "copy the link" - the UI thread's clipboard
+  bool hasConfig = false;
   std::wstring subscriptionHost;  // UrlHost of the subscription URL
   std::int64_t lastRefresh = 0;
   int updateHours = 0;
@@ -233,6 +238,8 @@ struct Shared {
   std::condition_variable_any wake;
   std::optional<bool> pendingWant;
   std::optional<std::string> pendingImport;  // a new subscription URL (UTF-8)
+  std::optional<std::string> pendingLocalConfig;  // a config of the user's own (a file, the clipboard)
+  bool pendingUnsubscribe = false;
   bool pendingRefresh = false;
   bool pendingUrlTest = false;
   std::optional<AppsChange> pendingApps;
@@ -246,7 +253,8 @@ struct Shared {
   std::uint64_t logsAdded = 0;
 
   bool HasRequests() const {
-    return pendingWant || pendingImport || pendingRefresh || pendingUrlTest || pendingApps || pendingProtocol ||
+    return pendingWant || pendingImport || pendingLocalConfig || pendingUnsubscribe || pendingRefresh ||
+           pendingUrlTest || pendingApps || pendingProtocol ||
            pendingChoice;
   }
 };
@@ -385,6 +393,8 @@ class Worker {
       std::optional<AppsChange> apps;
       std::optional<std::string> protocol;
       std::optional<ConfigChoice> choice;
+      std::optional<std::string> local;
+      bool unsubscribe = false;
       bool refresh = false;
       bool urlTest = false;
       {
@@ -394,6 +404,8 @@ class Worker {
         protocol = std::exchange(shared.pendingProtocol, std::nullopt);
         choice = std::exchange(shared.pendingChoice, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
+        local = std::exchange(shared.pendingLocalConfig, std::nullopt);
+        unsubscribe = std::exchange(shared.pendingUnsubscribe, false);
         refresh = std::exchange(shared.pendingRefresh, false);
         urlTest = std::exchange(shared.pendingUrlTest, false);
       }
@@ -401,6 +413,12 @@ class Worker {
         settings_.wantOn = *want;
         Save();
         Execute(model_, model_.SetWantOn(*want, TrayModel::Clock::now()), EffectiveConfig());
+      }
+      if (local) {
+        UseLocalConfig(*local);
+      }
+      if (unsubscribe) {
+        Unsubscribe();
       }
       if (import) {
         settings_.subscriptionUrl = *import;
@@ -602,6 +620,49 @@ class Worker {
            false);
     // A running box with the old config is restarted by the model: the hash
     // the service reports no longer matches (ExpectedConfigHash).
+  }
+
+  // A config of the user's own (a file, the clipboard): it replaces the
+  // config, and there's no subscription any more to replace it back.
+  void UseLocalConfig(const std::string& text) {
+    const auto check = sovereign::tray::CheckSubscriptionConfig(text);
+    if (!check.ok) {
+      Notify(L"Sovereign: конфиг не загружен", Widen(check.error), true, UiPage::Subscription);
+      return;
+    }
+    try {
+      ReplaceConfig(sovereign::tray::LoadConfig(), text);
+      sovereign::tray::ClearPending();
+      sovereign::tray::ClearOriginal();
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("saving the local config failed");
+      Notify(L"Sovereign: конфиг не загружен", L"не удалось записать config.json", true, UiPage::Subscription);
+      return;
+    }
+    const bool hadSubscription = !settings_.subscriptionUrl.empty();
+    ForgetSubscription();
+    Notify(L"Sovereign: загружен свой конфиг",
+           std::format(L"выходов: {}{}", check.outbounds, hadSubscription ? L"; подписка отключена" : L""), false);
+  }
+
+  // No more refreshes; config.json stays as it is, now the user's own.
+  void Unsubscribe() {
+    try {
+      sovereign::tray::ClearPending();
+      sovereign::tray::ClearOriginal();
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("removing the subscription's files failed");
+    }
+    ForgetSubscription();
+  }
+
+  void ForgetSubscription() {
+    settings_.subscriptionUrl.clear();
+    settings_.lastRefresh = 0;
+    subscriptionError_.clear();
+    lastFailure_.reset();
+    mergeNotes_.clear();
+    Save();
   }
 
   void Choose(ConfigChoice choice) {
@@ -841,6 +902,8 @@ class Worker {
       v.connections = model_.Connections();
       v.error = model_.LastError();
       v.hasSubscription = !settings_.subscriptionUrl.empty();
+      v.subscriptionUrl = settings_.subscriptionUrl;
+      v.hasConfig = seenConfig_.has_value();
       v.subscriptionHost = sovereign::tray::UrlHost(Widen(settings_.subscriptionUrl));
       v.lastRefresh = settings_.lastRefresh;
       v.updateHours = settings_.updateHours;
@@ -989,18 +1052,104 @@ std::wstring ClipboardText(HWND window) {
   return first == std::wstring::npos ? std::wstring{} : text.substr(first, last - first + 1);
 }
 
-void RequestImport(HWND window) {
-  const std::wstring url = ClipboardText(window);
-  if (!sovereign::tray::IsHttpsUrl(url)) {
-    if (g_trayIcon != nullptr) {
-      g_trayIcon->Balloon(L"Sovereign", L"В буфере обмена нет https-ссылки на подписку. Скопируй её и повтори.");
-    }
-    return;
-  }
+void RequestLocalConfig(std::string text) {
   {
     auto& shared = State();
     const std::scoped_lock lock(shared.mutex);
-    shared.pendingImport = Narrow(url);
+    shared.pendingLocalConfig = std::move(text);
+  }
+  Wake();
+}
+
+// "Paste": a subscription link, or a whole config of the user's own - the
+// clipboard says which.
+void RequestImport(HWND window) {
+  const std::wstring text = ClipboardText(window);
+  if (sovereign::tray::IsHttpsUrl(text)) {
+    {
+      auto& shared = State();
+      const std::scoped_lock lock(shared.mutex);
+      shared.pendingImport = Narrow(text);
+    }
+    Wake();
+    return;
+  }
+  if (text.starts_with(L'{') && text.size() * sizeof(wchar_t) <= 2 * sovereign::tray::kMaxSubscriptionBytes) {
+    RequestLocalConfig(Narrow(text));  // the worker checks it, and says why not
+    return;
+  }
+  if (g_trayIcon != nullptr) {
+    g_trayIcon->Balloon(L"Sovereign",
+                        L"В буфере обмена нет ни https-ссылки на подписку, ни конфига sing-box. Скопируй одно из них и повтори.");
+  }
+}
+
+// "File...": a config of the user's own from disk.
+void ImportFile(HWND window) {
+  std::wstring path;
+  try {
+    const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
+    const COMDLG_FILTERSPEC filter{L"Конфиг sing-box", L"*.json"};
+    THROW_IF_FAILED(dialog->SetFileTypes(1, &filter));
+    THROW_IF_FAILED(dialog->SetTitle(L"Свой конфиг для Sovereign"));
+    const HRESULT shown = dialog->Show(window);
+    if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+      return;
+    }
+    THROW_IF_FAILED(shown);
+    wil::com_ptr<IShellItem> item;
+    THROW_IF_FAILED(dialog->GetResult(&item));
+    wil::unique_cotaskmem_string name;
+    THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &name));
+    path = name.get();
+  } catch (...) {
+    LOG_CAUGHT_EXCEPTION_MSG("the file dialog failed");
+    return;
+  }
+  std::ifstream in(std::filesystem::path(path), std::ios::binary);
+  std::string text;
+  if (in) {
+    text.resize(sovereign::tray::kMaxSubscriptionBytes + 1);
+    in.read(text.data(), static_cast<std::streamsize>(text.size()));
+    text.resize(static_cast<std::size_t>(in.gcount()));
+  }
+  if (!in.eof() && !in) {
+    if (g_trayIcon != nullptr) {
+      g_trayIcon->Balloon(L"Sovereign", L"Не удалось прочитать файл.");
+    }
+    return;
+  }
+  RequestLocalConfig(std::move(text));  // too big or not a config: the worker says so
+}
+
+bool CopyText(HWND owner, const std::wstring& text) {
+  if (!OpenClipboard(owner)) {
+    return false;
+  }
+  bool copied = false;
+  if (EmptyClipboard()) {
+    const std::size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    wil::unique_hglobal memory(GlobalAlloc(GMEM_MOVEABLE, bytes));
+    if (memory) {
+      if (void* locked = GlobalLock(memory.get()); locked != nullptr) {
+        std::memcpy(locked, text.c_str(), bytes);
+        GlobalUnlock(memory.get());
+        if (SetClipboardData(CF_UNICODETEXT, memory.get()) != nullptr) {
+          memory.release();  // the clipboard owns it now
+          copied = true;
+        }
+      }
+    }
+  }
+  CloseClipboard();
+  return copied;
+}
+
+void RequestUnsubscribe() {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingUnsubscribe = true;
   }
   Wake();
 }
@@ -1183,6 +1332,7 @@ UiContent ContentFrom(const View& v) {
   c.connections = v.connections;
   c.error = v.display == Display::Error ? Widen(v.error) : std::wstring();
   c.hasSubscription = v.hasSubscription;
+  c.hasConfig = v.hasConfig;
   c.subscriptionHost = v.subscriptionHost;
   c.subscriptionError = Widen(v.subscriptionError);
   c.updateHours = v.hasSubscription ? v.updateHours : 0;
@@ -1302,6 +1452,23 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::KeepConfig:
       RequestChoice(ConfigChoice::KeepMine);
+      break;
+    case UiCommand::ImportFile:
+      ImportFile(owner);
+      break;
+    case UiCommand::CopySubscription:
+      if (!view.subscriptionUrl.empty() && CopyText(owner, Widen(view.subscriptionUrl)) && g_trayIcon != nullptr) {
+        g_trayIcon->Balloon(L"Sovereign: ссылка скопирована",
+                            L"В ней твой ключ доступа - отдавай только своим устройствам.", NIIF_INFO);
+      }
+      break;
+    case UiCommand::RemoveSubscription:
+      if (MessageBoxW(owner,
+                      L"Отключить подписку?\n\nКонфиг останется как есть и будет работать, но обновляться "
+                      L"больше не будет. Подключить снова - вставить ссылку.",
+                      L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
+        RequestUnsubscribe();
+      }
       break;
     case UiCommand::CarryOverEdits:
       RequestChoice(ConfigChoice::CarryOver);

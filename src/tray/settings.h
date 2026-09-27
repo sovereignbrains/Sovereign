@@ -66,7 +66,8 @@ std::optional<std::string> LoadOriginal();
 void SaveOriginal(const std::string& text);
 std::optional<std::string> LoadPending();
 void SavePending(const std::string& text);
-void ClearPending();  // no error if there is none
+void ClearPending();   // no error if there is none
+void ClearOriginal();  // likewise: no subscription, no base
 
 // Keeps `text` (config.json about to be replaced) in history\, dropping the
 // oldest beyond kHistoryKeep.

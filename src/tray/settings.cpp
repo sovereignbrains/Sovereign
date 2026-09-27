@@ -147,6 +147,12 @@ void ClearPending() {
   THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
 }
 
+void ClearOriginal() {
+  std::error_code ec;
+  std::filesystem::remove(DataDir() / L"subscription.json", ec);  // no file: false, not an error
+  THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
+}
+
 void SaveHistory(const std::string& text) {
   const std::filesystem::path dir = DataDir() / L"history";
   std::error_code ec;

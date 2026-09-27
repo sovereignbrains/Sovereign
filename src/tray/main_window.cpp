@@ -232,7 +232,7 @@ std::wstring StateDetail(const UiContent& c) {
 // The subscription's line on the overview.
 std::wstring SubscriptionLine(const UiContent& c) {
   if (!c.hasSubscription) {
-    return L"нет — вставь ссылку";
+    return c.hasConfig ? L"нет — свой конфиг" : L"нет — вставь ссылку";
   }
   std::wstring line = c.subscriptionHost.empty() ? std::wstring(L"подписка") : c.subscriptionHost;
   if (c.subscriptionWaiting) {
@@ -617,23 +617,20 @@ class Painter {
   }
 
   float Subscription(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Подписка", L"Конфиг sing-box с сервера подписки. Скопируй ссылку (https://…) и нажми «Вставить» — дальше Sovereign обновляет его сам.",
+    y = PageTitle(l, L"Подписка",
+                  L"Ссылка на подписку (https://…) или свой конфиг sing-box (.json) — из буфера обмена или файлом. "
+                  L"Подписку Sovereign обновляет сам.",
                   x0, x1, y);
-    std::wstring state;
-    if (!c.hasSubscription) {
-      state = L"нет";
-    } else if (!c.subscriptionError.empty()) {
-      state = L"ошибка — работает прежний конфиг";
-    } else {
-      state = c.subscription;
-    }
-    std::vector<std::pair<const wchar_t*, std::wstring>> fields = {
-        {L"Обновлена", state},
-        {L"Сервер", c.subscriptionHost.empty() ? std::wstring(L"—") : c.subscriptionHost},
-        {L"Интервал", c.updateHours > 0 ? std::format(L"каждые {} ч", c.updateHours) : std::wstring(L"—")},
-    };
+    std::vector<std::pair<const wchar_t*, std::wstring>> fields;
     if (c.hasSubscription) {
-      fields.emplace_back(L"Конфиг", c.configEdited ? L"изменён тобой" : L"как в подписке");
+      fields = {
+          {L"Обновлена", c.subscriptionError.empty() ? c.subscription : std::wstring(L"не удалась")},
+          {L"Сервер", c.subscriptionHost.empty() ? std::wstring(L"—") : c.subscriptionHost},
+          {L"Интервал", c.updateHours > 0 ? std::format(L"каждые {} ч", c.updateHours) : std::wstring(L"—")},
+          {L"Конфиг", c.configEdited ? L"изменён тобой" : L"как в подписке"},
+      };
+    } else {
+      fields = {{L"Конфиг", c.hasConfig ? L"свой, без подписки" : L"нет"}};
     }
     const float h = static_cast<float>(fields.size()) * kRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
@@ -666,19 +663,31 @@ class Painter {
                     x0, x1, y) + kGap;
     }
 
+    // Getting a config: the clipboard (a link or a config), a file.
     const float mid = (x0 + x1) / 2;
-    l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Вставить ссылку из буфера",
-                                  kGlyphPaste, UiCommand::PasteSubscription));
+    l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Вставить из буфера", kGlyphPaste,
+                                  UiCommand::PasteSubscription));
     y += kButton + 8;
-    const bool revert = c.hasSubscription && (c.configEdited || c.subscriptionWaiting);
-    Item refresh = CommandItem(Kind::Button, {x0, y, revert ? mid - 4 : x1, y + kButton}, L"Обновить", kGlyphRefresh,
-                               UiCommand::RefreshSubscription);
-    refresh.enabled = c.hasSubscription;
-    l.items.push_back(std::move(refresh));
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, c.hasSubscription ? mid - 4 : x1, y + kButton}, L"Файл .json…",
+                                  kGlyphFile, UiCommand::ImportFile));
+    if (!c.hasSubscription) {
+      return y + kButton;
+    }
+    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
+                                  UiCommand::CopySubscription));
+    y += kButton + 8;
+
+    // The subscription itself.
+    const bool revert = c.configEdited || c.subscriptionWaiting;
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, revert ? mid - 4 : x1, y + kButton}, L"Обновить", kGlyphRefresh,
+                                  UiCommand::RefreshSubscription));
     if (revert) {
       l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
                                     UiCommand::RevertConfig));
     }
+    y += kButton + 8;
+    l.items.push_back(CommandItem(Kind::DangerButton, {x0, y, x1, y + kButton}, L"Отключить подписку", kGlyphRemove,
+                                  UiCommand::RemoveSubscription));
     return y + kButton;
   }
 

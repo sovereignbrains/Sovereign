@@ -37,6 +37,7 @@ struct UiContent {
 
   std::wstring subscription;     // "26.09 19:20" / "нет" / "ошибка: ..."
   bool hasSubscription = false;  // enables the refresh button
+  bool hasConfig = false;        // config.json is there (a subscription's or the user's own)
   std::wstring subscriptionHost; // the server's name only - the URL's path is a secret
   std::wstring subscriptionError;
   int updateHours = 0;           // the refresh interval; 0 = unknown
@@ -73,6 +74,9 @@ enum class UiCommand : std::uint8_t {
   KeepConfig,        // the edited config stays
   CarryOverEdits,    // the edits, merged into the waiting subscription
   RevertConfig,      // the config back to the subscription as it arrived
+  ImportFile,        // a config of the user's own from a .json file
+  CopySubscription,  // the subscription link onto the clipboard
+  RemoveSubscription,  // no more refreshes; the config stays
   SetAppsMode,   // index: 0 all except the list, 1 only the list
   RemoveApp,     // index into apps
   AddRunning,    // anchor: where to open the list of running programs
