@@ -43,6 +43,15 @@ GoCore::GoCore(const std::wstring& dllPath) {
   // other locations an attacker could plant a DLL in.
   module_.reset(LoadLibraryW(dllPath.c_str()));
   THROW_LAST_ERROR_IF(!module_);
+  // Pinned: a Go c-shared DLL can't be unloaded - its runtime's threads keep
+  // running code inside it after any call returns (golang/go#11100), so the
+  // FreeLibrary module_'s destructor would do unmaps code under them and the
+  // process dies at some random moment later (0xC0000005; seen as a flaky
+  // SegFault of the conformance harness in CI, db5401c, and 1 in 60 runs
+  // locally). A pinned module stays until the process ends, whatever
+  // FreeLibrary says.
+  HMODULE pinned = nullptr;
+  THROW_IF_WIN32_BOOL_FALSE(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, dllPath.c_str(), &pinned));
 
   boxPing_ = ResolveExport<BoxPingFn>(module_.get(), "box_ping");
   boxStart_ = ResolveExport<BoxStartFn>(module_.get(), "box_start");
