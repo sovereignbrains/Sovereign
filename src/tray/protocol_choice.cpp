@@ -1,5 +1,7 @@
 #include "protocol_choice.h"
 
+#include "json_field.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -10,7 +12,7 @@ namespace {
 
 using Json = nlohmann::json;
 
-bool IsSelector(const Json& o) { return o.is_object() && o.value("type", "") == "selector"; }
+bool IsSelector(const Json& o) { return Field<std::string>(o, "type", {}) == "selector"; }
 
 // The selector to use: the one route.final names, else the first one.
 Json* FindSelector(Json& config) {
@@ -28,7 +30,7 @@ Json* FindSelector(Json& config) {
     if (!IsSelector(o)) {
       continue;
     }
-    if (!final.empty() && o.value("tag", "") == final) {
+    if (!final.empty() && Field<std::string>(o, "tag", {}) == final) {
       return &o;
     }
     if (first == nullptr) {
@@ -47,7 +49,7 @@ ProtocolChoices FindProtocolChoices(std::string_view config) {
   if (selector == nullptr) {
     return choices;
   }
-  choices.selector = selector->value("tag", "");
+  choices.selector = Field<std::string>(*selector, "tag", {});
   if (selector->contains("outbounds") && (*selector)["outbounds"].is_array()) {
     for (const Json& o : (*selector)["outbounds"]) {
       if (o.is_string()) {
@@ -55,7 +57,7 @@ ProtocolChoices FindProtocolChoices(std::string_view config) {
       }
     }
   }
-  choices.configDefault = selector->value("default", choices.options.empty() ? std::string{} : choices.options[0]);
+  choices.configDefault = Field<std::string>(*selector, "default", choices.options.empty() ? std::string{} : choices.options[0]);
   return choices;
 }
 

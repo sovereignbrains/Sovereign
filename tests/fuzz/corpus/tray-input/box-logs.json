@@ -1,0 +1,1 @@
+{"cmd":"box_logs","entries":[{"seq":7,"level":"error","message":"ERROR[0001] outbound/naive[Naive]: dial failed","time":1790000000123}],"next":7,"more":false}

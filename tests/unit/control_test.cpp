@@ -81,6 +81,9 @@ void TestMalformedRequests() {
 
   CHECK(IsError(Send(handler, "{not json"), "invalid json"));
   CHECK(IsError(Send(handler, "[1,2]"), "request must be a json object"));
+  // Found by tests/fuzz/control_fuzz.cpp: this used to throw, and the client got no answer.
+  CHECK(IsError(Send(handler, R"({"cmd":5})"), "cmd must be a string"));
+  CHECK(IsError(Send(handler, R"({"cmd":"box_logs","since":1e999})"), "invalid json"));  // number overflow, also fuzz
   CHECK(IsError(Send(handler, R"({"cmd":"box_start"})"), "missing config field"));
   CHECK(IsError(Send(handler, R"({"cmd":"box_logs","since":-1})"),
                 "since must be a non-negative integer"));

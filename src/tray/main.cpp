@@ -46,6 +46,7 @@
 #include "protocol_choice.h"
 #include "flyout.h"
 #include "icons.h"
+#include "json_field.h"
 #include "log_lines.h"
 #include "log_window.h"
 #include "pipe_client.h"
@@ -210,7 +211,7 @@ std::string ServiceCall(const nlohmann::json& request, const char* successCmd) {
     return "служба не ответила";
   }
   const auto json = nlohmann::json::parse(*response, nullptr, /*allow_exceptions=*/false);
-  if (json.is_object() && json.value("cmd", "") == successCmd) {
+  if (sovereign::tray::Field<std::string>(json, "cmd", {}) == successCmd) {
     return {};
   }
   if (json.is_object() && json.contains("message") && json["message"].is_string()) {
@@ -284,17 +285,17 @@ std::optional<sovereign::tray::Stats> PollStats() {
     return std::nullopt;
   }
   const auto json = nlohmann::json::parse(*response, nullptr, /*allow_exceptions=*/false);
-  if (!json.is_object() || json.value("cmd", "") != "box_stats") {
+  if (sovereign::tray::Field<std::string>(json, "cmd", {}) != "box_stats") {
     // "gocore not loaded" and the like: the service is up, the box can't run.
     return sovereign::tray::Stats{};
   }
   return sovereign::tray::Stats{
-      .running = json.value("running", false),
-      .uplinkBytes = json.value("uplink", std::int64_t{0}),
-      .downlinkBytes = json.value("downlink", std::int64_t{0}),
-      .connections = json.value("connections", std::int64_t{0}),
-      .generation = json.value("generation", std::int64_t{0}),
-      .configSha256 = json.value("config_sha256", std::string{}),
+      .running = sovereign::tray::Field<bool>(json, "running", false),
+      .uplinkBytes = sovereign::tray::Field<std::int64_t>(json, "uplink", 0),
+      .downlinkBytes = sovereign::tray::Field<std::int64_t>(json, "downlink", 0),
+      .connections = sovereign::tray::Field<std::int64_t>(json, "connections", 0),
+      .generation = sovereign::tray::Field<std::int64_t>(json, "generation", 0),
+      .configSha256 = sovereign::tray::Field<std::string>(json, "config_sha256", {}),
   };
 }
 

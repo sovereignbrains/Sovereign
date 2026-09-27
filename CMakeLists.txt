@@ -53,6 +53,8 @@ function(sovereign_copy_asan_runtime target)
   endif()
 endfunction()
 
+option(SOVEREIGN_ENABLE_FUZZ "Build the libFuzzer targets in tests/fuzz (MSVC /fsanitize=fuzzer; use with ASan)" OFF)
+
 option(SOVEREIGN_ENABLE_ANALYZE "Build with MSVC /analyze static analysis" OFF)
 if (SOVEREIGN_ENABLE_ANALYZE AND MSVC)
   add_compile_options(/analyze /analyze:external-)
@@ -75,3 +77,4 @@ enable_testing()
 add_subdirectory(tests/golden)
 add_subdirectory(tests/unit)
 add_subdirectory(tests/conformance)
+add_subdirectory(tests/fuzz)

@@ -1,0 +1,1 @@
+{"outbounds":[{"type":"selector","tag":"p","outbounds":["a"],"default":3}]}

@@ -43,6 +43,12 @@
       "inherits": "ci",
       "binaryDir": "${sourceDir}/build/ci-analyze",
       "cacheVariables": { "SOVEREIGN_ENABLE_ANALYZE": "ON" }
+    },
+    {
+      "name": "ci-fuzz",
+      "inherits": "ci-asan",
+      "binaryDir": "${sourceDir}/build/ci-fuzz",
+      "cacheVariables": { "SOVEREIGN_ENABLE_FUZZ": "ON" }
     }
   ],
   "buildPresets": [
@@ -50,6 +56,11 @@
     { "name": "release", "configurePreset": "release", "configuration": "Release" },
     { "name": "ci", "configurePreset": "ci" },
     { "name": "ci-asan", "configurePreset": "ci-asan" },
-    { "name": "ci-analyze", "configurePreset": "ci-analyze" }
+    { "name": "ci-analyze", "configurePreset": "ci-analyze" },
+    {
+      "name": "ci-fuzz",
+      "configurePreset": "ci-fuzz",
+      "targets": ["fuzz-client-hello", "fuzz-config", "fuzz-tray-input", "fuzz-control"]
+    }
   ]
 }

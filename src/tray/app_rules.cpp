@@ -1,5 +1,7 @@
 #include "app_rules.h"
 
+#include "json_field.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -17,7 +19,7 @@ std::string DirectTag(Json& config) {
     outbounds = Json::array();
   }
   for (const Json& o : outbounds) {
-    if (o.is_object() && o.value("type", "") == "direct" && o.contains("tag") && o["tag"].is_string()) {
+    if (Field<std::string>(o, "type", {}) == "direct" && o.contains("tag") && o["tag"].is_string()) {
       return o["tag"].get<std::string>();
     }
   }
@@ -65,7 +67,8 @@ std::string ApplyAppRules(std::string_view config, AppsMode mode, const std::vec
     rules = Json::array();
   }
   const auto isPrelude = [](const Json& r) {
-    return r.is_object() && (r.value("action", "") == "sniff" || r.value("action", "") == "hijack-dns");
+    const std::string action = Field<std::string>(r, "action", {});
+    return action == "sniff" || action == "hijack-dns";
   };
   const auto at = std::find_if_not(rules.begin(), rules.end(), isPrelude);
 

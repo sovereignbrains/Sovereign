@@ -1,5 +1,7 @@
 #include "log_lines.h"
 
+#include "json_field.h"
+
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
@@ -9,21 +11,21 @@ namespace sovereign::tray {
 
 std::optional<LogsPage> ParseLogsResponse(std::string_view response) {
   const auto json = nlohmann::json::parse(response, nullptr, /*allow_exceptions=*/false);
-  if (!json.is_object() || json.value("cmd", "") != "box_logs" || !json.contains("entries") ||
+  if (!json.is_object() || Field<std::string>(json, "cmd", {}) != "box_logs" || !json.contains("entries") ||
       !json["entries"].is_array() || !json.contains("next") || !json["next"].is_number_unsigned()) {
     return std::nullopt;
   }
   LogsPage page;
   page.next = json["next"].get<std::uint64_t>();
-  page.more = json.value("more", false);
+  page.more = Field<bool>(json, "more", false);
   for (const auto& entry : json["entries"]) {
     if (!entry.is_object()) {
       continue;
     }
     LogLine line;
-    line.timeMs = entry.value("time", std::int64_t{0});
-    line.level = entry.value("level", std::string{});
-    const std::string message = entry.value("message", std::string{});
+    line.timeMs = Field<std::int64_t>(entry, "time", 0);
+    line.level = Field<std::string>(entry, "level", {});
+    const std::string message = Field<std::string>(entry, "message", {});
     line.message = std::string(StripCoreLevelPrefix(message));
     page.lines.push_back(std::move(line));
   }

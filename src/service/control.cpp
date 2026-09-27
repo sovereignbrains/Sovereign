@@ -111,13 +111,22 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   Json parsed;
   try {
     parsed = Json::parse(request);
-  } catch (const Json::parse_error&) {
+  } catch (const Json::exception&) {
+    // Not only parse_error: a number too big for a double ("1e999") is an
+    // out_of_range - found by tests/fuzz/control_fuzz.cpp, the client used to
+    // get no answer at all.
     return fail("invalid json");
   }
   if (!parsed.is_object()) {
     return fail("request must be a json object");
   }
 
+  // A cmd that isn't a string is a malformed request. (value() would throw on
+  // it - the pipe server caught that, but the client got no answer at all;
+  // found by tests/fuzz/control_fuzz.cpp.)
+  if (parsed.contains("cmd") && !parsed.at("cmd").is_string()) {
+    return fail("cmd must be a string");
+  }
   // outcome.cmd only ever points at these literals, never at request text.
   const std::string cmd = parsed.value("cmd", "");
   for (const std::string_view known : {"box_ping", "box_start", "box_stop", "box_stats", "box_logs"}) {

@@ -3,6 +3,10 @@ name: CI
 on:
   push:
   pull_request:
+  # Nightly: every job, and the long fuzz run.
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -291,4 +295,47 @@ jobs:
         run: cmake --preset ci
 
       - name: clang-tidy
-        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/trace.cpp src/service/autologger.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/golden/duration_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp tests/unit/tray_model_test.cpp tests/unit/subscription_test.cpp tests/unit/app_rules_test.cpp tests/unit/protocol_choice_test.cpp tests/unit/log_lines_test.cpp tests/unit/cache_file_test.cpp src/tray/cache_file.cpp src/tray/tray_model.cpp src/tray/subscription.cpp src/tray/app_rules.cpp src/tray/protocol_choice.cpp src/tray/flyout.cpp src/tray/fetch.cpp src/tray/pipe_client.cpp src/tray/settings.cpp src/tray/icons.cpp src/tray/log_lines.cpp src/tray/autostart.cpp src/tray/log_window.cpp src/conformance/client_hello.cpp tests/conformance/client_hello_test.cpp tests/conformance/harness.cpp
+        run: clang-tidy -p build/ci src/service/main.cpp src/service/pipe_server.cpp src/service/go_core.cpp src/service/trace.cpp src/service/autologger.cpp src/service/control.cpp src/service/log_ring.cpp src/tray/main.cpp tests/golden/anytls_outbound_test.cpp tests/golden/anytls_inbound_padding_test.cpp tests/golden/duration_test.cpp tests/unit/log_ring_test.cpp tests/unit/control_test.cpp tests/unit/go_core_test.cpp tests/unit/gocore_stub.cpp tests/unit/tray_model_test.cpp tests/unit/subscription_test.cpp tests/unit/app_rules_test.cpp tests/unit/protocol_choice_test.cpp tests/unit/log_lines_test.cpp tests/unit/cache_file_test.cpp src/tray/cache_file.cpp src/tray/tray_model.cpp src/tray/subscription.cpp src/tray/app_rules.cpp src/tray/protocol_choice.cpp src/tray/flyout.cpp src/tray/fetch.cpp src/tray/pipe_client.cpp src/tray/settings.cpp src/tray/icons.cpp src/tray/log_lines.cpp src/tray/autostart.cpp src/tray/log_window.cpp src/conformance/client_hello.cpp tests/conformance/client_hello_test.cpp tests/conformance/harness.cpp tests/fuzz/client_hello_fuzz.cpp tests/fuzz/config_fuzz.cpp tests/fuzz/tray_input_fuzz.cpp tests/fuzz/control_fuzz.cpp
+
+  # libFuzzer targets (tests/fuzz): a minute each on every push, twenty minutes each
+  # in the nightly run. A finding fails the job and its inputs are kept as an artifact;
+  # reproduce with `fuzz-<target>.exe <input>` from the ci-fuzz preset.
+  fuzz:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            if (-not (Test-Path "C:\vcpkg\.git")) {
+              git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            }
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
+
+      - name: Fetch pinned sing-box (CMake configure reads gocore's build tags from it)
+        shell: pwsh
+        run: |
+          $tag = (Get-Content tools/codegen/sing-box.version)[0]
+          git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
+
+      - name: Configure
+        run: cmake --preset ci-fuzz
+
+      - name: Build the fuzz targets (MSVC /fsanitize=fuzzer + ASan)
+        run: cmake --build --preset ci-fuzz
+
+      - name: Fuzz
+        shell: pwsh
+        run: pwsh tools/fuzz/run.ps1 -Seconds ${{ github.event_name == 'schedule' && 1200 || 60 }} -Artifacts fuzz-artifacts
+
+      - name: Keep the inputs that failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: fuzz-artifacts

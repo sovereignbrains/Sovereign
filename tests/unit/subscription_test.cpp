@@ -63,6 +63,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestConfigCheck();
     TestUpdateInterval();
     TestTunDetection();
+    CHECK(!sovereign::tray::ConfigHasTun(R"({"inbounds":[{"type":7}]})"));  // found by tests/fuzz: no exception
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

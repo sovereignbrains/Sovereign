@@ -33,6 +33,16 @@ void TestRejectsWhatIsNotAPage() {
   CHECK(!ParseLogsResponse(R"({"cmd":"box_logs","entries":{},"next":1})"));
 }
 
+// Fields of the wrong type (found by tests/fuzz): not a page, or defaults - never an exception.
+void TestHostileTypes() {
+  CHECK(!ParseLogsResponse(R"({"cmd":1})"));
+  const auto page = ParseLogsResponse(R"({"cmd":"box_logs","entries":[{"message":5,"time":"x","level":[]}],"next":1,"more":"yes"})");
+  CHECK(page.has_value());
+  if (page) {
+    CHECK(page->lines.size() == 1 && page->lines[0].message.empty() && page->lines[0].timeMs == 0 && !page->more);
+  }
+}
+
 void TestStripsOnlyTheLevelPrefix() {
   CHECK(StripCoreLevelPrefix("INFO[0012] [3620113478 0ms] inbound/tun[tun-in]: x") ==
         "[3620113478 0ms] inbound/tun[tun-in]: x");
@@ -50,6 +60,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestParsesAPage();
     TestRejectsWhatIsNotAPage();
     TestStripsOnlyTheLevelPrefix();
+    TestHostileTypes();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

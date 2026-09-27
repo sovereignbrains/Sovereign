@@ -56,6 +56,15 @@ void TestSelectorByFinalAndFallbacks() {
   CHECK(ApplyProtocolChoice("not json", "x") == "not json");
 }
 
+// Fields of the wrong type (found by tests/fuzz) are as good as absent - never an exception.
+void TestHostileTypes() {
+  CHECK(FindProtocolChoices(R"({"outbounds":[{"type":"selector","tag":5,"outbounds":[1,"a"]}],"route":{"final":7}})").options ==
+        std::vector<std::string>({"a"}));
+  CHECK(FindProtocolChoices(R"({"outbounds":[{"type":"selector","tag":"p","outbounds":["a"],"default":3}]})").configDefault == "a");
+  CHECK(FindProtocolChoices(R"({"outbounds":[{"type":5}]})").selector.empty());
+  (void)ApplyProtocolChoice(R"({"outbounds":[{"type":"selector","tag":5,"outbounds":["a"]}]})", "a");
+}
+
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
@@ -64,6 +73,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestPickSetsDefault();
     TestUnknownOrEmptyPickChangesNothing();
     TestSelectorByFinalAndFallbacks();
+    TestHostileTypes();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

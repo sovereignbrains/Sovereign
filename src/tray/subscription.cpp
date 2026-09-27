@@ -1,5 +1,7 @@
 #include "subscription.h"
 
+#include "json_field.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -66,7 +68,7 @@ bool ConfigHasTun(std::string_view config) {
     return false;
   }
   return std::any_of(inbounds->begin(), inbounds->end(), [](const nlohmann::json& inbound) {
-    return inbound.is_object() && inbound.value("type", "") == "tun";
+    return Field<std::string>(inbound, "type", {}) == "tun";
   });
 }
 
