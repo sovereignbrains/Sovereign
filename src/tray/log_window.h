@@ -30,6 +30,7 @@ class LogWindow {
   // Opens with `lines`, or brings the open window forward with them.
   void Show(const std::vector<std::wstring>& lines);
   bool IsOpen() const;
+  void Close();
   // Adds lines at the bottom of an open window.
   void Append(const std::vector<std::wstring>& lines);
 

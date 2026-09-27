@@ -562,6 +562,9 @@ class TrayIcon {
   // Explorer restarted: the notification area is new and empty.
   void Add() { Shell_NotifyIconW(NIM_ADD, &data_); }
 
+  // Gone from the notification area now, not when the process ends.
+  void Remove() { Shell_NotifyIconW(NIM_DELETE, &data_); }
+
   void Update(const View& view) {
     auto& icon = icons_[static_cast<std::size_t>(view.display)];
     if (!icon) {
@@ -949,8 +952,18 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       }
       return 0;
     case WM_DESTROY:
+      // Everything visible goes first: after the message loop the worker is
+      // joined, and it may be inside a pipe call that takes a while (a
+      // box_start waiting for the network: 10 s) - with the icon and windows
+      // still up, Windows reported the tray as hung for that long.
+      if (g_trayIcon != nullptr) {
+        g_trayIcon->Remove();
+      }
       if (g_flyout != nullptr) {
         g_flyout->Hide();
+      }
+      if (g_logWindow != nullptr) {
+        g_logWindow->Close();
       }
       PostQuitMessage(0);
       return 0;

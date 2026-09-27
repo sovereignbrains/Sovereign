@@ -205,6 +205,12 @@ void LogWindow::Show(const std::vector<std::wstring>& lines) {
 
 bool LogWindow::IsOpen() const { return impl_->window != nullptr; }
 
+void LogWindow::Close() {
+  if (impl_->window != nullptr) {
+    DestroyWindow(impl_->window);  // WM_NCDESTROY clears the handles
+  }
+}
+
 void LogWindow::Append(const std::vector<std::wstring>& lines) {
   if (impl_->window != nullptr && !lines.empty()) {
     impl_->Append(Joined(lines));
