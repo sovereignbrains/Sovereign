@@ -135,6 +135,14 @@ void TestBridge(const std::wstring& stubPath) {
     CHECK(delays.size() == 3 && delays[2].tag == "de" && delays[2].state == State::Pending);
     CHECK(stub.outstanding() == 0);
 
+    // The exit IP: the answer parsed, fields of the wrong type left empty.
+    const auto exit = core->LookupExitIp("nl", false);
+    CHECK(exit.tag == "nl" && exit.ip == "185.12.34.56" && exit.country == "NL" && !exit.pending && exit.error.empty());
+    CHECK(core->LookupExitIp("nl", true).pending);
+    const auto junk = core->LookupExitIp("junk", false);
+    CHECK(junk.ip.empty() && !junk.pending);
+    CHECK(stub.outstanding() == 0);
+
     const auto running = core->Stats();
     CHECK(running.running);
     CHECK(running.uplinkBytes == 1000);

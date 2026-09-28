@@ -55,6 +55,12 @@ struct UiContent {
   bool delaysTesting = false;           // a latency test is running
   bool canTestDelays = false;           // the box runs: its servers can be tested
   std::wstring delayError;              // why the last test didn't start
+  // The exit through the server in use (while on): address, country.
+  std::wstring exitIp;                  // empty until known
+  std::wstring exitCountry;             // "NL", or empty
+  std::wstring exitCountryName;         // "Нидерланды" - the system's name for it
+  bool exitPending = false;             // being looked up
+  bool hideExitIp = false;              // the country only
   bool autostart = false;               // the tray starts when the user signs in
   std::wstring version;                 // "0.1.0 · sing-box 1.14.1"
   UiUpdate update = UiUpdate::Idle;
@@ -77,6 +83,7 @@ enum class UiCommand : std::uint8_t {
   ImportFile,        // a config of the user's own from a .json file
   CopySubscription,  // the subscription link onto the clipboard
   RemoveSubscription,  // no more refreshes; the config stays
+  ToggleExitIp,        // show or hide the exit's address
   SetAppsMode,   // index: 0 all except the list, 1 only the list
   RemoveApp,     // index into apps
   AddRunning,    // anchor: where to open the list of running programs

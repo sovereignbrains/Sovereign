@@ -43,6 +43,8 @@ try {
     if (-not (Test-Path $file)) { throw "missing $file" }
     Copy-Item $file $stage
   }
+  # The flags in the tray's resources are flag-icons' (MIT): its notice ships too.
+  Copy-Item 'assets/flags/LICENSE' (Join-Path $stage 'LICENSE-flag-icons.txt')
 
   $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
   if (-not $iscc) {

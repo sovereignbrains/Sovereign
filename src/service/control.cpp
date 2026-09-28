@@ -154,7 +154,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   // outcome.cmd only ever points at these literals, never at request text.
   const std::string cmd = parsed.value("cmd", "");
   for (const std::string_view known :
-       {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays"}) {
+       {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays", "box_exitip"}) {
     if (cmd == known) {
       outcome.cmd = known;
     }
@@ -164,7 +164,8 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
 
   const bool isCoreCommand = cmd == "box_ping" || cmd == "box_start" || cmd == "box_stop" ||
-                             cmd == "box_stats" || cmd == "box_urltest" || cmd == "box_delays";
+                             cmd == "box_stats" || cmd == "box_urltest" || cmd == "box_delays" ||
+                             cmd == "box_exitip";
   if (isCoreCommand && core_ == nullptr) {
     return fail("gocore not loaded");
   }
@@ -275,6 +276,34 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     Json response;
     response["cmd"] = "box_delays";
     response["results"] = std::move(results);
+    return Dump(response);
+  }
+
+  if (cmd == "box_exitip") {
+    const Json tag = parsed.value("tag", Json());
+    if (!tag.is_string() || tag.get<std::string>().empty() || tag.get<std::string>().size() > kMaxTagBytes) {
+      return fail("tag must be a non-empty string");
+    }
+    const Json refresh = parsed.value("refresh", Json(false));
+    if (!refresh.is_boolean()) {
+      return fail("refresh must be a boolean");
+    }
+    const ExitIp exit = core_->LookupExitIp(tag.get<std::string>(), refresh.get<bool>());
+    Json response;
+    response["cmd"] = "box_exitip";
+    response["tag"] = exit.tag;
+    if (exit.pending) {
+      response["pending"] = true;
+    }
+    if (!exit.ip.empty()) {
+      response["ip"] = exit.ip;
+    }
+    if (!exit.country.empty()) {
+      response["country"] = exit.country;
+    }
+    if (!exit.error.empty()) {
+      response["error"] = exit.error;
+    }
     return Dump(response);
   }
 

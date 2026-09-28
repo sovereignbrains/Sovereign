@@ -27,7 +27,9 @@
 #include <utility>
 #include <vector>
 
+#include "flags.h"
 #include "icons.h"
+#include "resource.h"
 #include "ui_style.h"
 
 namespace sovereign::tray {
@@ -53,7 +55,9 @@ constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
 constexpr float kPower = 60;       // the on/off button's diameter
-constexpr float kBar = 124;        // the overview's bottom bar: the switch and the server
+constexpr float kBar = 148;        // the overview's bottom bar: the switch, the server, the exit
+constexpr float kFlagW = 20;       // a flag in the bar, 4:3
+constexpr float kFlagH = 15;
 constexpr float kTile = 76;        // a tile on the overview
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
@@ -104,6 +108,7 @@ enum class Kind : std::uint8_t {
   Tile,          // a square-ish button on the overview: glyph, title, a line; `checked`: a dot
   Bar,           // the overview's bottom panel
   ServerLink,    // the bar's server: its name and latency, centered, opens the servers
+  ExitLine,      // the bar's exit: the country's flag (detail: its code) and the address or the country
   Banner,        // a one-line call to action in the accent color
   Button,        // a normal button
   AccentButton,  // the page's main action
@@ -377,8 +382,13 @@ class Painter {
 
   IWICImagingFactory* Wic() const { return wic_.get(); }
 
-  // The program icons are the render target's: a new target needs new ones.
-  void ForgetIcons() const { icons_.clear(); }
+  // The program icons and the flags are the render target's: a new target
+  // needs new ones.
+  void ForgetIcons() const {
+    icons_.clear();
+    flags_.reset();
+    flagsLoaded_ = false;
+  }
 
  private:
   static constexpr const wchar_t* kDisplay = L"Segoe UI Variable Display";
@@ -460,6 +470,38 @@ class Painter {
       target->CreateBitmapFromWicBitmap(converter.get(), nullptr, it->second.put());
     }
     return it->second.get();
+  }
+
+  // The flags sprite (flags.h) from the exe's resources, as a bitmap of
+  // `target` at 96 DPI - so a flag's source rectangle is its pixels. Null if
+  // it can't be had; tried once per target.
+  ID2D1Bitmap* Flags(ID2D1RenderTarget* target) const {
+    if (flagsLoaded_ || !wic_) {
+      return flags_.get();
+    }
+    flagsLoaded_ = true;
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(IDR_FLAGS), MAKEINTRESOURCEW(10));  // RT_RCDATA
+    HGLOBAL data = resource != nullptr ? LoadResource(module, resource) : nullptr;
+    void* bytes = data != nullptr ? LockResource(data) : nullptr;
+    if (bytes == nullptr) {
+      return nullptr;
+    }
+    wil::com_ptr<IWICStream> stream;
+    wil::com_ptr<IWICBitmapDecoder> decoder;
+    wil::com_ptr<IWICBitmapFrameDecode> frame;
+    wil::com_ptr<IWICFormatConverter> converter;
+    if (SUCCEEDED(wic_->CreateStream(stream.put())) &&
+        SUCCEEDED(stream->InitializeFromMemory(static_cast<BYTE*>(bytes), SizeofResource(module, resource))) &&
+        SUCCEEDED(wic_->CreateDecoderFromStream(stream.get(), nullptr, WICDecodeMetadataCacheOnLoad, decoder.put())) &&
+        SUCCEEDED(decoder->GetFrame(0, frame.put())) && SUCCEEDED(wic_->CreateFormatConverter(converter.put())) &&
+        SUCCEEDED(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr,
+                                        0, WICBitmapPaletteTypeCustom))) {
+      const D2D1_BITMAP_PROPERTIES props =
+          D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+      target->CreateBitmapFromWicBitmap(converter.get(), &props, flags_.put());
+    }
+    return flags_.get();
   }
 
   // The height `text` takes wrapped to `width` in `format`.
@@ -589,13 +631,34 @@ class Painter {
         server += L" · " + delay;
       }
     }
-    Item link = Make(Kind::ServerLink, {cx - 150, top + 12 + kPower + 6, cx + 150, height - 10},
+    const float linkTop = top + 12 + kPower + 4;
+    Item link = Make(Kind::ServerLink, {cx - 150, linkTop, cx + 150, linkTop + 30},
                      server.empty() ? std::wstring(L"выбор сервера") : server, kGlyphChevron);
     link.action = ItemAction::Page;
     link.index = static_cast<int>(UiPage::Servers);
     link.enabled = !c.protocols.empty();
     link.scrolls = false;
+    const float exitTop = link.rect.bottom;
     l.items.push_back(std::move(link));
+
+    // The exit: the flag, and the address or - hidden with a click - the country.
+    if (c.exitIp.empty() && !c.exitPending) {
+      return;
+    }
+    std::wstring text;
+    if (c.exitIp.empty()) {
+      text = L"определяю выходной IP…";
+    } else if (c.hideExitIp) {
+      text = c.exitCountryName.empty() ? std::wstring(L"IP скрыт") : c.exitCountryName;
+    } else {
+      text = c.exitCountryName.empty() ? c.exitIp : c.exitIp + L" · " + c.exitCountryName;
+    }
+    Item exit = CommandItem(Kind::ExitLine, {cx - 160, exitTop, cx + 160, exitTop + 24}, std::move(text), nullptr,
+                            UiCommand::ToggleExitIp);
+    exit.detail = c.exitCountry;
+    exit.enabled = !c.exitIp.empty();
+    exit.scrolls = false;
+    l.items.push_back(std::move(exit));
   }
 
   // The servers of the subscription's selector, with their latency.
@@ -925,6 +988,43 @@ class Painter {
         }
         break;
       }
+      case Kind::ExitLine: {
+        // The flag and the text, centered together.
+        float textWidth = r.right - r.left - kFlagW - 8;
+        wil::com_ptr<IDWriteTextLayout> layout;
+        if (SUCCEEDED(dwrite_->CreateTextLayout(it.text.data(), static_cast<UINT32>(it.text.size()), caption_.get(),
+                                                textWidth, r.bottom - r.top, layout.put()))) {
+          DWRITE_TEXT_METRICS m{};
+          if (SUCCEEDED(layout->GetMetrics(&m))) {
+            textWidth = std::min(textWidth, m.width);
+          }
+        }
+        const std::optional<std::size_t> flag = FlagIndex(std::wstring_view(it.detail).size() == 2
+                                                              ? std::string{static_cast<char>(it.detail[0]),
+                                                                            static_cast<char>(it.detail[1])}
+                                                              : std::string());
+        ID2D1Bitmap* sprite = flag ? Flags(k.t) : nullptr;
+        const float flagWidth = sprite != nullptr ? kFlagW + 8 : 0.0f;
+        const float left = (r.left + r.right - textWidth - flagWidth) / 2;
+        if (hovered && it.enabled) {
+          k.Round({left - 8, r.top + 1, left + flagWidth + textWidth + 8, r.bottom - 1}, 6,
+                  Rgb(255, 255, 255, pressed ? 0.04f : 0.07f));
+        }
+        if (sprite != nullptr) {
+          const auto n = static_cast<float>(*flag);
+          const float column = std::fmod(n, static_cast<float>(kFlagColumns));
+          const float row = std::floor(n / static_cast<float>(kFlagColumns));
+          const D2D1_RECT_F source{column * kFlagWidth, row * kFlagHeight, (column + 1) * kFlagWidth,
+                                   (row + 1) * kFlagHeight};
+          const float cy = (r.top + r.bottom) / 2;
+          const D2D1_RECT_F place{left, cy - kFlagH / 2, left + kFlagW, cy + kFlagH / 2};
+          k.t->DrawBitmap(sprite, place, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+          k.Outline(place, 1.5f, Rgb(255, 255, 255, 0.12f));
+        }
+        k.Text(it.text, caption_.get(), {left + flagWidth, r.top, left + flagWidth + textWidth + 2, r.bottom},
+               it.enabled ? secondary : FromColorRef(ui::kSecondaryText, 0.7f));
+        break;
+      }
       case Kind::Banner: {
         k.Round(r, kRadius, FromColorRef(ui::kAccent, pressed ? 0.10f : (hovered ? 0.18f : 0.13f)));
         const D2D1_COLOR_F ink = it.enabled ? accent : secondary;
@@ -1153,6 +1253,8 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> glyphBig_;
   // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
   mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
+  mutable wil::com_ptr<ID2D1Bitmap> flags_;  // Flags'
+  mutable bool flagsLoaded_ = false;
 };
 
 int Scale(float dip, UINT dpi) { return static_cast<int>(std::lround(dip * static_cast<float>(dpi) / 96.0f)); }

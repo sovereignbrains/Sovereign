@@ -110,6 +110,9 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("protocol"); v != json.end() && v->is_string()) {
     settings.protocol = v->get<std::string>();
   }
+  if (const auto v = json.find("hideExitIp"); v != json.end() && v->is_boolean()) {
+    settings.hideExitIp = v->get<bool>();
+  }
   return settings;
 }
 
@@ -126,6 +129,7 @@ void SaveSettings(const TraySettings& settings) {
     json["appPaths"][app] = path;
   }
   json["protocol"] = settings.protocol;
+  json["hideExitIp"] = settings.hideExitIp;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }
 

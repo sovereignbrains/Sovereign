@@ -40,6 +40,7 @@ class GoCore final : public ICore {
   CoreStats Stats() override;
   std::string StartUrlTest(const UrlTestRequest& request) override;
   std::vector<DelayResult> Delays() override;
+  ExitIp LookupExitIp(const std::string& tag, bool refresh) override;
   void SetLogSink(LogSink sink) override;
 
  private:
@@ -49,6 +50,7 @@ class GoCore final : public ICore {
   using BoxStatsFn = int(__cdecl*)(std::int64_t*, std::int64_t*, std::int64_t*, std::int64_t*);
   using BoxUrlTestFn = char*(__cdecl*)(const char*);
   using BoxDelaysFn = char*(__cdecl*)();
+  using BoxExitIpFn = char*(__cdecl*)(const char*);
   using LogCallbackFn = void(__cdecl*)(void*, int, const char*);
   using BoxSetLogCallbackFn = void(__cdecl*)(LogCallbackFn, void*);
   using BoxFreeFn = void(__cdecl*)(char*);
@@ -70,6 +72,7 @@ class GoCore final : public ICore {
   BoxStatsFn boxStats_ = nullptr;
   BoxUrlTestFn boxUrlTest_ = nullptr;
   BoxDelaysFn boxDelays_ = nullptr;
+  BoxExitIpFn boxExitIp_ = nullptr;
   BoxSetLogCallbackFn boxSetLogCallback_ = nullptr;
   BoxFreeFn boxFree_ = nullptr;
 

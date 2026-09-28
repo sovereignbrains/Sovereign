@@ -36,6 +36,7 @@
 #include <condition_variable>
 #include <ctime>
 #include <deque>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -54,6 +55,7 @@
 #include "cache_file.h"
 #include "config_sync.h"
 #include "delays.h"
+#include "exit_ip.h"
 #include "fetch.h"
 #include "protocol_choice.h"
 #include "icons.h"
@@ -106,6 +108,10 @@ constexpr std::chrono::minutes kRefreshRetry{30};
 // one poll reads at most (a flood is read on over the next seconds).
 constexpr std::size_t kLogKeep = 5000;
 constexpr int kLogPagesPerPoll = 20;
+
+// The exit IP: how often a running lookup is polled, and a known one rechecked.
+constexpr std::chrono::seconds kExitIpPoll{2};
+constexpr std::chrono::minutes kExitIpRecheck{5};
 
 // A latency test the service never finishes stops being waited for.
 constexpr std::chrono::seconds kUrlTestGiveUp{60};
@@ -196,6 +202,8 @@ struct View {
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
   bool delaysTesting = false;
   std::string delayError;
+  sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
+  bool hideExitIp = false;
 };
 
 // What to do with the config when a newer subscription meets the user's
@@ -242,6 +250,7 @@ struct Shared {
   bool pendingUnsubscribe = false;
   bool pendingRefresh = false;
   bool pendingUrlTest = false;
+  bool pendingToggleExitIp = false;
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   std::optional<ConfigChoice> pendingChoice;
@@ -254,7 +263,7 @@ struct Shared {
 
   bool HasRequests() const {
     return pendingWant || pendingImport || pendingLocalConfig || pendingUnsubscribe || pendingRefresh ||
-           pendingUrlTest || pendingApps || pendingProtocol ||
+           pendingUrlTest || pendingToggleExitIp || pendingApps || pendingProtocol ||
            pendingChoice;
   }
 };
@@ -397,6 +406,7 @@ class Worker {
       bool unsubscribe = false;
       bool refresh = false;
       bool urlTest = false;
+      bool toggleExitIp = false;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
@@ -408,6 +418,7 @@ class Worker {
         unsubscribe = std::exchange(shared.pendingUnsubscribe, false);
         refresh = std::exchange(shared.pendingRefresh, false);
         urlTest = std::exchange(shared.pendingUrlTest, false);
+        toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
       }
       if (want) {
         settings_.wantOn = *want;
@@ -452,6 +463,11 @@ class Worker {
       const auto stats = PollStats();
       Execute(model_, model_.OnPoll(stats, TrayModel::Clock::now()), config);
       UpdateDelays(stats, urlTest);
+      UpdateExitIp(stats);
+      if (toggleExitIp) {
+        settings_.hideExitIp = !settings_.hideExitIp;
+        Save();
+      }
       CollectLogs();
       Publish();
 
@@ -768,6 +784,39 @@ class Worker {
     }
   }
 
+  // The exit IP through the server in use: asked for when a box starts or
+  // the server changes, polled while the lookup runs, and asked again now
+  // and then (auto may have moved to another server).
+  void UpdateExitIp(const std::optional<sovereign::tray::Stats>& stats) {
+    const auto [options, current] = Protocols();
+    const std::string tag = current >= 0 ? options[static_cast<std::size_t>(current)] : std::string();
+    if (!stats || model_.GetDisplay() != Display::On || tag.empty()) {
+      exit_ = {};
+      exitTag_.clear();
+      exitAsked_.reset();
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    const bool fresh = tag != exitTag_ || stats->generation != exitGeneration_;
+    const auto wait = exit_.pending ? kExitIpPoll : kExitIpRecheck;
+    if (!fresh && exitAsked_ && now - *exitAsked_ < wait) {
+      return;
+    }
+    const bool refresh = fresh || !exit_.pending;  // a poll of a running lookup doesn't restart it
+    exitTag_ = tag;
+    exitGeneration_ = stats->generation;
+    exitAsked_ = now;
+    const auto response = sovereign::tray::RequestService(
+        nlohmann::json{{"cmd", "box_exitip"}, {"tag", tag}, {"refresh", refresh}}.dump());
+    if (const auto parsed = response ? sovereign::tray::ParseExitIpResponse(*response) : std::nullopt) {
+      // A failed recheck keeps the last known address: it's still the best guess.
+      if (parsed->ip.empty() && !parsed->pending && !exit_.ip.empty() && !fresh) {
+        return;
+      }
+      exit_ = *parsed;
+    }
+  }
+
   void StartUrlTest() {
     const std::vector<std::string> tags = Protocols().first;
     if (tags.empty()) {
@@ -932,6 +981,8 @@ class Worker {
       }
       v.delaysTesting = testing_;
       v.delayError = delayError_;
+      v.exitIp = exit_;
+      v.hideExitIp = settings_.hideExitIp;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -962,6 +1013,10 @@ class Worker {
   std::int64_t generation_ = -1;        // the box the results belong to
   std::int64_t testedGeneration_ = -1;  // the box last tested automatically
   std::string delayError_;
+  sovereign::tray::ExitIp exit_;
+  std::string exitTag_;               // the server exit_ is about
+  std::int64_t exitGeneration_ = -1;  // and the box
+  std::optional<TrayModel::Clock::time_point> exitAsked_;
 };
 
 // NOTIFYICONDATA as RAII: the icon leaves the notification area whatever
@@ -1320,6 +1375,37 @@ void RequestChoice(ConfigChoice choice) {
   Wake();
 }
 
+// A country's name as the system says it ("Нидерланды" on a Russian
+// Windows); the code itself if it doesn't know it.
+std::wstring CountryName(const std::wstring& code) {
+  if (code.size() != 2) {
+    return code;
+  }
+  // Windows 10 1709+, and the SDK declares it only when built for that:
+  // looked up at run time instead.
+  using GetGeoInfoExFn = int(WINAPI*)(PWSTR, GEOTYPE, PWSTR, int);
+  // Through an integer, as go_core.cpp's ResolveExport: clang rejects a
+  // direct FARPROC-to-function cast.
+  static const auto getGeoInfoEx = reinterpret_cast<GetGeoInfoExFn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetGeoInfoEx")));
+  if (getGeoInfoEx == nullptr) {
+    return code;
+  }
+  std::wstring location = code;
+  wchar_t name[128]{};
+  const int n = getGeoInfoEx(location.data(), GEO_FRIENDLYNAME, name, static_cast<int>(std::size(name)));
+  return n > 1 ? std::wstring(name) : code;
+}
+
+void RequestToggleExitIp() {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingToggleExitIp = true;
+  }
+  Wake();
+}
+
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
 // What the window shows, from the worker's view.
@@ -1374,6 +1460,11 @@ UiContent ContentFrom(const View& v) {
   c.delaysTesting = v.delaysTesting;
   c.canTestDelays = v.display == Display::On && !v.protocols.empty();
   c.delayError = Widen(v.delayError);
+  c.exitIp = Widen(v.exitIp.ip);
+  c.exitCountry = Widen(v.exitIp.country);
+  c.exitCountryName = CountryName(c.exitCountry);
+  c.exitPending = v.exitIp.pending;
+  c.hideExitIp = v.hideExitIp;
   c.autostart = sovereign::tray::AutostartEnabled();
   c.version = SOVEREIGN_VERSION_W L" · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
   if (g_updater != nullptr) {
@@ -1507,6 +1598,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         g_trayIcon->Balloon(L"Sovereign", L"Не удалось изменить автозапуск (реестр отказал).");
       }
       UpdateWindows();
+      break;
+    case UiCommand::ToggleExitIp:
+      RequestToggleExitIp();
       break;
     case UiCommand::TestDelays:
       RequestUrlTest();

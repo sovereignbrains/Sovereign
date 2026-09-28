@@ -65,11 +65,20 @@ class FakeCore final : public ICore {
 
   std::vector<sovereign::service::DelayResult> Delays() override { return delays; }
 
+  sovereign::service::ExitIp LookupExitIp(const std::string& tag, bool refresh) override {
+    exitIpAsked = {tag, refresh};
+    sovereign::service::ExitIp result = exitIp;
+    result.tag = tag;
+    return result;
+  }
+
   void SetLogSink(LogSink sink) override { installedSink = std::move(sink); }
 
   bool running = false;
   std::optional<sovereign::service::UrlTestRequest> urlTest;
   std::vector<sovereign::service::DelayResult> delays;
+  sovereign::service::ExitIp exitIp;
+  std::optional<std::pair<std::string, bool>> exitIpAsked;
   std::string startError;
   std::string stopError;
   std::string startedWith;
@@ -172,6 +181,35 @@ void TestUrlTest() {
   CHECK(delays.value("cmd", "") == "box_delays");
   CHECK(delays["results"] == json::parse(R"([{"tag":"nl","delay":48},{"tag":"fi","error":"i/o timeout"},)"
                                          R"({"tag":"de","pending":true}])"));
+}
+
+void TestExitIp() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  ControlHandler handler(&core, log, lastConfig);
+  const auto rejected = [&](const std::string& request) {
+    return Send(handler, request).value("cmd", "") == "error" && !core.exitIpAsked;
+  };
+  CHECK(rejected(R"({"cmd":"box_exitip"})"));
+  CHECK(rejected(R"({"cmd":"box_exitip","tag":""})"));
+  CHECK(rejected(R"({"cmd":"box_exitip","tag":5})"));
+  CHECK(rejected(json{{"cmd", "box_exitip"}, {"tag", std::string(300, 'x')}}.dump()));
+  CHECK(rejected(R"({"cmd":"box_exitip","tag":"a","refresh":"yes"})"));
+
+  core.exitIp.pending = true;
+  json answer = Send(handler, R"({"cmd":"box_exitip","tag":"auto"})");
+  CHECK(core.exitIpAsked == std::make_pair(std::string("auto"), false));
+  CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"auto","pending":true})"));
+
+  core.exitIp = {{}, false, "185.12.34.56", "NL", {}};
+  answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl","refresh":true})");
+  CHECK(core.exitIpAsked == std::make_pair(std::string("nl"), true));
+  CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","ip":"185.12.34.56","country":"NL"})"));
+
+  core.exitIp = {{}, false, {}, {}, "i/o timeout"};
+  answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl"})");
+  CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","error":"i/o timeout"})"));
 }
 
 void TestSha256KnownVectors() {
@@ -387,6 +425,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestReaderAheadAfterRestart();
     TestLogsCarryTime();
     TestUrlTest();
+    TestExitIp();
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;

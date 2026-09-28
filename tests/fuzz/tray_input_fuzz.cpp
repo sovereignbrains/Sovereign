@@ -18,6 +18,7 @@
 #include "cache_file.h"
 #include "config_sync.h"
 #include "delays.h"
+#include "exit_ip.h"
 #include "log_lines.h"
 #include "protocol_choice.h"
 #include "subscription.h"
@@ -65,6 +66,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   (void)FindProtocolChoices(text);
   (void)ParseLogsResponse(text);
   (void)ParseDelaysResponse(text);
+  (void)ParseExitIpResponse(text);
   (void)ParseLatestRelease(text);
   (void)ParseChecksum(text, "Sovereign-Setup-1.2.3.exe");
   (void)ParseVersion(text);

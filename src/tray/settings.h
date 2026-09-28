@@ -18,7 +18,7 @@ namespace sovereign::tray {
 // SYSTEM/admins) can read - it holds a config with passwords and keys.
 //
 //   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours",
-//                 "appsMode", "apps", "appPaths", "protocol"}
+//                 "appsMode", "apps", "appPaths", "protocol", "hideExitIp"}
 //   config.json            the sing-box config: the subscription's copy, the
 //                          user's edits on it, or by hand when there's no
 //                          subscription; the tray adds its own bits (the
@@ -45,6 +45,7 @@ struct TraySettings {
   // a std::map: MSVC's debug map allocates when moved, and settings move.
   std::vector<std::pair<std::string, std::string>> appPaths;
   std::string protocol;  // the proxy selector's default to use; empty = the config's (protocol_choice.h)
+  bool hideExitIp = false;  // the window shows the exit's country, not its address
 };
 
 // An app's remembered exe path, or null; and setting one (replacing).

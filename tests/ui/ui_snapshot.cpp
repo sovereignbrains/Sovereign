@@ -48,6 +48,9 @@ UiContent SampleContent() {
   using State = sovereign::tray::UiDelay::State;
   c.delays = {{State::Ok, 48}, {State::Ok, 52}, {State::Ok, 310}, {State::Failed, 0}, {State::Pending, 0}};
   c.canTestDelays = true;
+  c.exitIp = L"185.12.34.56";
+  c.exitCountry = L"NL";
+  c.exitCountryName = L"Нидерланды";
   c.update = sovereign::tray::UiUpdate::Available;
   c.updateVersion = L"0.3.0";
   c.autostart = true;
@@ -105,6 +108,12 @@ int Snapshots(const std::wstring& dir) {
   waiting.choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
   sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 360, 640, 96,
                                             dir + L"\\subscription-waiting-narrow.png");
+  // The exit's address hidden: the flag and the country.
+  UiContent hidden = content;
+  hidden.hideExitIp = true;
+  sovereign::tray::RenderMainWindowSnapshot(hidden, UiPage::Overview, logs, 400, 620, 96,
+                                            dir + L"\\overview-ip-hidden.png");
+
   UiContent merged = content;
   merged.configEdited = true;
   merged.mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};

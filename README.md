@@ -26,7 +26,7 @@ The client works and is in daily use; the project is between its MVP and its con
 
 ## What it does today
 
-**Tray** (`sovereign-tray.exe`) — one compact window (about 400×620), opened by a click on the notification-area icon, in the corner by it; a right click gives a short menu (on/off, open, log, quit). Its main screen: the state and speed in a line at the top, tiles into the subscription, the apps, the log and the settings, and a bar at the bottom with the on/off button and the server in use - a click on it opens the servers:
+**Tray** (`sovereign-tray.exe`) — one compact window (about 400×620), opened by a click on the notification-area icon, in the corner by it; a right click gives a short menu (on/off, open, log, quit). Its main screen: the state and speed in a line at the top, tiles into the subscription, the apps, the log and the settings, and a bar at the bottom with the on/off button, the server in use - a click on it opens the servers - and the exit IP with its country's flag (a click hides the address, leaving the country; looked up through the server itself, via Cloudflare's trace):
 
 - on/off, with live speed and connection count;
 - **subscription**: paste an `https://` link from the clipboard (a whole sing-box config there, or a `.json` file, becomes a config of your own with no subscription), copy the link to share it, unsubscribe; refresh by hand or on the server's `Profile-Update-Interval`; the server sees a `sing-box` User-Agent with the pinned version;
