@@ -61,6 +61,7 @@
 #include "icons.h"
 #include "json_field.h"
 #include "log_lines.h"
+#include "log_level.h"
 #include "main_window.h"
 #include "pipe_client.h"
 #include "settings.h"
@@ -204,6 +205,7 @@ struct View {
   std::string delayError;
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
   bool hideExitIp = false;
+  std::string logLevel;
 };
 
 // What to do with the config when a newer subscription meets the user's
@@ -251,6 +253,7 @@ struct Shared {
   bool pendingRefresh = false;
   bool pendingUrlTest = false;
   bool pendingToggleExitIp = false;
+  std::optional<std::string> pendingLogLevel;  // "" = the config's
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   std::optional<ConfigChoice> pendingChoice;
@@ -263,7 +266,7 @@ struct Shared {
 
   bool HasRequests() const {
     return pendingWant || pendingImport || pendingLocalConfig || pendingUnsubscribe || pendingRefresh ||
-           pendingUrlTest || pendingToggleExitIp || pendingApps || pendingProtocol ||
+           pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingApps || pendingProtocol ||
            pendingChoice;
   }
 };
@@ -407,6 +410,7 @@ class Worker {
       bool refresh = false;
       bool urlTest = false;
       bool toggleExitIp = false;
+      std::optional<std::string> logLevel;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
@@ -419,6 +423,7 @@ class Worker {
         refresh = std::exchange(shared.pendingRefresh, false);
         urlTest = std::exchange(shared.pendingUrlTest, false);
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
+        logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
       }
       if (want) {
         settings_.wantOn = *want;
@@ -468,6 +473,10 @@ class Worker {
         settings_.hideExitIp = !settings_.hideExitIp;
         Save();
       }
+      if (logLevel && *logLevel != settings_.logLevel) {
+        settings_.logLevel = *logLevel;
+        Save();  // the effective config changes: the model restarts the box
+      }
       CollectLogs();
       Publish();
 
@@ -484,8 +493,10 @@ class Worker {
     if (!config) {
       return std::nullopt;
     }
-    std::string effective = sovereign::tray::ApplyAppRules(
-        sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol), settings_.appsMode, settings_.apps);
+    std::string effective = sovereign::tray::ApplyLogLevel(
+        sovereign::tray::ApplyAppRules(sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol),
+                                       settings_.appsMode, settings_.apps),
+        settings_.logLevel);
     return cacheFile_.empty() ? effective : sovereign::tray::ApplyCacheFile(effective, cacheFile_);
   }
 
@@ -983,6 +994,7 @@ class Worker {
       v.delayError = delayError_;
       v.exitIp = exit_;
       v.hideExitIp = settings_.hideExitIp;
+      v.logLevel = settings_.logLevel;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -1397,6 +1409,43 @@ std::wstring CountryName(const std::wstring& code) {
   return n > 1 ? std::wstring(name) : code;
 }
 
+// "запись: …": a menu of what the core may write to the log; a pick restarts
+// the box (the effective config changes).
+void ChooseLogLevel(HWND window, POINT at) {
+  const View view = CurrentView();
+  wil::unique_hmenu menu(CreatePopupMenu());
+  if (!menu) {
+    return;
+  }
+  constexpr UINT kFirst = 1;
+  static constexpr std::array<std::pair<std::string_view, const wchar_t*>, 5> kItems = {{
+      {"", L"Как в конфиге"},
+      {"debug", L"Всё, с отладкой (debug)"},
+      {"info", L"Обычное (info)"},
+      {"warn", L"Предупреждения и ошибки (warn)"},
+      {"error", L"Только ошибки (error)"},
+  }};
+  for (std::size_t i = 0; i < kItems.size(); ++i) {
+    const UINT checked = kItems[i].first == view.logLevel ? MF_CHECKED : MF_UNCHECKED;
+    AppendMenuW(menu.get(), MF_STRING | checked, kFirst + static_cast<UINT>(i), kItems[i].second);
+  }
+  AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"Смена перезапускает подключение");
+  SetForegroundWindow(window);
+  const auto command = static_cast<UINT>(
+      TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN, at.x, at.y, 0, window,
+                     nullptr));
+  PostMessageW(window, WM_NULL, 0, 0);
+  if (command >= kFirst && command < kFirst + kItems.size()) {
+    {
+      auto& shared = State();
+      const std::scoped_lock lock(shared.mutex);
+      shared.pendingLogLevel = std::string(kItems[command - kFirst].first);
+    }
+    Wake();
+  }
+}
+
 void RequestToggleExitIp() {
   {
     auto& shared = State();
@@ -1465,6 +1514,7 @@ UiContent ContentFrom(const View& v) {
   c.exitCountryName = CountryName(c.exitCountry);
   c.exitPending = v.exitIp.pending;
   c.hideExitIp = v.hideExitIp;
+  c.logLevel = Widen(v.logLevel);
   c.autostart = sovereign::tray::AutostartEnabled();
   c.version = SOVEREIGN_VERSION_W L" · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
   if (g_updater != nullptr) {
@@ -1598,6 +1648,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         g_trayIcon->Balloon(L"Sovereign", L"Не удалось изменить автозапуск (реестр отказал).");
       }
       UpdateWindows();
+      break;
+    case UiCommand::ChooseLogLevel:
+      ChooseLogLevel(owner, args.anchor);
       break;
     case UiCommand::ToggleExitIp:
       RequestToggleExitIp();

@@ -56,6 +56,11 @@ target_link_libraries(unit-exit-ip PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-exit-ip)
 add_test(NAME unit-exit-ip COMMAND unit-exit-ip)
 
+add_executable(unit-log-level log_level_test.cpp check.h)
+target_link_libraries(unit-log-level PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-log-level)
+add_test(NAME unit-log-level COMMAND unit-log-level)
+
 add_executable(unit-log-lines log_lines_test.cpp check.h)
 target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-lines)

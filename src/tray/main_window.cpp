@@ -6,6 +6,7 @@
 #include <dwrite.h>
 #include <shellscalingapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <wincodec.h>
 
 #include <wil/com.h>
@@ -18,7 +19,9 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <string>
@@ -67,9 +70,12 @@ constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the windo
 constexpr float kLogLine = 20;
 constexpr std::size_t kLogKeep = 5000;
 
-// How long the log's copy button says it did.
-constexpr UINT_PTR kCopiedTimer = 1;
-constexpr UINT kCopiedMs = 1500;
+// The log's right-click menu.
+constexpr UINT kLogMenuCopy = 1;
+constexpr UINT kLogMenuCopyAll = 2;
+constexpr UINT kLogMenuSelectAll = 3;
+constexpr UINT kLogMenuSave = 4;
+constexpr UINT kLogMenuClear = 5;
 
 // Segoe Fluent Icons (Windows 11; the same code points in Segoe MDL2 Assets).
 constexpr const wchar_t* kGlyphSync = L"\xE895";
@@ -92,6 +98,10 @@ constexpr const wchar_t* kGlyphProgram = L"\xE7C4";
 constexpr const wchar_t* kGlyphStopwatch = L"\xE916";
 constexpr const wchar_t* kGlyphDownload = L"\xE896";
 constexpr const wchar_t* kGlyphUndo = L"\xE7A7";
+constexpr const wchar_t* kGlyphSave = L"\xE74E";
+constexpr const wchar_t* kGlyphPause = L"\xE769";
+constexpr const wchar_t* kGlyphPlay = L"\xE768";
+constexpr const wchar_t* kGlyphFilter = L"\xE71C";
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -117,11 +127,12 @@ enum class Kind : std::uint8_t {
   Switch,        // a row with a toggle switch
   Choice,        // a pickable row with a radio mark
   Segment,       // half of a two-way switch
+  Chip,          // an on/off filter: tinted when on
   AppRow,        // a program in the per-app list
   LogBox,        // the log's lines
 };
 
-enum class ItemAction : std::uint8_t { None, Command, Page, CopyLogs };
+enum class ItemAction : std::uint8_t { None, Command, Page, ToggleLevel, PauseLogs, SaveLogs };
 
 struct Item {
   Kind kind = Kind::Text;
@@ -146,18 +157,72 @@ struct Layout {
   std::optional<D2D1_RECT_F> logBox;
 };
 
-// The log page's state: its lines (newest last), how far they are scrolled
-// and which are selected - from anchor to caret, inclusive.
+// The log's level groups, as its filter shows them.
+constexpr int kLevelGroups = 4;
+constexpr const wchar_t* kLevelNames[kLevelGroups] = {L"Ошибки", L"Предупр.", L"Инфо", L"Отладка"};
+
+// A log line's group: 0 errors (and fatal, panic), 1 warnings, 2 info (and
+// lines of no level), 3 debug and trace - by FormatLogLine's level column
+// (main.cpp): "05:07:30  ERROR  outbound/...".
+int LevelGroup(std::wstring_view line) {
+  if (line.size() < 15 || line[8] != L' ' || line[9] != L' ') {
+    return 2;
+  }
+  const std::wstring_view level = line.substr(10, 5);
+  if (level.starts_with(L"ERROR") || level.starts_with(L"FATAL") || level.starts_with(L"PANIC")) {
+    return 0;
+  }
+  if (level.starts_with(L"WARN")) {
+    return 1;
+  }
+  if (level.starts_with(L"DEBUG") || level.starts_with(L"TRACE")) {
+    return 3;
+  }
+  return 2;
+}
+
+// The log page's state: its lines (newest last) and the ones the level
+// filter shows, how far those are scrolled and which are selected - from
+// anchor to caret, inclusive, as positions among the shown. Paused, new lines
+// wait in `held` and the view stays still.
 struct LogView {
   std::deque<std::wstring> lines;
-  float scroll = 0;     // DIPs from the first line
+  std::vector<int> shown;  // indices into lines
+  std::array<bool, kLevelGroups> levels{true, true, true, true};
+  std::array<int, kLevelGroups> counts{};  // lines per group
+  bool paused = false;
+  std::vector<std::wstring> held;
+  float scroll = 0;     // DIPs from the first shown line
   bool follow = true;   // stays at the bottom as lines come
   int anchor = -1;      // -1: no selection
   int caret = -1;
 
-  bool HasSelection() const { return anchor >= 0; }
-  bool Selected(int i) const { return anchor >= 0 && i >= std::min(anchor, caret) && i <= std::max(anchor, caret); }
-  float Height() const { return static_cast<float>(lines.size()) * kLogLine; }
+  int Count() const { return static_cast<int>(shown.size()); }
+  const std::wstring& Line(int i) const { return lines[static_cast<std::size_t>(shown[static_cast<std::size_t>(i)])]; }
+  bool HasSelection() const { return anchor >= 0 && caret >= 0 && caret < Count(); }
+  bool Selected(int i) const { return HasSelection() && i >= std::min(anchor, caret) && i <= std::max(anchor, caret); }
+  float Height() const { return static_cast<float>(shown.size()) * kLogLine; }
+
+  void Rebuild() {
+    shown.clear();
+    counts.fill(0);
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+      const int group = LevelGroup(lines[i]);
+      ++counts[static_cast<std::size_t>(group)];
+      if (levels[static_cast<std::size_t>(group)]) {
+        shown.push_back(static_cast<int>(i));
+      }
+    }
+  }
+};
+
+// What the log page's layout shows of the log's state.
+struct LogState {
+  bool paused = false;
+  std::size_t held = 0;
+  std::array<int, kLevelGroups> counts{};
+  std::array<bool, kLevelGroups> levels{true, true, true, true};
+  std::wstring detail;  // the caret's line in full: the list cuts long ones
 };
 
 // What a paint depends on besides the layout.
@@ -284,6 +349,8 @@ class Painter {
     caption_ = MakeFormat(kText, 12.5f);
     button_ = MakeFormat(kText, 14);
     button_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    chip_ = MakeFormat(kText, 12.5f);
+    chip_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     center_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     center_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     wrap_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_NORMAL, true);
@@ -300,8 +367,8 @@ class Painter {
 
   // The layout of `page` in a client area of `width` x `height` DIPs, the
   // page scrolled by `scroll` (clamped here).
-  Layout Build(const UiContent& c, UiPage page, float width, float height, float& scroll, bool copied,
-               bool selection) const {
+  Layout Build(const UiContent& c, UiPage page, float width, float height, float& scroll,
+               const LogState& logState) const {
     Layout l;
     const float pageWidth = std::min(kMaxPage, std::max(280.0f, width - 2 * kPad));
     const float x0 = std::max(kPad, (width - pageWidth) / 2);
@@ -320,7 +387,7 @@ class Painter {
       case UiPage::Servers: y = Servers(l, c, x0, x1, y); break;
       case UiPage::Subscription: y = Subscription(l, c, x0, x1, y); break;
       case UiPage::Apps: y = Apps(l, c, x0, x1, y); break;
-      case UiPage::Logs: y = Logs(l, x0, x1, y, height, copied, selection); break;
+      case UiPage::Logs: y = Logs(l, c, logState, x0, x1, y, height); break;
       case UiPage::Settings: y = Settings(l, c, x0, x1, y); break;
     }
     l.contentHeight = y + kPad;
@@ -859,23 +926,56 @@ class Painter {
     return y + kButton;
   }
 
-  float Logs(Layout& l, float x0, float x1, float y, float height, bool copied, bool selection) const {
+  // The log: in the title's row the level the core writes, pause and save;
+  // the level filter; the lines, filling the window; the selected line in
+  // full under them. Right-click for copy, select all, save, clear.
+  float Logs(Layout& l, const UiContent& c, const LogState& s, float x0, float x1, float y, float height) const {
     const float titleTop = y;
-    y = PageTitle(l, L"Журнал", L"Выделение — мышью, с Shift — диапазон; Ctrl+A — всё, Ctrl+C — копировать.", x0, x1, y);
-    std::wstring label = selection ? L"Копировать выделенное" : L"Копировать всё";
-    if (copied) {
-      label = L"Скопировано";
+    y = PageTitle(l, L"Журнал", nullptr, x0, x1, y);
+    float right = x1;
+    Item save = Make(Kind::IconButton, {right - 36, titleTop, right, titleTop + 36}, L"Сохранить в файл", kGlyphSave);
+    save.action = ItemAction::SaveLogs;
+    l.items.push_back(std::move(save));
+    right -= 40;
+    const bool waiting = s.paused && s.held > 0;
+    const float pauseWidth = waiting ? 84.0f : 36.0f;
+    Item pause = Make(waiting ? Kind::Button : Kind::IconButton, {right - pauseWidth, titleTop, right, titleTop + 36},
+                      waiting ? std::format(L"+{}", s.held) : std::wstring(s.paused ? L"Продолжить" : L"Пауза"),
+                      s.paused ? kGlyphPlay : kGlyphPause);
+    pause.action = ItemAction::PauseLogs;
+    pause.checked = s.paused;
+    l.items.push_back(std::move(pause));
+    right -= pauseWidth + 4;
+    l.items.push_back(CommandItem(Kind::Button, {right - 124, titleTop + 1, right, titleTop + 1 + kButton},
+                                  c.logLevel.empty() ? std::wstring(L"запись: авто") : L"запись: " + c.logLevel,
+                                  kGlyphFilter, UiCommand::ChooseLogLevel));
+
+    // Which levels are shown, with how many lines each.
+    const float chip = (x1 - x0 - 3 * 6) / kLevelGroups;
+    for (int i = 0; i < kLevelGroups; ++i) {
+      const float left = x0 + static_cast<float>(i) * (chip + 6);
+      Item level = Make(Kind::Chip, {left, y, left + chip, y + 30},
+                        std::format(L"{} {}", kLevelNames[i], s.counts[static_cast<std::size_t>(i)]));
+      level.action = ItemAction::ToggleLevel;
+      level.index = i;
+      level.checked = s.levels[static_cast<std::size_t>(i)];
+      l.items.push_back(std::move(level));
     }
-    // In the title's row, on the right.
-    Item copy = Make(Kind::Button, {x1 - 196, titleTop + 1, x1, titleTop + 1 + kButton}, std::move(label),
-                     copied ? kGlyphCheck : kGlyphCopy);
-    copy.action = ItemAction::CopyLogs;
-    l.items.push_back(std::move(copy));
+    y += 30 + 10;
+
     // Fills the window: the lines scroll inside, the page doesn't.
-    const float bottom = std::max(y + 120, height - kPad);
+    const float detailHeight =
+        s.detail.empty() ? 0.0f : std::min(84.0f, TextHeight(s.detail, captionWrap_.get(), x1 - x0 - 28)) + 20;
+    const float bottom = std::max(y + 120, height - kPad - (detailHeight > 0 ? detailHeight + 8 : 0.0f));
     l.items.push_back(Make(Kind::Card, {x0, y, x1, bottom}));
     l.items.push_back(Make(Kind::LogBox, {x0, y, x1, bottom}));
     l.logBox = D2D1_RECT_F{x0 + 1, y + 8, x1 - 1, bottom - 8};
+    if (detailHeight > 0) {
+      const float top = bottom + 8;
+      l.items.push_back(Make(Kind::Card, {x0, top, x1, top + detailHeight}));
+      l.items.push_back(Make(Kind::Caption, {x0 + 14, top + 10, x1 - 14, top + detailHeight - 10}, s.detail));
+      return top + detailHeight - kPad + 1;
+    }
     return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
@@ -1087,6 +1187,15 @@ class Painter {
         k.Text(it.text, button_.get(), r, it.checked ? Rgb(12, 20, 36) : primary);
         break;
       }
+      case Kind::Chip:
+        if (it.checked) {
+          k.Round(r, 15, FromColorRef(ui::kAccent, pressed ? 0.12f : (hovered ? 0.24f : 0.18f)));
+        } else {
+          k.Round(r, 15, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Outline(r, 15, Rgb(255, 255, 255, 0.10f));
+        }
+        k.Text(it.text, chip_.get(), r, it.checked ? accent : secondary);
+        break;
       case Kind::AppRow: {
         const float cy = (r.top + r.bottom) / 2;
         if (ID2D1Bitmap* icon = ProgramIcon(k.t, it.detail); icon != nullptr) {
@@ -1106,24 +1215,25 @@ class Painter {
   void DrawLog(const Canvas& k, D2D1_RECT_F box, const LogView& log) const {
     const D2D1_COLOR_F primary = Rgb(222, 226, 234);
     const D2D1_COLOR_F secondary = FromColorRef(ui::kSecondaryText);
-    if (log.lines.empty()) {
-      k.Text(L"Пока пусто: служба ещё ничего не написала.", button_.get(), box, secondary);
+    if (log.shown.empty()) {
+      k.Text(log.lines.empty() ? L"Пока пусто: служба ещё ничего не написала." : L"Ни одной строки этих уровней.",
+             button_.get(), box, secondary);
       return;
     }
     k.t->PushAxisAlignedClip(box, D2D1_ANTIALIAS_MODE_ALIASED);
     const float view = box.bottom - box.top;
     const auto first = static_cast<std::size_t>(std::max(0.0f, std::floor(log.scroll / kLogLine)));
-    for (std::size_t i = first; i < log.lines.size(); ++i) {
+    for (auto i = static_cast<int>(first); i < log.Count(); ++i) {
       const float top = box.top + static_cast<float>(i) * kLogLine - log.scroll;
       if (top > box.bottom) {
         break;
       }
       const D2D1_RECT_F row{box.left, top, box.right, top + kLogLine};
-      if (log.Selected(static_cast<int>(i))) {
+      if (log.Selected(i)) {
         k.Fill(row, FromColorRef(ui::kAccent, 0.22f));
       }
       // "05:07:30  ERROR  outbound/...": FormatLogLine's columns (main.cpp).
-      const std::wstring_view line = log.lines[i];
+      const std::wstring_view line = log.Line(i);
       const float x = box.left + 14;
       if (line.size() > 17 && line[8] == L' ' && line[9] == L' ') {
         const std::wstring_view level = line.substr(10, 5);
@@ -1246,6 +1356,7 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> caption_;
   wil::com_ptr<IDWriteTextFormat> button_;
   wil::com_ptr<IDWriteTextFormat> center_;
+  wil::com_ptr<IDWriteTextFormat> chip_;
   wil::com_ptr<IDWriteTextFormat> wrap_;
   wil::com_ptr<IDWriteTextFormat> captionWrap_;
   wil::com_ptr<IDWriteTextFormat> mono_;
@@ -1302,7 +1413,6 @@ struct MainWindow::Impl {
   LogView log;
   bool selecting = false;      // dragging a selection over the log
   std::optional<POINT> mouse;  // the cursor over the client area, in pixels
-  bool copied = false;
   bool placed = false;  // sized and put by the tray once, on the first show
 
   wil::com_ptr<ID2D1HwndRenderTarget> target;
@@ -1387,12 +1497,12 @@ struct MainWindow::Impl {
 
   // The log line under a point, clamped to the lines there are; -1 if none.
   int LogLineAt(POINT px) const {
-    if (!layout.logBox || log.lines.empty()) {
+    if (!layout.logBox || log.shown.empty()) {
       return -1;
     }
     const float y = ToDip(px.y) - layout.logBox->top + log.scroll;
     const auto line = static_cast<int>(std::floor(y / kLogLine));
-    return std::clamp(line, 0, static_cast<int>(log.lines.size()) - 1);
+    return std::clamp(line, 0, log.Count() - 1);
   }
 
   // The log's scroll within its lines, or at the bottom while following.
@@ -1418,7 +1528,15 @@ struct MainWindow::Impl {
 
   void Relayout() {
     const D2D1_SIZE_F size = ClientDip();
-    layout = painter.Build(content, page, size.width, size.height, scroll, copied, log.HasSelection());
+    LogState state;
+    state.paused = log.paused;
+    state.held = log.held.size();
+    state.counts = log.counts;
+    state.levels = log.levels;
+    if (log.HasSelection()) {
+      state.detail = log.Line(log.caret);
+    }
+    layout = painter.Build(content, page, size.width, size.height, scroll, state);
     ClampLog();
     in.hover = mouse ? HitAt(*mouse) : -1;
     if (in.focus >= static_cast<int>(layout.items.size()) ||
@@ -1442,7 +1560,21 @@ struct MainWindow::Impl {
     switch (item.action) {
       case ItemAction::None: return;
       case ItemAction::Page: Go(static_cast<UiPage>(item.index)); return;
-      case ItemAction::CopyLogs: CopyLogs(); return;
+      case ItemAction::ToggleLevel:
+        log.levels[static_cast<std::size_t>(item.index)] = !log.levels[static_cast<std::size_t>(item.index)];
+        log.anchor = log.caret = -1;  // positions among the shown: they mean other lines now
+        log.Rebuild();
+        ClampLog();
+        Relayout();
+        return;
+      case ItemAction::PauseLogs:
+        log.paused = !log.paused;
+        if (!log.paused) {
+          AddLogs(std::exchange(log.held, {}), false);
+        }
+        Relayout();
+        return;
+      case ItemAction::SaveLogs: SaveLogs(); return;
       case ItemAction::Command: break;
     }
     UiArgs args;
@@ -1455,40 +1587,147 @@ struct MainWindow::Impl {
     onCommand(item.command, args);
   }
 
-  // The selected log lines, or all of them, onto the clipboard.
-  void CopyLogs() {
+  // The shown lines, selected ones only or all, as text (CRLF).
+  std::wstring LogText(bool selectedOnly) const {
     std::wstring text;
-    for (std::size_t i = 0; i < log.lines.size(); ++i) {
-      if (!log.HasSelection() || log.Selected(static_cast<int>(i))) {
-        text += log.lines[i];
+    for (int i = 0; i < log.Count(); ++i) {
+      if (!selectedOnly || log.Selected(i)) {
+        text += log.Line(i);
         text += L"\r\n";
       }
     }
-    if (CopyToClipboard(hwnd, text)) {
-      copied = true;
-      SetTimer(hwnd, kCopiedTimer, kCopiedMs, nullptr);
+    return text;
+  }
+
+  // Ctrl+C: the selected lines, or all shown if none are.
+  void CopyLogs() { CopyToClipboard(hwnd, LogText(log.HasSelection())); }
+
+  void SelectAllLogs() {
+    if (log.Count() > 0) {
+      log.anchor = 0;
+      log.caret = log.Count() - 1;
       Relayout();
+    }
+  }
+
+  // The shown lines into a text file the user picks (UTF-8, CRLF).
+  void SaveLogs() {
+    std::wstring path;
+    try {
+      const auto dialog = wil::CoCreateInstance<IFileSaveDialog>(CLSID_FileSaveDialog);
+      const COMDLG_FILTERSPEC filter{L"Текст", L"*.txt"};
+      THROW_IF_FAILED(dialog->SetFileTypes(1, &filter));
+      THROW_IF_FAILED(dialog->SetDefaultExtension(L"txt"));
+      SYSTEMTIME now{};
+      GetLocalTime(&now);
+      const std::wstring name = std::format(L"sovereign-log-{:04}{:02}{:02}-{:02}{:02}.txt", now.wYear, now.wMonth,
+                                            now.wDay, now.wHour, now.wMinute);
+      THROW_IF_FAILED(dialog->SetFileName(name.c_str()));
+      const HRESULT shown = dialog->Show(hwnd);
+      if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        return;
+      }
+      THROW_IF_FAILED(shown);
+      wil::com_ptr<IShellItem> item;
+      THROW_IF_FAILED(dialog->GetResult(&item));
+      wil::unique_cotaskmem_string chosen;
+      THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &chosen));
+      path = chosen.get();
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("the save dialog failed");
+      return;
+    }
+    const std::wstring text = LogText(false);
+    std::string utf8;
+    if (!text.empty()) {
+      const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr,
+                                        nullptr);
+      utf8.resize(static_cast<std::size_t>(n));
+      WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), utf8.data(), n, nullptr, nullptr);
+    }
+    std::ofstream out(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
+    out << utf8;
+    if (!out) {
+      MessageBoxW(hwnd, L"Не удалось записать файл.", L"Sovereign", MB_OK | MB_ICONWARNING);
+    }
+  }
+
+  // Right-click on the log: what can be done with its lines. A click on a
+  // line outside the selection selects it first.
+  void LogMenu(POINT screen) {
+    POINT client = screen;
+    ScreenToClient(hwnd, &client);
+    if (const int line = LogLineAt(client); line >= 0 && InLog(client) && !log.Selected(line)) {
+      log.anchor = log.caret = line;
+      Relayout();
+    }
+    wil::unique_hmenu menu(CreatePopupMenu());
+    if (!menu) {
+      return;
+    }
+    const UINT any = log.Count() > 0 ? MF_STRING : MF_STRING | MF_GRAYED;
+    AppendMenuW(menu.get(), log.HasSelection() ? MF_STRING : MF_STRING | MF_GRAYED, kLogMenuCopy,
+                L"Копировать\tCtrl+C");
+    AppendMenuW(menu.get(), any, kLogMenuCopyAll, L"Копировать всё");
+    AppendMenuW(menu.get(), any, kLogMenuSelectAll, L"Выделить всё\tCtrl+A");
+    AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu.get(), any, kLogMenuSave, L"Сохранить в файл…");
+    AppendMenuW(menu.get(), log.lines.empty() ? MF_STRING | MF_GRAYED : MF_STRING, kLogMenuClear, L"Очистить");
+    const auto command = static_cast<UINT>(TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                                                          screen.x, screen.y, 0, hwnd, nullptr));
+    switch (command) {
+      case kLogMenuCopy: CopyToClipboard(hwnd, LogText(true)); break;
+      case kLogMenuCopyAll: CopyToClipboard(hwnd, LogText(false)); break;
+      case kLogMenuSelectAll: SelectAllLogs(); break;
+      case kLogMenuSave: SaveLogs(); break;
+      case kLogMenuClear:
+        // The window's copy only: the service keeps its own, the next lines come.
+        log.lines.clear();
+        log.held.clear();
+        log.anchor = log.caret = -1;
+        log.follow = true;
+        log.Rebuild();
+        ClampLog();
+        Relayout();
+        break;
+      default: break;
     }
   }
 
   void AddLogs(const std::vector<std::wstring>& lines, bool replace) {
     if (replace) {
       log.lines.clear();
+      log.held.clear();
       log.anchor = log.caret = -1;
       log.follow = true;
+    } else if (log.paused) {
+      // Waits for the resume; the oldest go past what the log keeps.
+      log.held.insert(log.held.end(), lines.begin(), lines.end());
+      if (log.held.size() > kLogKeep) {
+        log.held.erase(log.held.begin(), log.held.end() - static_cast<std::ptrdiff_t>(kLogKeep));
+      }
+      if (page == UiPage::Logs && IsWindowVisible(hwnd)) {
+        Relayout();  // the "+N"
+      }
+      return;
     }
     for (const std::wstring& line : lines) {
       log.lines.push_back(line);
     }
+    int shiftShown = 0;
     if (log.lines.size() > kLogKeep) {
       // The oldest go; what the user looks at and selected stays in place.
       const std::size_t cut = log.lines.size() - kLogKeep;
+      shiftShown = static_cast<int>(std::count_if(log.shown.begin(), log.shown.end(),
+                                                  [&](int i) { return static_cast<std::size_t>(i) < cut; }));
       log.lines.erase(log.lines.begin(), log.lines.begin() + static_cast<std::ptrdiff_t>(cut));
-      const auto shift = static_cast<int>(cut);
-      log.scroll = std::max(0.0f, log.scroll - static_cast<float>(cut) * kLogLine);
-      if (log.HasSelection()) {
-        log.anchor = std::max(log.anchor - shift, 0);
-        log.caret = std::max(log.caret - shift, 0);
+    }
+    log.Rebuild();
+    if (shiftShown > 0) {
+      log.scroll = std::max(0.0f, log.scroll - static_cast<float>(shiftShown) * kLogLine);
+      if (log.HasSelection() || log.anchor >= 0) {
+        log.anchor = std::max(log.anchor - shiftShown, 0);
+        log.caret = std::max(log.caret - shiftShown, 0);
       }
     }
     ClampLog();
@@ -1656,13 +1895,19 @@ struct MainWindow::Impl {
         return 0;
       }
       case WM_KEYDOWN: return Key(wParam) ? 0 : DefWindowProcW(w, message, wParam, lParam);
-      case WM_TIMER:
-        if (wParam == kCopiedTimer) {
-          KillTimer(w, kCopiedTimer);
-          copied = false;
-          Relayout();
+      case WM_CONTEXTMENU:
+        if (page == UiPage::Logs && layout.logBox) {
+          POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+          if (at.x == -1 && at.y == -1) {
+            // From the keyboard (Shift+F10): at the log's corner.
+            const float scale = static_cast<float>(Dpi()) / 96.0f;
+            at = {static_cast<LONG>(layout.logBox->left * scale) + 16, static_cast<LONG>(layout.logBox->top * scale) + 16};
+            ClientToScreen(w, &at);
+          }
+          LogMenu(at);
+          return 0;
         }
-        return 0;
+        return DefWindowProcW(w, message, wParam, lParam);
       case WM_ACTIVATE:
         if (LOWORD(wParam) == WA_INACTIVE) {
           deactivatedAt = GetTickCount64();
@@ -1685,10 +1930,8 @@ struct MainWindow::Impl {
       return true;
     }
     const bool onLog = page == UiPage::Logs && layout.logBox;
-    if (onLog && ctrl && key == 'A' && !log.lines.empty()) {
-      log.anchor = 0;
-      log.caret = static_cast<int>(log.lines.size()) - 1;
-      Relayout();
+    if (onLog && ctrl && key == 'A') {
+      SelectAllLogs();
       return true;
     }
     if (onLog && ctrl && key == 'C') {
@@ -1843,15 +2086,19 @@ void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::
 
   LogView log;
   log.lines.assign(logs.begin(), logs.end());
-  if (log.lines.size() > 2) {
-    // Shows what a selection looks like.
+  log.Rebuild();
+  LogState state;
+  state.counts = log.counts;
+  if (log.Count() > 2) {
+    // Shows what a selection looks like, and the selected line in full.
     log.anchor = 1;
     log.caret = 2;
+    state.detail = log.Line(log.caret);
   }
   float scroll = 0;
   const float scale = 96.0f / dpi;
   const Layout layout = painter.Build(content, page, static_cast<float>(width) * scale,
-                                      static_cast<float>(height) * scale, scroll, false, log.HasSelection());
+                                      static_cast<float>(height) * scale, scroll, state);
   target->BeginDraw();
   painter.Draw(target.get(), layout, content, Interaction{}, log);
   THROW_IF_FAILED(target->EndDraw());

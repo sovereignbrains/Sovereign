@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include "log_level.h"
+
 #include <windows.h>
 
 #include <wil/result.h>
@@ -113,6 +115,9 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("hideExitIp"); v != json.end() && v->is_boolean()) {
     settings.hideExitIp = v->get<bool>();
   }
+  if (const auto v = json.find("logLevel"); v != json.end() && v->is_string() && IsLogLevel(v->get<std::string>())) {
+    settings.logLevel = v->get<std::string>();
+  }
   return settings;
 }
 
@@ -130,6 +135,7 @@ void SaveSettings(const TraySettings& settings) {
   }
   json["protocol"] = settings.protocol;
   json["hideExitIp"] = settings.hideExitIp;
+  json["logLevel"] = settings.logLevel;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }
 

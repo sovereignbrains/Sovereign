@@ -61,6 +61,7 @@ struct UiContent {
   std::wstring exitCountryName;         // "Нидерланды" - the system's name for it
   bool exitPending = false;             // being looked up
   bool hideExitIp = false;              // the country only
+  std::wstring logLevel;                // what the core writes; empty = the config's
   bool autostart = false;               // the tray starts when the user signs in
   std::wstring version;                 // "0.1.0 · sing-box 1.14.1"
   UiUpdate update = UiUpdate::Idle;
@@ -84,6 +85,7 @@ enum class UiCommand : std::uint8_t {
   CopySubscription,  // the subscription link onto the clipboard
   RemoveSubscription,  // no more refreshes; the config stays
   ToggleExitIp,        // show or hide the exit's address
+  ChooseLogLevel,      // anchor: where to open the menu of levels
   SetAppsMode,   // index: 0 all except the list, 1 only the list
   RemoveApp,     // index into apps
   AddRunning,    // anchor: where to open the list of running programs
