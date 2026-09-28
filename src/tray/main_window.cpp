@@ -662,7 +662,8 @@ class Painter {
     const auto tile = [&](int n, const wchar_t* glyph, const wchar_t* title, std::wstring line, UiPage page, bool dot) {
       const float left = n % 2 == 0 ? x0 : mid + 5;
       const float right = n % 2 == 0 ? mid - 5 : x1;
-      const float top = y + static_cast<float>(n / 2) * (kTile + 10);
+      const int row = n / 2;
+      const float top = y + static_cast<float>(row) * (kTile + 10);
       Item t = Make(Kind::Tile, {left, top, right, top + kTile}, title, glyph);
       t.detail = std::move(line);
       t.action = ItemAction::Page;
