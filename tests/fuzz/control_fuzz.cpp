@@ -47,6 +47,10 @@ class FakeCore final : public ICore {
             {"bad \xFF tag", DelayResult::State::Failed, 0, "err \xFE"},
             {"de", DelayResult::State::Pending, 0, {}}};
   }
+  ExitIp LookupExitIp(const std::string& tag, bool /*refresh*/) override {
+    // What comes back from the core is as unchecked as a tag: any bytes.
+    return {tag, false, "185.12.34.56", "N\xFF", "err \xFE"};
+  }
   void SetLogSink(LogSink /*sink*/) override {}
 
  private:

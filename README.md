@@ -26,16 +26,17 @@ The client works and is in daily use; the project is between its MVP and its con
 
 ## What it does today
 
-**Tray** (`sovereign-tray.exe`) — one compact window (about 400×620), opened by a click on the notification-area icon, in the corner by it; a right click gives a short menu (on/off, open, log, quit). The window's main screen is all of every day:
+**Tray** (`sovereign-tray.exe`) — one compact window (about 400×620), opened by a click on the notification-area icon, in the corner by it; a right click gives a short menu (on/off, open, log, quit). Its main screen: the state and speed in a line at the top, tiles into the subscription, the apps, the log and the settings, and a bar at the bottom with the on/off button, the server in use - a click on it opens the servers - and the exit IP with its country's flag (a click hides the address, leaving the country; looked up through the server itself, via Cloudflare's trace):
 
-- on/off, with the server in use, its latency, live speed and connection count in one block;
-- **subscription**: paste an `https://` link from the clipboard, refresh by hand or on the server's `Profile-Update-Interval`; the server sees a `sing-box` User-Agent with the pinned version;
+- on/off, with live speed and connection count;
+- **subscription**: paste an `https://` link from the clipboard (a whole sing-box config there, or a `.json` file, becomes a config of your own with no subscription), copy the link to share it, unsubscribe; refresh by hand or on the server's `Profile-Update-Interval`; the server sees a `sing-box` User-Agent with the pinned version;
 - **the config is yours to edit**: the subscription is kept as it arrived (`subscription.json`) and `config.json` starts as its copy. A new version replaces an unedited config silently; over your edits it waits (`subscription.new.json`) and you choose — carry your edits over to it (a three-way merge: objects key by key, tagged lists like `outbounds` by tag, route rules keeping your additions and removals in place; where both sides changed the same thing yours wins and it's listed), take the new one, or keep yours. "Back to the subscription" drops the edits. Whatever gets replaced goes to `history\` first (the last 20);
-- **servers**: pick any option of the subscription's selector (or `auto`), right on the main screen, with each server's latency - sing-box's own URL test through every option, run on each connect and on demand;
-- **per-app routing**: everything except a list of programs, or only the list;
+- **servers**: pick any option of the subscription's selector (or `auto`), with each server's latency - sing-box's own URL test through every option, run on each connect and on demand;
+- **per-app routing**: everything except a list of programs, or only the list; each shown with its own icon (the exe path is remembered when it is added, or found among running processes);
+- **log**: the core's lines with their levels in color; filters by level (with counts), pause (new lines wait, counted), a click shows the line in full, right-click to copy, select all, save to a .txt or clear; what the core writes at all (debug/info/warn/error, or the config's) is picked there too;
 - start at sign-in, updates.
 
-Rows under the servers open the subscription and the apps; two icons, the log (levels in color, lines select and copy) and the settings - each opens in the window's place, back with the arrow or Esc. What waits for a click (a new version, a subscription meeting your edits) is one line above the servers. Drawn with Direct2D, keyboard-navigable (Tab, Enter, Ctrl+1..5, Esc). Started by hand the tray opens the window; from the Run key (`--background`) it stays in the notification area; a second start brings the running tray's window up. Closing it only hides it.
+Every page (servers, subscription, apps, the log and settings) opens in the window's place, back with the arrow or Esc. What waits for a click (a new version, a subscription meeting your edits) is one line above the tiles. Drawn with Direct2D, keyboard-navigable (Tab, Enter, Ctrl+1..6, Esc). Started by hand the tray opens the window; from the Run key (`--background`) it stays in the notification area; a second start brings the running tray's window up. Closing it only hides it.
 
 **Service** (`sovereign-core.exe`, runs as SYSTEM):
 

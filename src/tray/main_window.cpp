@@ -5,6 +5,8 @@
 #include <dwmapi.h>
 #include <dwrite.h>
 #include <shellscalingapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
 #include <wincodec.h>
 
 #include <wil/com.h>
@@ -17,7 +19,10 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,7 +30,9 @@
 #include <utility>
 #include <vector>
 
+#include "flags.h"
 #include "icons.h"
+#include "resource.h"
 #include "ui_style.h"
 
 namespace sovereign::tray {
@@ -46,12 +53,16 @@ constexpr float kMinHeight = 440;
 constexpr float kPad = 16;         // the page's margins
 constexpr float kMaxPage = 560;    // wider windows keep the page at this, centered
 constexpr float kRow = 44;         // a list row
-constexpr float kLinkRow = 56;     // a row that opens a page: a title and a line under it
 constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
-constexpr float kPower = 76;       // the on/off button's diameter
+constexpr float kPower = 60;       // the on/off button's diameter
+constexpr float kBar = 148;        // the overview's bottom bar: the switch, the server, the exit
+constexpr float kFlagW = 20;       // a flag in the bar, 4:3
+constexpr float kFlagH = 15;
+constexpr float kTile = 76;        // a tile on the overview
+constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
 // The log page: a line's height, and how many lines it keeps (the tray keeps
@@ -59,9 +70,12 @@ constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the windo
 constexpr float kLogLine = 20;
 constexpr std::size_t kLogKeep = 5000;
 
-// How long the log's copy button says it did.
-constexpr UINT_PTR kCopiedTimer = 1;
-constexpr UINT kCopiedMs = 1500;
+// The log's right-click menu.
+constexpr UINT kLogMenuCopy = 1;
+constexpr UINT kLogMenuCopyAll = 2;
+constexpr UINT kLogMenuSelectAll = 3;
+constexpr UINT kLogMenuSave = 4;
+constexpr UINT kLogMenuClear = 5;
 
 // Segoe Fluent Icons (Windows 11; the same code points in Segoe MDL2 Assets).
 constexpr const wchar_t* kGlyphSync = L"\xE895";
@@ -84,6 +98,10 @@ constexpr const wchar_t* kGlyphProgram = L"\xE7C4";
 constexpr const wchar_t* kGlyphStopwatch = L"\xE916";
 constexpr const wchar_t* kGlyphDownload = L"\xE896";
 constexpr const wchar_t* kGlyphUndo = L"\xE7A7";
+constexpr const wchar_t* kGlyphSave = L"\xE74E";
+constexpr const wchar_t* kGlyphPause = L"\xE769";
+constexpr const wchar_t* kGlyphPlay = L"\xE768";
+constexpr const wchar_t* kGlyphFilter = L"\xE71C";
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -97,8 +115,10 @@ enum class Kind : std::uint8_t {
   ErrorText,     // wrapped paragraph with a warning glyph, red
   Field,         // a label on the left, a value on the right
   Power,         // the overview's on/off button
-  StateText,     // the overview's state and, under it, a wrapped detail
-  Link,          // a row that opens a page: title, a line under it, a glyph on the right
+  Tile,          // a square-ish button on the overview: glyph, title, a line; `checked`: a dot
+  Bar,           // the overview's bottom panel
+  ServerLink,    // the bar's server: its name and latency, centered, opens the servers
+  ExitLine,      // the bar's exit: the country's flag (detail: its code) and the address or the country
   Banner,        // a one-line call to action in the accent color
   Button,        // a normal button
   AccentButton,  // the page's main action
@@ -107,11 +127,12 @@ enum class Kind : std::uint8_t {
   Switch,        // a row with a toggle switch
   Choice,        // a pickable row with a radio mark
   Segment,       // half of a two-way switch
+  Chip,          // an on/off filter: tinted when on
   AppRow,        // a program in the per-app list
   LogBox,        // the log's lines
 };
 
-enum class ItemAction : std::uint8_t { None, Command, Page, CopyLogs };
+enum class ItemAction : std::uint8_t { None, Command, Page, ToggleLevel, PauseLogs, SaveLogs };
 
 struct Item {
   Kind kind = Kind::Text;
@@ -136,18 +157,72 @@ struct Layout {
   std::optional<D2D1_RECT_F> logBox;
 };
 
-// The log page's state: its lines (newest last), how far they are scrolled
-// and which are selected - from anchor to caret, inclusive.
+// The log's level groups, as its filter shows them.
+constexpr int kLevelGroups = 4;
+constexpr const wchar_t* kLevelNames[kLevelGroups] = {L"Ошибки", L"Предупр.", L"Инфо", L"Отладка"};
+
+// A log line's group: 0 errors (and fatal, panic), 1 warnings, 2 info (and
+// lines of no level), 3 debug and trace - by FormatLogLine's level column
+// (main.cpp): "05:07:30  ERROR  outbound/...".
+int LevelGroup(std::wstring_view line) {
+  if (line.size() < 15 || line[8] != L' ' || line[9] != L' ') {
+    return 2;
+  }
+  const std::wstring_view level = line.substr(10, 5);
+  if (level.starts_with(L"ERROR") || level.starts_with(L"FATAL") || level.starts_with(L"PANIC")) {
+    return 0;
+  }
+  if (level.starts_with(L"WARN")) {
+    return 1;
+  }
+  if (level.starts_with(L"DEBUG") || level.starts_with(L"TRACE")) {
+    return 3;
+  }
+  return 2;
+}
+
+// The log page's state: its lines (newest last) and the ones the level
+// filter shows, how far those are scrolled and which are selected - from
+// anchor to caret, inclusive, as positions among the shown. Paused, new lines
+// wait in `held` and the view stays still.
 struct LogView {
   std::deque<std::wstring> lines;
-  float scroll = 0;     // DIPs from the first line
+  std::vector<int> shown;  // indices into lines
+  std::array<bool, kLevelGroups> levels{true, true, true, true};
+  std::array<int, kLevelGroups> counts{};  // lines per group
+  bool paused = false;
+  std::vector<std::wstring> held;
+  float scroll = 0;     // DIPs from the first shown line
   bool follow = true;   // stays at the bottom as lines come
   int anchor = -1;      // -1: no selection
   int caret = -1;
 
-  bool HasSelection() const { return anchor >= 0; }
-  bool Selected(int i) const { return anchor >= 0 && i >= std::min(anchor, caret) && i <= std::max(anchor, caret); }
-  float Height() const { return static_cast<float>(lines.size()) * kLogLine; }
+  int Count() const { return static_cast<int>(shown.size()); }
+  const std::wstring& Line(int i) const { return lines[static_cast<std::size_t>(shown[static_cast<std::size_t>(i)])]; }
+  bool HasSelection() const { return anchor >= 0 && caret >= 0 && caret < Count(); }
+  bool Selected(int i) const { return HasSelection() && i >= std::min(anchor, caret) && i <= std::max(anchor, caret); }
+  float Height() const { return static_cast<float>(shown.size()) * kLogLine; }
+
+  void Rebuild() {
+    shown.clear();
+    counts.fill(0);
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+      const int group = LevelGroup(lines[i]);
+      ++counts[static_cast<std::size_t>(group)];
+      if (levels[static_cast<std::size_t>(group)]) {
+        shown.push_back(static_cast<int>(i));
+      }
+    }
+  }
+};
+
+// What the log page's layout shows of the log's state.
+struct LogState {
+  bool paused = false;
+  std::size_t held = 0;
+  std::array<int, kLevelGroups> counts{};
+  std::array<bool, kLevelGroups> levels{true, true, true, true};
+  std::wstring detail;  // the caret's line in full: the list cuts long ones
 };
 
 // What a paint depends on besides the layout.
@@ -209,18 +284,11 @@ std::wstring StateDetail(const UiContent& c) {
     case Display::ServiceDown:
       return L"sovereign-core не отвечает. Установи службу от администратора: sovereign-core.exe --install";
     case Display::Off:
-      return c.hasSubscription || !c.protocols.empty() ? L"Нажми, чтобы подключиться."
+      return c.hasSubscription || !c.protocols.empty() ? L"Кнопка внизу — подключиться."
                                                        : L"Сначала добавь подписку.";
     case Display::Starting: return L"Запускается ядро sing-box…";
-    case Display::On: {
-      std::wstring server = CurrentProtocol(c);
-      if (!server.empty() && static_cast<std::size_t>(c.protocol) < c.delays.size() &&
-          c.delays[static_cast<std::size_t>(c.protocol)].state == UiDelay::State::Ok) {
-        server += std::format(L" · {} мс", c.delays[static_cast<std::size_t>(c.protocol)].ms);
-      }
-      return (server.empty() ? std::wstring() : server + L"\n") +
-             std::format(L"↓ {}   ↑ {}\nсоединений: {}", FormatRate(c.down), FormatRate(c.up), c.connections);
-    }
+    case Display::On:
+      return std::format(L"↓ {}   ↑ {}   ·   соединений: {}", FormatRate(c.down), FormatRate(c.up), c.connections);
     case Display::Error: return c.error.empty() ? std::wstring(L"ядро не запустилось") : c.error;
   }
   return {};
@@ -229,7 +297,7 @@ std::wstring StateDetail(const UiContent& c) {
 // The subscription's line on the overview.
 std::wstring SubscriptionLine(const UiContent& c) {
   if (!c.hasSubscription) {
-    return L"нет — вставь ссылку";
+    return c.hasConfig ? L"нет — свой конфиг" : L"нет — вставь ссылку";
   }
   std::wstring line = c.subscriptionHost.empty() ? std::wstring(L"подписка") : c.subscriptionHost;
   if (c.subscriptionWaiting) {
@@ -243,7 +311,7 @@ std::wstring SubscriptionLine(const UiContent& c) {
 
 std::wstring AppsLine(const UiContent& c) {
   if (c.apps.empty()) {
-    return c.appsInclude ? L"только список — он пуст" : L"всё через VPN";
+    return c.appsInclude ? L"только список — он пуст" : L"всё через прокси";
   }
   return std::format(L"{} {}", c.appsInclude ? L"только" : L"всё, кроме", c.apps.size());
 }
@@ -281,13 +349,17 @@ class Painter {
     caption_ = MakeFormat(kText, 12.5f);
     button_ = MakeFormat(kText, 14);
     button_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    chip_ = MakeFormat(kText, 12.5f);
+    chip_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    center_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    center_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     wrap_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_NORMAL, true);
     captionWrap_ = MakeFormat(kText, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
     mono_ = MakeFormat(L"Consolas", 12.5f);
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    glyphBig_ = MakeFormat(glyphs.c_str(), 30);
+    glyphBig_ = MakeFormat(glyphs.c_str(), 24);
     glyphBig_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   }
 
@@ -295,27 +367,32 @@ class Painter {
 
   // The layout of `page` in a client area of `width` x `height` DIPs, the
   // page scrolled by `scroll` (clamped here).
-  Layout Build(const UiContent& c, UiPage page, float width, float height, float& scroll, bool copied,
-               bool selection) const {
+  Layout Build(const UiContent& c, UiPage page, float width, float height, float& scroll,
+               const LogState& logState) const {
     Layout l;
     const float pageWidth = std::min(kMaxPage, std::max(280.0f, width - 2 * kPad));
     const float x0 = std::max(kPad, (width - pageWidth) / 2);
     const float x1 = x0 + pageWidth;
     l.viewTop = 0;
     l.viewBottom = height;
+    if (page == UiPage::Overview) {
+      Bar(l, c, width, height);  // fixed: before the page's items, which scroll
+      l.viewBottom = height - kBar;
+    }
     const std::size_t first = l.items.size();
 
     float y = kPad;
     switch (page) {
       case UiPage::Overview: y = Overview(l, c, x0, x1, y); break;
+      case UiPage::Servers: y = Servers(l, c, x0, x1, y); break;
       case UiPage::Subscription: y = Subscription(l, c, x0, x1, y); break;
       case UiPage::Apps: y = Apps(l, c, x0, x1, y); break;
-      case UiPage::Logs: y = Logs(l, x0, x1, y, height, copied, selection); break;
+      case UiPage::Logs: y = Logs(l, c, logState, x0, x1, y, height); break;
       case UiPage::Settings: y = Settings(l, c, x0, x1, y); break;
     }
     l.contentHeight = y + kPad;
 
-    scroll = std::clamp(scroll, 0.0f, std::max(0.0f, l.contentHeight - height));
+    scroll = std::clamp(scroll, 0.0f, std::max(0.0f, l.contentHeight - (l.viewBottom - l.viewTop)));
     l.scroll = scroll;
     for (std::size_t i = first; i < l.items.size(); ++i) {
       l.items[i].rect.top -= scroll;
@@ -345,7 +422,7 @@ class Painter {
         t->PushAxisAlignedClip({0, l.viewTop, size.width, l.viewBottom}, D2D1_ANTIALIAS_MODE_ALIASED);
         clipped = true;
       }
-      if (it.rect.bottom < l.viewTop || it.rect.top > l.viewBottom) {
+      if (it.scrolls && (it.rect.bottom < l.viewTop || it.rect.top > l.viewBottom)) {
         continue;
       }
       const auto n = static_cast<int>(i);
@@ -371,6 +448,14 @@ class Painter {
   }
 
   IWICImagingFactory* Wic() const { return wic_.get(); }
+
+  // The program icons and the flags are the render target's: a new target
+  // needs new ones.
+  void ForgetIcons() const {
+    icons_.clear();
+    flags_.reset();
+    flagsLoaded_ = false;
+  }
 
  private:
   static constexpr const wchar_t* kDisplay = L"Segoe UI Variable Display";
@@ -424,6 +509,68 @@ class Painter {
     return f;
   }
 
+  // A program's icon from its exe, at the target's DPI; null if the path is
+  // unknown or the file has none. Loaded once per path (a miss too).
+  ID2D1Bitmap* ProgramIcon(ID2D1RenderTarget* target, const std::wstring& path) const {
+    if (path.empty() || !wic_) {
+      return nullptr;
+    }
+    const auto [it, fresh] = icons_.try_emplace(path);
+    if (!fresh) {
+      return it->second.get();
+    }
+    FLOAT dpiX = 96;
+    FLOAT dpiY = 96;
+    target->GetDpi(&dpiX, &dpiY);
+    const auto size = static_cast<UINT>(std::lround(kAppIcon * dpiX / 96.0f));
+    HICON extracted = nullptr;
+    if (FAILED(SHDefExtractIconW(path.c_str(), 0, 0, &extracted, nullptr, size)) || extracted == nullptr) {
+      return nullptr;
+    }
+    const wil::unique_hicon icon(extracted);
+    wil::com_ptr<IWICBitmap> source;
+    wil::com_ptr<IWICFormatConverter> converter;
+    if (SUCCEEDED(wic_->CreateBitmapFromHICON(icon.get(), source.put())) &&
+        SUCCEEDED(wic_->CreateFormatConverter(converter.put())) &&
+        SUCCEEDED(converter->Initialize(source.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr,
+                                        0, WICBitmapPaletteTypeCustom))) {
+      target->CreateBitmapFromWicBitmap(converter.get(), nullptr, it->second.put());
+    }
+    return it->second.get();
+  }
+
+  // The flags sprite (flags.h) from the exe's resources, as a bitmap of
+  // `target` at 96 DPI - so a flag's source rectangle is its pixels. Null if
+  // it can't be had; tried once per target.
+  ID2D1Bitmap* Flags(ID2D1RenderTarget* target) const {
+    if (flagsLoaded_ || !wic_) {
+      return flags_.get();
+    }
+    flagsLoaded_ = true;
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(IDR_FLAGS), MAKEINTRESOURCEW(10));  // RT_RCDATA
+    HGLOBAL data = resource != nullptr ? LoadResource(module, resource) : nullptr;
+    void* bytes = data != nullptr ? LockResource(data) : nullptr;
+    if (bytes == nullptr) {
+      return nullptr;
+    }
+    wil::com_ptr<IWICStream> stream;
+    wil::com_ptr<IWICBitmapDecoder> decoder;
+    wil::com_ptr<IWICBitmapFrameDecode> frame;
+    wil::com_ptr<IWICFormatConverter> converter;
+    if (SUCCEEDED(wic_->CreateStream(stream.put())) &&
+        SUCCEEDED(stream->InitializeFromMemory(static_cast<BYTE*>(bytes), SizeofResource(module, resource))) &&
+        SUCCEEDED(wic_->CreateDecoderFromStream(stream.get(), nullptr, WICDecodeMetadataCacheOnLoad, decoder.put())) &&
+        SUCCEEDED(decoder->GetFrame(0, frame.put())) && SUCCEEDED(wic_->CreateFormatConverter(converter.put())) &&
+        SUCCEEDED(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr,
+                                        0, WICBitmapPaletteTypeCustom))) {
+      const D2D1_BITMAP_PROPERTIES props =
+          D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+      target->CreateBitmapFromWicBitmap(converter.get(), &props, flags_.put());
+    }
+    return flags_.get();
+  }
+
   // The height `text` takes wrapped to `width` in `format`.
   float TextHeight(std::wstring_view text, IDWriteTextFormat* format, float width) const {
     wil::com_ptr<IDWriteTextLayout> layout;
@@ -462,34 +609,23 @@ class Painter {
     return y + h;
   }
 
-  // The one screen for every day: the state and the switch, what needs a
-  // click (an update, a subscription waiting), the servers with their
-  // latency, and rows into the rest.
+  // The one screen for every day: the state in a line or two, what needs a
+  // click (an update, a subscription waiting), and tiles into the rest; the
+  // switch and the server live in the bar under it (Bar).
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    // The state: the switch, what it means, the log and the settings.
+    // The state.
     const std::wstring detail = StateDetail(c);
-    const float textLeft = x0 + 16 + kPower + 16;
-    const float detailHeight = TextHeight(detail, captionWrap_.get(), x1 - 16 - textLeft);
-    const float heroHeight = std::max(16 + kPower + 16, 50 + detailHeight + 16);
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + heroHeight}));
-    const float cy = y + heroHeight / 2;
-    Item power = CommandItem(Kind::Power, {x0 + 16, cy - kPower / 2, x0 + 16 + kPower, cy + kPower / 2}, {}, kGlyphPower,
-                             UiCommand::Toggle);
-    power.checked = c.on;
-    l.items.push_back(std::move(power));
-    Item state = Make(Kind::StateText, {textLeft, y + 14, x1 - 16, y + heroHeight - 12}, StateTitle(c));
-    state.detail = detail;
+    l.items.push_back(Make(Kind::Title, {x0, y, x1, y + 30}, StateTitle(c)));
+    y += 32;
+    const float detailHeight = TextHeight(detail, captionWrap_.get(), x1 - x0);
+    Item state = Make(c.display == Display::Error ? Kind::ErrorText : Kind::Caption, {x0, y, x1, y + detailHeight},
+                      detail, c.display == Display::Error ? kGlyphWarning : nullptr);
+    if (c.display == Display::Error) {
+      const float h = TextHeight(detail, wrap_.get(), x1 - x0 - 28);
+      state.rect.bottom = y + h;
+    }
+    y = state.rect.bottom + kGap + 4;
     l.items.push_back(std::move(state));
-    Item logs = Make(Kind::IconButton, {x1 - 80, y + 8, x1 - 44, y + 44}, L"Журнал", kGlyphLog);
-    logs.action = ItemAction::Page;
-    logs.index = static_cast<int>(UiPage::Logs);
-    l.items.push_back(std::move(logs));
-    Item settings = Make(Kind::IconButton, {x1 - 44, y + 8, x1 - 8, y + 44}, L"Настройки", kGlyphSettings);
-    settings.action = ItemAction::Page;
-    settings.index = static_cast<int>(UiPage::Settings);
-    settings.checked = c.update == UiUpdate::Available;
-    l.items.push_back(std::move(settings));
-    y += heroHeight + kGap;
 
     // What waits for a click: one line each.
     if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading) {
@@ -509,62 +645,112 @@ class Painter {
       l.items.push_back(std::move(waiting));
       y += 40 + 8;
     }
-    if (y > l.items.front().rect.bottom + kGap) {
-      y += kGap - 8;
-    }
 
-    y = Servers(l, c, x0, x1, y) + kGap;
-
-    // Into the rest.
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 2 * kLinkRow}));
-    Item refresh = CommandItem(Kind::IconButton, {x1 - 44, y + 10, x1 - 8, y + 46}, L"Обновить подписку", kGlyphRefresh,
-                               UiCommand::RefreshSubscription);
-    refresh.enabled = c.hasSubscription;
-    l.items.push_back(std::move(refresh));  // before its row: the row's rectangle doesn't reach it, but first wins
-    Item subscription = Make(Kind::Link, {x0 + 4, y + 4, x1 - 48, y + kLinkRow - 4}, L"Подписка");
-    subscription.detail = SubscriptionLine(c);
-    subscription.action = ItemAction::Page;
-    subscription.index = static_cast<int>(UiPage::Subscription);
-    l.items.push_back(std::move(subscription));
-    l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kLinkRow, x1 - 16, y + kLinkRow + 1}));
-    Item apps = Make(Kind::Link, {x0 + 4, y + kLinkRow + 4, x1 - 4, y + 2 * kLinkRow - 4}, L"Приложения", kGlyphChevron);
-    apps.detail = AppsLine(c);
-    apps.action = ItemAction::Page;
-    apps.index = static_cast<int>(UiPage::Apps);
-    l.items.push_back(std::move(apps));
-    return y + 2 * kLinkRow;
-  }
-
-  // The servers of the subscription's selector, with their latency; or how to
-  // get some.
-  float Servers(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    if (!c.hasSubscription && c.protocols.empty()) {
+    // Nothing to connect with yet: the way to fix that comes first.
+    if (!c.hasSubscription && !c.hasConfig) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 108}));
       l.items.push_back(Make(Kind::Text, {x0 + 16, y + 12, x1 - 16, y + 36}, L"Нет подписки"));
-      l.items.push_back(Make(Kind::Muted, {x0 + 16, y + 36, x1 - 16, y + 56}, L"Скопируй ссылку на неё (https://…)."));
+      l.items.push_back(
+          Make(Kind::Muted, {x0 + 16, y + 36, x1 - 16, y + 56}, L"Скопируй ссылку на неё (https://…) или конфиг."));
       l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, y + 64, x1 - 16, y + 64 + kButton},
                                     L"Вставить из буфера", kGlyphPaste, UiCommand::PasteSubscription));
-      return y + 108;
+      y += 108 + kGap;
     }
-    if (c.protocols.empty()) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
-      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56}, L"В конфиге нет выбора сервера."));
-      return y + 56;
+
+    // Into the rest: two tiles a row.
+    const float mid = (x0 + x1) / 2;
+    const auto tile = [&](int n, const wchar_t* glyph, const wchar_t* title, std::wstring line, UiPage page, bool dot) {
+      const float left = n % 2 == 0 ? x0 : mid + 5;
+      const float right = n % 2 == 0 ? mid - 5 : x1;
+      const int row = n / 2;
+      const float top = y + static_cast<float>(row) * (kTile + 10);
+      Item t = Make(Kind::Tile, {left, top, right, top + kTile}, title, glyph);
+      t.detail = std::move(line);
+      t.action = ItemAction::Page;
+      t.index = static_cast<int>(page);
+      t.checked = dot;
+      l.items.push_back(std::move(t));
+    };
+    tile(0, kGlyphSync, L"Подписка", SubscriptionLine(c), UiPage::Subscription, c.subscriptionWaiting);
+    tile(1, kGlyphProgram, L"Приложения", AppsLine(c), UiPage::Apps, false);
+    tile(2, kGlyphLog, L"Журнал", c.display == Display::Error ? L"есть ошибка" : L"ядро и трей", UiPage::Logs,
+         c.display == Display::Error);
+    tile(3, kGlyphSettings, L"Настройки", L"Sovereign " + c.version.substr(0, c.version.find(L' ')), UiPage::Settings,
+         c.update == UiUpdate::Available);
+    return y + 2 * kTile + 10;
+  }
+
+  // The overview's bottom: the switch, and under it the server in use - a
+  // click opens the servers.
+  void Bar(Layout& l, const UiContent& c, float width, float height) const {
+    const float top = height - kBar;
+    Item bar = Make(Kind::Bar, {0, top, width, height});
+    bar.scrolls = false;
+    l.items.push_back(std::move(bar));
+    const float cx = width / 2;
+    Item power = CommandItem(Kind::Power, {cx - kPower / 2, top + 12, cx + kPower / 2, top + 12 + kPower}, {},
+                             kGlyphPower, UiCommand::Toggle);
+    power.checked = c.on;
+    power.scrolls = false;
+    l.items.push_back(std::move(power));
+    std::wstring server = CurrentProtocol(c);
+    if (!server.empty() && static_cast<std::size_t>(c.protocol) < c.delays.size()) {
+      if (const std::wstring delay = DelayLabel(c.delays[static_cast<std::size_t>(c.protocol)]); !delay.empty()) {
+        server += L" · " + delay;
+      }
     }
-    // The heading and the latency test.
-    std::wstring heading = L"Серверы";
+    const float linkTop = top + 12 + kPower + 4;
+    Item link = Make(Kind::ServerLink, {cx - 150, linkTop, cx + 150, linkTop + 30},
+                     server.empty() ? std::wstring(L"выбор сервера") : server, kGlyphChevron);
+    link.action = ItemAction::Page;
+    link.index = static_cast<int>(UiPage::Servers);
+    link.enabled = !c.protocols.empty();
+    link.scrolls = false;
+    const float exitTop = link.rect.bottom;
+    l.items.push_back(std::move(link));
+
+    // The exit: the flag, and the address or - hidden with a click - the country.
+    if (c.exitIp.empty() && !c.exitPending) {
+      return;
+    }
+    std::wstring text;
+    if (c.exitIp.empty()) {
+      text = L"определяю выходной IP…";
+    } else if (c.hideExitIp) {
+      text = c.exitCountryName.empty() ? std::wstring(L"IP скрыт") : c.exitCountryName;
+    } else {
+      text = c.exitCountryName.empty() ? c.exitIp : c.exitIp + L" · " + c.exitCountryName;
+    }
+    Item exit = CommandItem(Kind::ExitLine, {cx - 160, exitTop, cx + 160, exitTop + 24}, std::move(text), nullptr,
+                            UiCommand::ToggleExitIp);
+    exit.detail = c.exitCountry;
+    exit.enabled = !c.exitIp.empty();
+    exit.scrolls = false;
+    l.items.push_back(std::move(exit));
+  }
+
+  // The servers of the subscription's selector, with their latency.
+  float Servers(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    const float titleTop = y;
+    std::wstring note = L"Задержка — запрос через каждый сервер; меньше — лучше.";
     if (c.delaysTesting) {
-      heading += L" · проверяю задержку…";
+      note = L"Проверяю задержку…";
+    } else if (!c.canTestDelays && !c.protocols.empty()) {
+      note = L"Задержку можно проверить, когда подключение включено.";
     } else if (!c.delayError.empty()) {
-      heading += L" · " + c.delayError;
+      note = L"Не удалось проверить: " + c.delayError;
     }
-    l.items.push_back(Make(Kind::Muted, {x0 + 4, y, x1 - 44, y + 32}, std::move(heading)));
-    Item test = CommandItem(Kind::IconButton, {x1 - 36, y - 2, x1, y + 34}, L"Проверить задержку", kGlyphStopwatch,
-                            UiCommand::TestDelays);
+    y = PageTitle(l, L"Серверы", note.c_str(), x0, x1, y);
+    Item test = CommandItem(Kind::IconButton, {x1 - 36, titleTop, x1, titleTop + 36}, L"Проверить задержку",
+                            kGlyphStopwatch, UiCommand::TestDelays);
     test.enabled = c.canTestDelays && !c.delaysTesting;
     l.items.push_back(std::move(test));
-    y += 36;
-
+    if (c.protocols.empty()) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
+      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56},
+                             c.hasSubscription || c.hasConfig ? L"В конфиге нет выбора сервера." : L"Нет подписки."));
+      return y + 56;
+    }
     const float h = static_cast<float>(c.protocols.size()) * kRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
     for (std::size_t i = 0; i < c.protocols.size(); ++i) {
@@ -581,23 +767,20 @@ class Painter {
   }
 
   float Subscription(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Подписка", L"Конфиг sing-box с сервера подписки. Скопируй ссылку (https://…) и нажми «Вставить» — дальше Sovereign обновляет его сам.",
+    y = PageTitle(l, L"Подписка",
+                  L"Ссылка на подписку (https://…) или свой конфиг sing-box (.json) — из буфера обмена или файлом. "
+                  L"Подписку Sovereign обновляет сам.",
                   x0, x1, y);
-    std::wstring state;
-    if (!c.hasSubscription) {
-      state = L"нет";
-    } else if (!c.subscriptionError.empty()) {
-      state = L"ошибка — работает прежний конфиг";
-    } else {
-      state = c.subscription;
-    }
-    std::vector<std::pair<const wchar_t*, std::wstring>> fields = {
-        {L"Обновлена", state},
-        {L"Сервер", c.subscriptionHost.empty() ? std::wstring(L"—") : c.subscriptionHost},
-        {L"Интервал", c.updateHours > 0 ? std::format(L"каждые {} ч", c.updateHours) : std::wstring(L"—")},
-    };
+    std::vector<std::pair<const wchar_t*, std::wstring>> fields;
     if (c.hasSubscription) {
-      fields.emplace_back(L"Конфиг", c.configEdited ? L"изменён тобой" : L"как в подписке");
+      fields = {
+          {L"Обновлена", c.subscriptionError.empty() ? c.subscription : std::wstring(L"не удалась")},
+          {L"Сервер", c.subscriptionHost.empty() ? std::wstring(L"—") : c.subscriptionHost},
+          {L"Интервал", c.updateHours > 0 ? std::format(L"каждые {} ч", c.updateHours) : std::wstring(L"—")},
+          {L"Конфиг", c.configEdited ? L"изменён тобой" : L"как в подписке"},
+      };
+    } else {
+      fields = {{L"Конфиг", c.hasConfig ? L"свой, без подписки" : L"нет"}};
     }
     const float h = static_cast<float>(fields.size()) * kRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
@@ -630,19 +813,31 @@ class Painter {
                     x0, x1, y) + kGap;
     }
 
+    // Getting a config: the clipboard (a link or a config), a file.
     const float mid = (x0 + x1) / 2;
-    l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Вставить ссылку из буфера",
-                                  kGlyphPaste, UiCommand::PasteSubscription));
+    l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Вставить из буфера", kGlyphPaste,
+                                  UiCommand::PasteSubscription));
     y += kButton + 8;
-    const bool revert = c.hasSubscription && (c.configEdited || c.subscriptionWaiting);
-    Item refresh = CommandItem(Kind::Button, {x0, y, revert ? mid - 4 : x1, y + kButton}, L"Обновить", kGlyphRefresh,
-                               UiCommand::RefreshSubscription);
-    refresh.enabled = c.hasSubscription;
-    l.items.push_back(std::move(refresh));
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, c.hasSubscription ? mid - 4 : x1, y + kButton}, L"Файл .json…",
+                                  kGlyphFile, UiCommand::ImportFile));
+    if (!c.hasSubscription) {
+      return y + kButton;
+    }
+    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
+                                  UiCommand::CopySubscription));
+    y += kButton + 8;
+
+    // The subscription itself.
+    const bool revert = c.configEdited || c.subscriptionWaiting;
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, revert ? mid - 4 : x1, y + kButton}, L"Обновить", kGlyphRefresh,
+                                  UiCommand::RefreshSubscription));
     if (revert) {
       l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
                                     UiCommand::RevertConfig));
     }
+    y += kButton + 8;
+    l.items.push_back(CommandItem(Kind::DangerButton, {x0, y, x1, y + kButton}, L"Отключить подписку", kGlyphRemove,
+                                  UiCommand::RemoveSubscription));
     return y + kButton;
   }
 
@@ -684,7 +879,7 @@ class Painter {
   }
 
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Приложения", L"Какие программы идут через VPN. Имена — как у exe-файла, без пути.", x0, x1, y);
+    y = PageTitle(l, L"Приложения", L"Какие программы идут через прокси. Имена — как у exe-файла, без пути.", x0, x1, y);
     const float mid = (x0 + x1) / 2;
     Item except = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Все, кроме списка", nullptr,
                               UiCommand::SetAppsMode, 0);
@@ -695,15 +890,15 @@ class Painter {
     l.items.push_back(std::move(only));
     y += 36 + 12;
     y = Paragraph(l, Kind::Wrap,
-                  c.appsInclude ? L"Через VPN идут только программы из списка, остальной трафик — напрямую."
-                                : L"Весь трафик идёт через VPN, кроме программ из списка — они ходят напрямую.",
+                  c.appsInclude ? L"Через прокси идут только программы из списка, остальной трафик — напрямую."
+                                : L"Весь трафик идёт через прокси, кроме программ из списка — они ходят напрямую.",
                   x0, x1, y) +
         kGap;
 
     if (c.apps.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
       l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 64},
-                             c.appsInclude ? L"Список пуст — через VPN не идёт ничего." : L"Список пуст — всё идёт через VPN."));
+                             c.appsInclude ? L"Список пуст — через прокси не идёт ничего." : L"Список пуст — всё идёт через прокси."));
       y += 64;
     } else {
       const float h = static_cast<float>(c.apps.size()) * kRow;
@@ -713,7 +908,9 @@ class Painter {
         if (i > 0) {
           l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
         }
-        l.items.push_back(Make(Kind::AppRow, {x0 + 8, top, x1 - 56, top + kRow}, c.apps[i], kGlyphProgram));
+        Item app = Make(Kind::AppRow, {x0 + 8, top, x1 - 56, top + kRow}, c.apps[i], kGlyphProgram);
+        app.detail = i < c.appPaths.size() ? c.appPaths[i] : std::wstring();  // the icon's exe
+        l.items.push_back(std::move(app));
         const float bt = top + (kRow - kButton) / 2;
         Item remove = CommandItem(Kind::IconButton, {x1 - 12 - kButton, bt, x1 - 12, bt + kButton}, L"Убрать",
                                   kGlyphRemove, UiCommand::RemoveApp, static_cast<int>(i));
@@ -730,23 +927,56 @@ class Painter {
     return y + kButton;
   }
 
-  float Logs(Layout& l, float x0, float x1, float y, float height, bool copied, bool selection) const {
+  // The log: in the title's row the level the core writes, pause and save;
+  // the level filter; the lines, filling the window; the selected line in
+  // full under them. Right-click for copy, select all, save, clear.
+  float Logs(Layout& l, const UiContent& c, const LogState& s, float x0, float x1, float y, float height) const {
     const float titleTop = y;
-    y = PageTitle(l, L"Журнал", L"Выделение — мышью, с Shift — диапазон; Ctrl+A — всё, Ctrl+C — копировать.", x0, x1, y);
-    std::wstring label = selection ? L"Копировать выделенное" : L"Копировать всё";
-    if (copied) {
-      label = L"Скопировано";
+    y = PageTitle(l, L"Журнал", nullptr, x0, x1, y);
+    float right = x1;
+    Item save = Make(Kind::IconButton, {right - 36, titleTop, right, titleTop + 36}, L"Сохранить в файл", kGlyphSave);
+    save.action = ItemAction::SaveLogs;
+    l.items.push_back(std::move(save));
+    right -= 40;
+    const bool waiting = s.paused && s.held > 0;
+    const float pauseWidth = waiting ? 84.0f : 36.0f;
+    Item pause = Make(waiting ? Kind::Button : Kind::IconButton, {right - pauseWidth, titleTop, right, titleTop + 36},
+                      waiting ? std::format(L"+{}", s.held) : std::wstring(s.paused ? L"Продолжить" : L"Пауза"),
+                      s.paused ? kGlyphPlay : kGlyphPause);
+    pause.action = ItemAction::PauseLogs;
+    pause.checked = s.paused;
+    l.items.push_back(std::move(pause));
+    right -= pauseWidth + 4;
+    l.items.push_back(CommandItem(Kind::Button, {right - 124, titleTop + 1, right, titleTop + 1 + kButton},
+                                  c.logLevel.empty() ? std::wstring(L"запись: авто") : L"запись: " + c.logLevel,
+                                  kGlyphFilter, UiCommand::ChooseLogLevel));
+
+    // Which levels are shown, with how many lines each.
+    const float chip = (x1 - x0 - 3 * 6) / kLevelGroups;
+    for (int i = 0; i < kLevelGroups; ++i) {
+      const float left = x0 + static_cast<float>(i) * (chip + 6);
+      Item level = Make(Kind::Chip, {left, y, left + chip, y + 30},
+                        std::format(L"{} {}", kLevelNames[i], s.counts[static_cast<std::size_t>(i)]));
+      level.action = ItemAction::ToggleLevel;
+      level.index = i;
+      level.checked = s.levels[static_cast<std::size_t>(i)];
+      l.items.push_back(std::move(level));
     }
-    // In the title's row, on the right.
-    Item copy = Make(Kind::Button, {x1 - 196, titleTop + 1, x1, titleTop + 1 + kButton}, std::move(label),
-                     copied ? kGlyphCheck : kGlyphCopy);
-    copy.action = ItemAction::CopyLogs;
-    l.items.push_back(std::move(copy));
+    y += 30 + 10;
+
     // Fills the window: the lines scroll inside, the page doesn't.
-    const float bottom = std::max(y + 120, height - kPad);
+    const float detailHeight =
+        s.detail.empty() ? 0.0f : std::min(84.0f, TextHeight(s.detail, captionWrap_.get(), x1 - x0 - 28)) + 20;
+    const float bottom = std::max(y + 120, height - kPad - (detailHeight > 0 ? detailHeight + 8 : 0.0f));
     l.items.push_back(Make(Kind::Card, {x0, y, x1, bottom}));
     l.items.push_back(Make(Kind::LogBox, {x0, y, x1, bottom}));
     l.logBox = D2D1_RECT_F{x0 + 1, y + 8, x1 - 1, bottom - 8};
+    if (detailHeight > 0) {
+      const float top = bottom + 8;
+      l.items.push_back(Make(Kind::Card, {x0, top, x1, top + detailHeight}));
+      l.items.push_back(Make(Kind::Caption, {x0 + 14, top + 10, x1 - 14, top + detailHeight - 10}, s.detail));
+      return top + detailHeight - kPad + 1;
+    }
     return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
@@ -822,20 +1052,78 @@ class Painter {
         k.Text(it.detail, body_.get(), {r.left + 110, r.top, r.right, r.bottom}, primary);
         break;
       case Kind::Power: DrawPower(k, it, c, hovered, pressed); break;
-      case Kind::StateText: {
-        k.Text(it.text, state_.get(), {r.left, r.top, r.right - 72, r.top + 30}, primary);  // the icons' corner
-        k.Text(it.detail, captionWrap_.get(), {r.left, r.top + 36, r.right, r.bottom},
-               c.display == Display::Error ? FromColorRef(ui::kDanger) : secondary);
+      case Kind::Tile: {
+        k.Round(r, kRadius, Rgb(255, 255, 255, 0.045f + hoverAlpha * 0.6f));
+        k.Outline(r, kRadius, Rgb(255, 255, 255, 0.06f));
+        k.Text(it.glyph, glyph_.get(), {r.left + 12, r.top + 10, r.left + 36, r.top + 34}, accent);
+        k.Text(it.text, body_.get(), {r.left + 14, r.top + 38, r.right - 10, r.top + 56}, primary);
+        k.Text(it.detail, caption_.get(), {r.left + 14, r.top + 55, r.right - 10, r.bottom - 6}, secondary);
+        if (it.checked) {
+          k.t->FillEllipse(D2D1::Ellipse({r.right - 14, r.top + 14}, 4, 4), k.Color(accent));
+        }
         break;
       }
-      case Kind::Link: {
-        if (hoverAlpha > 0) {
+      case Kind::Bar:
+        k.Fill(r, FromColorRef(ui::kPanelColor));
+        k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(255, 255, 255, 0.07f));
+        break;
+      case Kind::ServerLink: {
+        if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
         }
-        const float right = it.glyph.empty() ? r.right - 12 : r.right - 40;
-        k.Text(it.text, body_.get(), {r.left + 12, r.top + 6, right, r.top + 26}, primary);
-        k.Text(it.detail, caption_.get(), {r.left + 12, r.top + 26, right, r.bottom - 4}, secondary);
-        k.Text(it.glyph, glyph_.get(), {r.right - 36, r.top, r.right - 8, r.bottom}, secondary);
+        // The name centered, the chevron right after it.
+        const D2D1_COLOR_F ink = it.enabled ? primary : secondary;
+        float textWidth = r.right - r.left - 48;
+        wil::com_ptr<IDWriteTextLayout> layout;
+        if (SUCCEEDED(dwrite_->CreateTextLayout(it.text.data(), static_cast<UINT32>(it.text.size()), center_.get(),
+                                                textWidth, r.bottom - r.top, layout.put()))) {
+          DWRITE_TEXT_METRICS m{};
+          if (SUCCEEDED(layout->GetMetrics(&m))) {
+            textWidth = std::min(textWidth, m.width);
+          }
+        }
+        const float left = (r.left + r.right - textWidth - (it.enabled ? 22.0f : 0.0f)) / 2;
+        k.Text(it.text, center_.get(), {left - 2, r.top, left + textWidth + 2, r.bottom}, ink);
+        if (it.enabled) {
+          k.Text(it.glyph, glyph_.get(), {left + textWidth + 4, r.top, left + textWidth + 22, r.bottom}, secondary);
+        }
+        break;
+      }
+      case Kind::ExitLine: {
+        // The flag and the text, centered together.
+        float textWidth = r.right - r.left - kFlagW - 8;
+        wil::com_ptr<IDWriteTextLayout> layout;
+        if (SUCCEEDED(dwrite_->CreateTextLayout(it.text.data(), static_cast<UINT32>(it.text.size()), caption_.get(),
+                                                textWidth, r.bottom - r.top, layout.put()))) {
+          DWRITE_TEXT_METRICS m{};
+          if (SUCCEEDED(layout->GetMetrics(&m))) {
+            textWidth = std::min(textWidth, m.width);
+          }
+        }
+        const std::optional<std::size_t> flag = FlagIndex(std::wstring_view(it.detail).size() == 2
+                                                              ? std::string{static_cast<char>(it.detail[0]),
+                                                                            static_cast<char>(it.detail[1])}
+                                                              : std::string());
+        ID2D1Bitmap* sprite = flag ? Flags(k.t) : nullptr;
+        const float flagWidth = sprite != nullptr ? kFlagW + 8 : 0.0f;
+        const float left = (r.left + r.right - textWidth - flagWidth) / 2;
+        if (hovered && it.enabled) {
+          k.Round({left - 8, r.top + 1, left + flagWidth + textWidth + 8, r.bottom - 1}, 6,
+                  Rgb(255, 255, 255, pressed ? 0.04f : 0.07f));
+        }
+        if (sprite != nullptr) {
+          const auto n = static_cast<float>(*flag);
+          const float column = std::fmod(n, static_cast<float>(kFlagColumns));
+          const float row = std::floor(n / static_cast<float>(kFlagColumns));
+          const D2D1_RECT_F source{column * kFlagWidth, row * kFlagHeight, (column + 1) * kFlagWidth,
+                                   (row + 1) * kFlagHeight};
+          const float cy = (r.top + r.bottom) / 2;
+          const D2D1_RECT_F place{left, cy - kFlagH / 2, left + kFlagW, cy + kFlagH / 2};
+          k.t->DrawBitmap(sprite, place, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+          k.Outline(place, 1.5f, Rgb(255, 255, 255, 0.12f));
+        }
+        k.Text(it.text, caption_.get(), {left + flagWidth, r.top, left + flagWidth + textWidth + 2, r.bottom},
+               it.enabled ? secondary : FromColorRef(ui::kSecondaryText, 0.7f));
         break;
       }
       case Kind::Banner: {
@@ -900,10 +1188,25 @@ class Painter {
         k.Text(it.text, button_.get(), r, it.checked ? Rgb(12, 20, 36) : primary);
         break;
       }
-      case Kind::AppRow:
-        k.Text(it.glyph, glyph_.get(), {r.left + 8, r.top, r.left + 36, r.bottom}, secondary);
+      case Kind::Chip:
+        if (it.checked) {
+          k.Round(r, 15, FromColorRef(ui::kAccent, pressed ? 0.12f : (hovered ? 0.24f : 0.18f)));
+        } else {
+          k.Round(r, 15, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Outline(r, 15, Rgb(255, 255, 255, 0.10f));
+        }
+        k.Text(it.text, chip_.get(), r, it.checked ? accent : secondary);
+        break;
+      case Kind::AppRow: {
+        const float cy = (r.top + r.bottom) / 2;
+        if (ID2D1Bitmap* icon = ProgramIcon(k.t, it.detail); icon != nullptr) {
+          k.t->DrawBitmap(icon, {r.left + 12, cy - kAppIcon / 2, r.left + 12 + kAppIcon, cy + kAppIcon / 2});
+        } else {
+          k.Text(it.glyph, glyph_.get(), {r.left + 8, r.top, r.left + 36, r.bottom}, secondary);
+        }
         k.Text(it.text, body_.get(), {r.left + 48, r.top, r.right, r.bottom}, primary);
         break;
+      }
       case Kind::LogBox: break;  // DrawLog
     }
   }
@@ -913,24 +1216,25 @@ class Painter {
   void DrawLog(const Canvas& k, D2D1_RECT_F box, const LogView& log) const {
     const D2D1_COLOR_F primary = Rgb(222, 226, 234);
     const D2D1_COLOR_F secondary = FromColorRef(ui::kSecondaryText);
-    if (log.lines.empty()) {
-      k.Text(L"Пока пусто: служба ещё ничего не написала.", button_.get(), box, secondary);
+    if (log.shown.empty()) {
+      k.Text(log.lines.empty() ? L"Пока пусто: служба ещё ничего не написала." : L"Ни одной строки этих уровней.",
+             button_.get(), box, secondary);
       return;
     }
     k.t->PushAxisAlignedClip(box, D2D1_ANTIALIAS_MODE_ALIASED);
     const float view = box.bottom - box.top;
     const auto first = static_cast<std::size_t>(std::max(0.0f, std::floor(log.scroll / kLogLine)));
-    for (std::size_t i = first; i < log.lines.size(); ++i) {
+    for (auto i = static_cast<int>(first); i < log.Count(); ++i) {
       const float top = box.top + static_cast<float>(i) * kLogLine - log.scroll;
       if (top > box.bottom) {
         break;
       }
       const D2D1_RECT_F row{box.left, top, box.right, top + kLogLine};
-      if (log.Selected(static_cast<int>(i))) {
+      if (log.Selected(i)) {
         k.Fill(row, FromColorRef(ui::kAccent, 0.22f));
       }
       // "05:07:30  ERROR  outbound/...": FormatLogLine's columns (main.cpp).
-      const std::wstring_view line = log.lines[i];
+      const std::wstring_view line = log.Line(i);
       const float x = box.left + 14;
       if (line.size() > 17 && line[8] == L' ' && line[9] == L' ') {
         const std::wstring_view level = line.substr(10, 5);
@@ -1052,11 +1356,17 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> body_;
   wil::com_ptr<IDWriteTextFormat> caption_;
   wil::com_ptr<IDWriteTextFormat> button_;
+  wil::com_ptr<IDWriteTextFormat> center_;
+  wil::com_ptr<IDWriteTextFormat> chip_;
   wil::com_ptr<IDWriteTextFormat> wrap_;
   wil::com_ptr<IDWriteTextFormat> captionWrap_;
   wil::com_ptr<IDWriteTextFormat> mono_;
   wil::com_ptr<IDWriteTextFormat> glyph_;
   wil::com_ptr<IDWriteTextFormat> glyphBig_;
+  // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
+  mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
+  mutable wil::com_ptr<ID2D1Bitmap> flags_;  // Flags'
+  mutable bool flagsLoaded_ = false;
 };
 
 int Scale(float dip, UINT dpi) { return static_cast<int>(std::lround(dip * static_cast<float>(dpi) / 96.0f)); }
@@ -1104,7 +1414,6 @@ struct MainWindow::Impl {
   LogView log;
   bool selecting = false;      // dragging a selection over the log
   std::optional<POINT> mouse;  // the cursor over the client area, in pixels
-  bool copied = false;
   bool placed = false;  // sized and put by the tray once, on the first show
 
   wil::com_ptr<ID2D1HwndRenderTarget> target;
@@ -1189,12 +1498,12 @@ struct MainWindow::Impl {
 
   // The log line under a point, clamped to the lines there are; -1 if none.
   int LogLineAt(POINT px) const {
-    if (!layout.logBox || log.lines.empty()) {
+    if (!layout.logBox || log.shown.empty()) {
       return -1;
     }
     const float y = ToDip(px.y) - layout.logBox->top + log.scroll;
     const auto line = static_cast<int>(std::floor(y / kLogLine));
-    return std::clamp(line, 0, static_cast<int>(log.lines.size()) - 1);
+    return std::clamp(line, 0, log.Count() - 1);
   }
 
   // The log's scroll within its lines, or at the bottom while following.
@@ -1220,7 +1529,15 @@ struct MainWindow::Impl {
 
   void Relayout() {
     const D2D1_SIZE_F size = ClientDip();
-    layout = painter.Build(content, page, size.width, size.height, scroll, copied, log.HasSelection());
+    LogState state;
+    state.paused = log.paused;
+    state.held = log.held.size();
+    state.counts = log.counts;
+    state.levels = log.levels;
+    if (log.HasSelection()) {
+      state.detail = log.Line(log.caret);
+    }
+    layout = painter.Build(content, page, size.width, size.height, scroll, state);
     ClampLog();
     in.hover = mouse ? HitAt(*mouse) : -1;
     if (in.focus >= static_cast<int>(layout.items.size()) ||
@@ -1244,7 +1561,21 @@ struct MainWindow::Impl {
     switch (item.action) {
       case ItemAction::None: return;
       case ItemAction::Page: Go(static_cast<UiPage>(item.index)); return;
-      case ItemAction::CopyLogs: CopyLogs(); return;
+      case ItemAction::ToggleLevel:
+        log.levels[static_cast<std::size_t>(item.index)] = !log.levels[static_cast<std::size_t>(item.index)];
+        log.anchor = log.caret = -1;  // positions among the shown: they mean other lines now
+        log.Rebuild();
+        ClampLog();
+        Relayout();
+        return;
+      case ItemAction::PauseLogs:
+        log.paused = !log.paused;
+        if (!log.paused) {
+          AddLogs(std::exchange(log.held, {}), false);
+        }
+        Relayout();
+        return;
+      case ItemAction::SaveLogs: SaveLogs(); return;
       case ItemAction::Command: break;
     }
     UiArgs args;
@@ -1257,40 +1588,147 @@ struct MainWindow::Impl {
     onCommand(item.command, args);
   }
 
-  // The selected log lines, or all of them, onto the clipboard.
-  void CopyLogs() {
+  // The shown lines, selected ones only or all, as text (CRLF).
+  std::wstring LogText(bool selectedOnly) const {
     std::wstring text;
-    for (std::size_t i = 0; i < log.lines.size(); ++i) {
-      if (!log.HasSelection() || log.Selected(static_cast<int>(i))) {
-        text += log.lines[i];
+    for (int i = 0; i < log.Count(); ++i) {
+      if (!selectedOnly || log.Selected(i)) {
+        text += log.Line(i);
         text += L"\r\n";
       }
     }
-    if (CopyToClipboard(hwnd, text)) {
-      copied = true;
-      SetTimer(hwnd, kCopiedTimer, kCopiedMs, nullptr);
+    return text;
+  }
+
+  // Ctrl+C: the selected lines, or all shown if none are.
+  void CopyLogs() { CopyToClipboard(hwnd, LogText(log.HasSelection())); }
+
+  void SelectAllLogs() {
+    if (log.Count() > 0) {
+      log.anchor = 0;
+      log.caret = log.Count() - 1;
       Relayout();
+    }
+  }
+
+  // The shown lines into a text file the user picks (UTF-8, CRLF).
+  void SaveLogs() {
+    std::wstring path;
+    try {
+      const auto dialog = wil::CoCreateInstance<IFileSaveDialog>(CLSID_FileSaveDialog);
+      const COMDLG_FILTERSPEC filter{L"Текст", L"*.txt"};
+      THROW_IF_FAILED(dialog->SetFileTypes(1, &filter));
+      THROW_IF_FAILED(dialog->SetDefaultExtension(L"txt"));
+      SYSTEMTIME now{};
+      GetLocalTime(&now);
+      const std::wstring name = std::format(L"sovereign-log-{:04}{:02}{:02}-{:02}{:02}.txt", now.wYear, now.wMonth,
+                                            now.wDay, now.wHour, now.wMinute);
+      THROW_IF_FAILED(dialog->SetFileName(name.c_str()));
+      const HRESULT shown = dialog->Show(hwnd);
+      if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        return;
+      }
+      THROW_IF_FAILED(shown);
+      wil::com_ptr<IShellItem> item;
+      THROW_IF_FAILED(dialog->GetResult(&item));
+      wil::unique_cotaskmem_string chosen;
+      THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &chosen));
+      path = chosen.get();
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("the save dialog failed");
+      return;
+    }
+    const std::wstring text = LogText(false);
+    std::string utf8;
+    if (!text.empty()) {
+      const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr,
+                                        nullptr);
+      utf8.resize(static_cast<std::size_t>(n));
+      WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), utf8.data(), n, nullptr, nullptr);
+    }
+    std::ofstream out(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
+    out << utf8;
+    if (!out) {
+      MessageBoxW(hwnd, L"Не удалось записать файл.", L"Sovereign", MB_OK | MB_ICONWARNING);
+    }
+  }
+
+  // Right-click on the log: what can be done with its lines. A click on a
+  // line outside the selection selects it first.
+  void LogMenu(POINT screen) {
+    POINT client = screen;
+    ScreenToClient(hwnd, &client);
+    if (const int line = LogLineAt(client); line >= 0 && InLog(client) && !log.Selected(line)) {
+      log.anchor = log.caret = line;
+      Relayout();
+    }
+    wil::unique_hmenu menu(CreatePopupMenu());
+    if (!menu) {
+      return;
+    }
+    const UINT any = log.Count() > 0 ? MF_STRING : MF_STRING | MF_GRAYED;
+    AppendMenuW(menu.get(), log.HasSelection() ? MF_STRING : MF_STRING | MF_GRAYED, kLogMenuCopy,
+                L"Копировать\tCtrl+C");
+    AppendMenuW(menu.get(), any, kLogMenuCopyAll, L"Копировать всё");
+    AppendMenuW(menu.get(), any, kLogMenuSelectAll, L"Выделить всё\tCtrl+A");
+    AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu.get(), any, kLogMenuSave, L"Сохранить в файл…");
+    AppendMenuW(menu.get(), log.lines.empty() ? MF_STRING | MF_GRAYED : MF_STRING, kLogMenuClear, L"Очистить");
+    const auto command = static_cast<UINT>(TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                                                          screen.x, screen.y, 0, hwnd, nullptr));
+    switch (command) {
+      case kLogMenuCopy: CopyToClipboard(hwnd, LogText(true)); break;
+      case kLogMenuCopyAll: CopyToClipboard(hwnd, LogText(false)); break;
+      case kLogMenuSelectAll: SelectAllLogs(); break;
+      case kLogMenuSave: SaveLogs(); break;
+      case kLogMenuClear:
+        // The window's copy only: the service keeps its own, the next lines come.
+        log.lines.clear();
+        log.held.clear();
+        log.anchor = log.caret = -1;
+        log.follow = true;
+        log.Rebuild();
+        ClampLog();
+        Relayout();
+        break;
+      default: break;
     }
   }
 
   void AddLogs(const std::vector<std::wstring>& lines, bool replace) {
     if (replace) {
       log.lines.clear();
+      log.held.clear();
       log.anchor = log.caret = -1;
       log.follow = true;
+    } else if (log.paused) {
+      // Waits for the resume; the oldest go past what the log keeps.
+      log.held.insert(log.held.end(), lines.begin(), lines.end());
+      if (log.held.size() > kLogKeep) {
+        log.held.erase(log.held.begin(), log.held.end() - static_cast<std::ptrdiff_t>(kLogKeep));
+      }
+      if (page == UiPage::Logs && IsWindowVisible(hwnd)) {
+        Relayout();  // the "+N"
+      }
+      return;
     }
     for (const std::wstring& line : lines) {
       log.lines.push_back(line);
     }
+    int shiftShown = 0;
     if (log.lines.size() > kLogKeep) {
       // The oldest go; what the user looks at and selected stays in place.
       const std::size_t cut = log.lines.size() - kLogKeep;
+      shiftShown = static_cast<int>(std::count_if(log.shown.begin(), log.shown.end(),
+                                                  [&](int i) { return static_cast<std::size_t>(i) < cut; }));
       log.lines.erase(log.lines.begin(), log.lines.begin() + static_cast<std::ptrdiff_t>(cut));
-      const auto shift = static_cast<int>(cut);
-      log.scroll = std::max(0.0f, log.scroll - static_cast<float>(cut) * kLogLine);
-      if (log.HasSelection()) {
-        log.anchor = std::max(log.anchor - shift, 0);
-        log.caret = std::max(log.caret - shift, 0);
+    }
+    log.Rebuild();
+    if (shiftShown > 0) {
+      log.scroll = std::max(0.0f, log.scroll - static_cast<float>(shiftShown) * kLogLine);
+      if (log.HasSelection() || log.anchor >= 0) {
+        log.anchor = std::max(log.anchor - shiftShown, 0);
+        log.caret = std::max(log.caret - shiftShown, 0);
       }
     }
     ClampLog();
@@ -1371,6 +1809,7 @@ struct MainWindow::Impl {
         // The system's suggestion keeps the window the same physical size.
         const auto* suggested = reinterpret_cast<const RECT*>(lParam);  // NOLINT(performance-no-int-to-ptr)
         target.reset();
+      painter.ForgetIcons();
         SetWindowPos(w, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
         Relayout();
@@ -1457,13 +1896,19 @@ struct MainWindow::Impl {
         return 0;
       }
       case WM_KEYDOWN: return Key(wParam) ? 0 : DefWindowProcW(w, message, wParam, lParam);
-      case WM_TIMER:
-        if (wParam == kCopiedTimer) {
-          KillTimer(w, kCopiedTimer);
-          copied = false;
-          Relayout();
+      case WM_CONTEXTMENU:
+        if (page == UiPage::Logs && layout.logBox) {
+          POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+          if (at.x == -1 && at.y == -1) {
+            // From the keyboard (Shift+F10): at the log's corner.
+            const float scale = static_cast<float>(Dpi()) / 96.0f;
+            at = {static_cast<LONG>(layout.logBox->left * scale) + 16, static_cast<LONG>(layout.logBox->top * scale) + 16};
+            ClientToScreen(w, &at);
+          }
+          LogMenu(at);
+          return 0;
         }
-        return 0;
+        return DefWindowProcW(w, message, wParam, lParam);
       case WM_ACTIVATE:
         if (LOWORD(wParam) == WA_INACTIVE) {
           deactivatedAt = GetTickCount64();
@@ -1486,10 +1931,8 @@ struct MainWindow::Impl {
       return true;
     }
     const bool onLog = page == UiPage::Logs && layout.logBox;
-    if (onLog && ctrl && key == 'A' && !log.lines.empty()) {
-      log.anchor = 0;
-      log.caret = static_cast<int>(log.lines.size()) - 1;
-      Relayout();
+    if (onLog && ctrl && key == 'A') {
+      SelectAllLogs();
       return true;
     }
     if (onLog && ctrl && key == 'C') {
@@ -1555,6 +1998,7 @@ struct MainWindow::Impl {
     painter.Draw(target.get(), layout, content, in, log);
     if (target->EndDraw() == D2DERR_RECREATE_TARGET) {
       target.reset();
+      painter.ForgetIcons();
     }
   }
 
@@ -1643,15 +2087,19 @@ void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::
 
   LogView log;
   log.lines.assign(logs.begin(), logs.end());
-  if (log.lines.size() > 2) {
-    // Shows what a selection looks like.
+  log.Rebuild();
+  LogState state;
+  state.counts = log.counts;
+  if (log.Count() > 2) {
+    // Shows what a selection looks like, and the selected line in full.
     log.anchor = 1;
     log.caret = 2;
+    state.detail = log.Line(log.caret);
   }
   float scroll = 0;
   const float scale = 96.0f / dpi;
   const Layout layout = painter.Build(content, page, static_cast<float>(width) * scale,
-                                      static_cast<float>(height) * scale, scroll, false, log.HasSelection());
+                                      static_cast<float>(height) * scale, scroll, state);
   target->BeginDraw();
   painter.Draw(target.get(), layout, content, Interaction{}, log);
   THROW_IF_FAILED(target->EndDraw());

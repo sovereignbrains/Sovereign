@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include "log_level.h"
+
 #include <windows.h>
 
 #include <wil/result.h>
@@ -51,6 +53,22 @@ std::filesystem::path DataDir() {
   return dir;
 }
 
+const std::string* AppPath(const TraySettings& settings, const std::string& app) {
+  const auto it = std::find_if(settings.appPaths.begin(), settings.appPaths.end(),
+                               [&](const auto& entry) { return entry.first == app; });
+  return it == settings.appPaths.end() ? nullptr : &it->second;
+}
+
+void SetAppPath(TraySettings& settings, const std::string& app, std::string path) {
+  const auto it = std::find_if(settings.appPaths.begin(), settings.appPaths.end(),
+                               [&](const auto& entry) { return entry.first == app; });
+  if (it != settings.appPaths.end()) {
+    it->second = std::move(path);
+  } else {
+    settings.appPaths.emplace_back(app, std::move(path));
+  }
+}
+
 TraySettings LoadSettings() {
   TraySettings settings;
   const auto text = ReadText(DataDir() / L"tray.json");
@@ -84,8 +102,21 @@ TraySettings LoadSettings() {
       }
     }
   }
+  if (const auto v = json.find("appPaths"); v != json.end() && v->is_object()) {
+    for (const auto& [name, path] : v->items()) {
+      if (path.is_string() && !path.get<std::string>().empty()) {
+        SetAppPath(settings, name, path.get<std::string>());
+      }
+    }
+  }
   if (const auto v = json.find("protocol"); v != json.end() && v->is_string()) {
     settings.protocol = v->get<std::string>();
+  }
+  if (const auto v = json.find("hideExitIp"); v != json.end() && v->is_boolean()) {
+    settings.hideExitIp = v->get<bool>();
+  }
+  if (const auto v = json.find("logLevel"); v != json.end() && v->is_string() && IsLogLevel(v->get<std::string>())) {
+    settings.logLevel = v->get<std::string>();
   }
   return settings;
 }
@@ -98,7 +129,13 @@ void SaveSettings(const TraySettings& settings) {
   json["updateHours"] = settings.updateHours;
   json["appsMode"] = std::string(AppsModeName(settings.appsMode));
   json["apps"] = settings.apps;
+  json["appPaths"] = nlohmann::json::object();
+  for (const auto& [app, path] : settings.appPaths) {
+    json["appPaths"][app] = path;
+  }
   json["protocol"] = settings.protocol;
+  json["hideExitIp"] = settings.hideExitIp;
+  json["logLevel"] = settings.logLevel;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }
 
@@ -117,6 +154,12 @@ void SavePending(const std::string& text) { WriteTextAtomically(DataDir() / L"su
 void ClearPending() {
   std::error_code ec;
   std::filesystem::remove(DataDir() / L"subscription.new.json", ec);  // no file: false, not an error
+  THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
+}
+
+void ClearOriginal() {
+  std::error_code ec;
+  std::filesystem::remove(DataDir() / L"subscription.json", ec);  // no file: false, not an error
   THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
 }
 

@@ -2,7 +2,7 @@
 # (no desktop needed). As a test it proves every page lays out and draws
 # without failing; CI keeps the pictures as the ui-snapshots artifact.
 
-# tray.rc: the app icon the window's rail shows.
+# tray.rc: the flags sprite the window draws.
 add_executable(ui-snapshot ui_snapshot.cpp "${CMAKE_SOURCE_DIR}/src/tray/tray.rc")
 target_link_libraries(ui-snapshot PRIVATE sovereign_tray_ui)
 sovereign_copy_asan_runtime(ui-snapshot)

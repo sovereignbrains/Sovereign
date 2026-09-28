@@ -55,6 +55,15 @@ struct DelayResult {
   std::string error;  // Failed: why
 };
 
+// The address the internet sees through an outbound, and its country.
+struct ExitIp {
+  std::string tag;
+  bool pending = false;  // a lookup runs
+  std::string ip;        // empty until known
+  std::string country;   // ISO 3166-1 alpha-2, as the lookup says; may stay empty
+  std::string error;     // why the last lookup failed
+};
+
 // Called for every log line the core emits (already filtered by the config's
 // log level). May be invoked from any thread, concurrently, for as long as
 // it is installed — implementations of the sink must be thread-safe.
@@ -96,6 +105,12 @@ class ICore {
   // Every tag tested since the last Start(), in the order first tested; a
   // retest replaces the tag's result.
   virtual std::vector<DelayResult> Delays() = 0;
+
+  // The exit IP through the outbound `tag`: what's known, and a lookup
+  // started in the background (a second or more: a request through the
+  // outbound) when there's none for `tag` yet or `refresh` asks - so it's
+  // polled like the delays. Everything is forgotten on Start().
+  virtual ExitIp LookupExitIp(const std::string& tag, bool refresh) = 0;
 
   // Installs (or, with an empty sink, removes) the log sink. After this
   // returns, the previous sink is never called again.

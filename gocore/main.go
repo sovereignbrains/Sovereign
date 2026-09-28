@@ -114,6 +114,7 @@ func box_start(configJSON *C.char) *C.char {
 	boxTraffic = traffic
 	boxContext = ctx
 	resetDelays()
+	resetExitIP()
 	boxGeneration++
 	return C.CString("")
 }

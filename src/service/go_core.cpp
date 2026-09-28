@@ -62,6 +62,7 @@ GoCore::GoCore(const std::wstring& dllPath) {
   boxStats_ = ResolveExport<BoxStatsFn>(module_.get(), "box_stats");
   boxUrlTest_ = ResolveExport<BoxUrlTestFn>(module_.get(), "box_urltest");
   boxDelays_ = ResolveExport<BoxDelaysFn>(module_.get(), "box_delays");
+  boxExitIp_ = ResolveExport<BoxExitIpFn>(module_.get(), "box_exitip");
   boxSetLogCallback_ = ResolveExport<BoxSetLogCallbackFn>(module_.get(), "box_set_log_callback");
   boxFree_ = ResolveExport<BoxFreeFn>(module_.get(), "box_free");
 
@@ -148,6 +149,31 @@ std::vector<DelayResult> GoCore::Delays() {
     results.push_back(std::move(result));
   }
   return results;
+}
+
+ExitIp GoCore::LookupExitIp(const std::string& tag, bool refresh) {
+  nlohmann::json request;
+  request["tag"] = tag;
+  request["refresh"] = refresh;
+  // gocore/exitip.go writes it; a field of the wrong type is left empty.
+  const auto json =
+      nlohmann::json::parse(TakeOwnedString(boxExitIp_(request.dump().c_str())), nullptr, /*allow_exceptions=*/false);
+  ExitIp result;
+  result.tag = tag;
+  if (!json.is_object()) {
+    result.error = "unexpected answer from the core";
+    return result;
+  }
+  const auto text = [&](const char* key) {
+    const auto it = json.find(key);
+    return it != json.end() && it->is_string() ? it->get<std::string>() : std::string();
+  };
+  result.ip = text("ip");
+  result.country = text("country");
+  result.error = text("error");
+  const auto pending = json.find("pending");
+  result.pending = pending != json.end() && pending->is_boolean() && pending->get<bool>();
+  return result;
 }
 
 }  // namespace sovereign::service

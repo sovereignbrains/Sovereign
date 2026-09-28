@@ -18,7 +18,9 @@
 #include "cache_file.h"
 #include "config_sync.h"
 #include "delays.h"
+#include "exit_ip.h"
 #include "log_lines.h"
+#include "log_level.h"
 #include "protocol_choice.h"
 #include "subscription.h"
 #include "update.h"
@@ -65,6 +67,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   (void)FindProtocolChoices(text);
   (void)ParseLogsResponse(text);
   (void)ParseDelaysResponse(text);
+  (void)ParseExitIpResponse(text);
   (void)ParseLatestRelease(text);
   (void)ParseChecksum(text, "Sovereign-Setup-1.2.3.exe");
   (void)ParseVersion(text);
@@ -75,7 +78,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   const std::vector<std::string> apps{"app.exe"};
   for (const std::string& rewritten :
        {ApplyProtocolChoice(text, "auto"), ApplyAppRules(text, AppsMode::Exclude, apps),
-        ApplyAppRules(text, AppsMode::Include, apps), ApplyCacheFile(text, R"(C:\ProgramData\Sovereign\cache.db)")}) {
+        ApplyAppRules(text, AppsMode::Include, apps), ApplyCacheFile(text, R"(C:\ProgramData\Sovereign\cache.db)"),
+        ApplyLogLevel(text, "debug")}) {
     if (object && !nlohmann::json::parse(rewritten, nullptr, /*allow_exceptions=*/false).is_object()) {
       std::abort();
     }

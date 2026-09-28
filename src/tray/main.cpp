@@ -18,6 +18,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <tlhelp32.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -35,7 +36,11 @@
 #include <condition_variable>
 #include <ctime>
 #include <deque>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -50,11 +55,13 @@
 #include "cache_file.h"
 #include "config_sync.h"
 #include "delays.h"
+#include "exit_ip.h"
 #include "fetch.h"
 #include "protocol_choice.h"
 #include "icons.h"
 #include "json_field.h"
 #include "log_lines.h"
+#include "log_level.h"
 #include "main_window.h"
 #include "pipe_client.h"
 #include "settings.h"
@@ -102,6 +109,10 @@ constexpr std::chrono::minutes kRefreshRetry{30};
 // one poll reads at most (a flood is read on over the next seconds).
 constexpr std::size_t kLogKeep = 5000;
 constexpr int kLogPagesPerPoll = 20;
+
+// The exit IP: how often a running lookup is polled, and a known one rechecked.
+constexpr std::chrono::seconds kExitIpPoll{2};
+constexpr std::chrono::minutes kExitIpRecheck{5};
 
 // A latency test the service never finishes stops being waited for.
 constexpr std::chrono::seconds kUrlTestGiveUp{60};
@@ -168,6 +179,8 @@ struct View {
   std::int64_t connections = 0;
   std::string error;
   bool hasSubscription = false;
+  std::string subscriptionUrl;    // for "copy the link" - the UI thread's clipboard
+  bool hasConfig = false;
   std::wstring subscriptionHost;  // UrlHost of the subscription URL
   std::int64_t lastRefresh = 0;
   int updateHours = 0;
@@ -184,11 +197,15 @@ struct View {
   std::optional<UiPage> noticePage;  // what a click on the balloon opens
   AppsMode appsMode = AppsMode::Exclude;
   std::vector<std::string> apps;
+  std::vector<std::string> appPaths;   // per app, "" if not known
   std::vector<std::string> protocols;  // the config selector's options
   int protocol = -1;                   // the one in use
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
   bool delaysTesting = false;
   std::string delayError;
+  sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
+  bool hideExitIp = false;
+  std::string logLevel;
 };
 
 // What to do with the config when a newer subscription meets the user's
@@ -204,7 +221,14 @@ enum class ConfigChoice : std::uint8_t {
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
   std::vector<std::string> list;
+  // Exe paths learned while adding (icons), name to path. A vector: MSVC's
+  // debug std::map allocates when moved, so its move could throw.
+  std::vector<std::pair<std::string, std::string>> paths;
 };
+
+// How often the worker looks among running processes for listed apps whose
+// exe it hasn't seen yet (their icons).
+constexpr std::chrono::seconds kAppPathLookup{30};
 
 std::wstring StatusLine(const View& v) {
   switch (v.display) {
@@ -224,8 +248,12 @@ struct Shared {
   std::condition_variable_any wake;
   std::optional<bool> pendingWant;
   std::optional<std::string> pendingImport;  // a new subscription URL (UTF-8)
+  std::optional<std::string> pendingLocalConfig;  // a config of the user's own (a file, the clipboard)
+  bool pendingUnsubscribe = false;
   bool pendingRefresh = false;
   bool pendingUrlTest = false;
+  bool pendingToggleExitIp = false;
+  std::optional<std::string> pendingLogLevel;  // "" = the config's
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   std::optional<ConfigChoice> pendingChoice;
@@ -237,7 +265,8 @@ struct Shared {
   std::uint64_t logsAdded = 0;
 
   bool HasRequests() const {
-    return pendingWant || pendingImport || pendingRefresh || pendingUrlTest || pendingApps || pendingProtocol ||
+    return pendingWant || pendingImport || pendingLocalConfig || pendingUnsubscribe || pendingRefresh ||
+           pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingApps || pendingProtocol ||
            pendingChoice;
   }
 };
@@ -376,8 +405,12 @@ class Worker {
       std::optional<AppsChange> apps;
       std::optional<std::string> protocol;
       std::optional<ConfigChoice> choice;
+      std::optional<std::string> local;
+      bool unsubscribe = false;
       bool refresh = false;
       bool urlTest = false;
+      bool toggleExitIp = false;
+      std::optional<std::string> logLevel;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
@@ -385,13 +418,23 @@ class Worker {
         protocol = std::exchange(shared.pendingProtocol, std::nullopt);
         choice = std::exchange(shared.pendingChoice, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
+        local = std::exchange(shared.pendingLocalConfig, std::nullopt);
+        unsubscribe = std::exchange(shared.pendingUnsubscribe, false);
         refresh = std::exchange(shared.pendingRefresh, false);
         urlTest = std::exchange(shared.pendingUrlTest, false);
+        toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
+        logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
       }
       if (want) {
         settings_.wantOn = *want;
         Save();
         Execute(model_, model_.SetWantOn(*want, TrayModel::Clock::now()), EffectiveConfig());
+      }
+      if (local) {
+        UseLocalConfig(*local);
+      }
+      if (unsubscribe) {
+        Unsubscribe();
       }
       if (import) {
         settings_.subscriptionUrl = *import;
@@ -407,8 +450,15 @@ class Worker {
       if (apps) {
         settings_.appsMode = apps->mode;
         settings_.apps = std::move(apps->list);
+        for (auto& [name, path] : apps->paths) {
+          sovereign::tray::SetAppPath(settings_, name, std::move(path));
+        }
+        std::erase_if(settings_.appPaths, [&](const auto& entry) {
+          return std::find(settings_.apps.begin(), settings_.apps.end(), entry.first) == settings_.apps.end();
+        });
         Save();  // the effective config changes: the model restarts the box
       }
+      FindAppPaths();
       if (protocol) {
         settings_.protocol = *protocol;
         Save();  // likewise
@@ -418,6 +468,15 @@ class Worker {
       const auto stats = PollStats();
       Execute(model_, model_.OnPoll(stats, TrayModel::Clock::now()), config);
       UpdateDelays(stats, urlTest);
+      UpdateExitIp(stats);
+      if (toggleExitIp) {
+        settings_.hideExitIp = !settings_.hideExitIp;
+        Save();
+      }
+      if (logLevel && *logLevel != settings_.logLevel) {
+        settings_.logLevel = *logLevel;
+        Save();  // the effective config changes: the model restarts the box
+      }
       CollectLogs();
       Publish();
 
@@ -434,8 +493,10 @@ class Worker {
     if (!config) {
       return std::nullopt;
     }
-    std::string effective = sovereign::tray::ApplyAppRules(
-        sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol), settings_.appsMode, settings_.apps);
+    std::string effective = sovereign::tray::ApplyLogLevel(
+        sovereign::tray::ApplyAppRules(sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol),
+                                       settings_.appsMode, settings_.apps),
+        settings_.logLevel);
     return cacheFile_.empty() ? effective : sovereign::tray::ApplyCacheFile(effective, cacheFile_);
   }
 
@@ -588,6 +649,49 @@ class Worker {
     // the service reports no longer matches (ExpectedConfigHash).
   }
 
+  // A config of the user's own (a file, the clipboard): it replaces the
+  // config, and there's no subscription any more to replace it back.
+  void UseLocalConfig(const std::string& text) {
+    const auto check = sovereign::tray::CheckSubscriptionConfig(text);
+    if (!check.ok) {
+      Notify(L"Sovereign: конфиг не загружен", Widen(check.error), true, UiPage::Subscription);
+      return;
+    }
+    try {
+      ReplaceConfig(sovereign::tray::LoadConfig(), text);
+      sovereign::tray::ClearPending();
+      sovereign::tray::ClearOriginal();
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("saving the local config failed");
+      Notify(L"Sovereign: конфиг не загружен", L"не удалось записать config.json", true, UiPage::Subscription);
+      return;
+    }
+    const bool hadSubscription = !settings_.subscriptionUrl.empty();
+    ForgetSubscription();
+    Notify(L"Sovereign: загружен свой конфиг",
+           std::format(L"выходов: {}{}", check.outbounds, hadSubscription ? L"; подписка отключена" : L""), false);
+  }
+
+  // No more refreshes; config.json stays as it is, now the user's own.
+  void Unsubscribe() {
+    try {
+      sovereign::tray::ClearPending();
+      sovereign::tray::ClearOriginal();
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("removing the subscription's files failed");
+    }
+    ForgetSubscription();
+  }
+
+  void ForgetSubscription() {
+    settings_.subscriptionUrl.clear();
+    settings_.lastRefresh = 0;
+    subscriptionError_.clear();
+    lastFailure_.reset();
+    mergeNotes_.clear();
+    Save();
+  }
+
   void Choose(ConfigChoice choice) {
     choiceError_.clear();
     try {
@@ -691,6 +795,39 @@ class Worker {
     }
   }
 
+  // The exit IP through the server in use: asked for when a box starts or
+  // the server changes, polled while the lookup runs, and asked again now
+  // and then (auto may have moved to another server).
+  void UpdateExitIp(const std::optional<sovereign::tray::Stats>& stats) {
+    const auto [options, current] = Protocols();
+    const std::string tag = current >= 0 ? options[static_cast<std::size_t>(current)] : std::string();
+    if (!stats || model_.GetDisplay() != Display::On || tag.empty()) {
+      exit_ = {};
+      exitTag_.clear();
+      exitAsked_.reset();
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    const bool fresh = tag != exitTag_ || stats->generation != exitGeneration_;
+    const auto wait = exit_.pending ? kExitIpPoll : kExitIpRecheck;
+    if (!fresh && exitAsked_ && now - *exitAsked_ < wait) {
+      return;
+    }
+    const bool refresh = fresh || !exit_.pending;  // a poll of a running lookup doesn't restart it
+    exitTag_ = tag;
+    exitGeneration_ = stats->generation;
+    exitAsked_ = now;
+    const auto response = sovereign::tray::RequestService(
+        nlohmann::json{{"cmd", "box_exitip"}, {"tag", tag}, {"refresh", refresh}}.dump());
+    if (const auto parsed = response ? sovereign::tray::ParseExitIpResponse(*response) : std::nullopt) {
+      // A failed recheck keeps the last known address: it's still the best guess.
+      if (parsed->ip.empty() && !parsed->pending && !exit_.ip.empty() && !fresh) {
+        return;
+      }
+      exit_ = *parsed;
+    }
+  }
+
   void StartUrlTest() {
     const std::vector<std::string> tags = Protocols().first;
     if (tags.empty()) {
@@ -765,6 +902,51 @@ class Worker {
     shared.logsAdded += fresh.size();
   }
 
+  // Listed apps whose exe hasn't been seen: looked for among the running
+  // processes now and then, so their icons show once they've run.
+  void FindAppPaths() {
+    const auto now = TrayModel::Clock::now();
+    if (lastPathLookup_ && now - *lastPathLookup_ < kAppPathLookup) {
+      return;
+    }
+    lastPathLookup_ = now;
+    std::vector<std::wstring> missing;
+    for (const std::string& app : settings_.apps) {
+      if (sovereign::tray::AppPath(settings_, app) == nullptr) {
+        missing.push_back(Widen(app));
+      }
+    }
+    if (missing.empty()) {
+      return;
+    }
+    const wil::unique_handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    if (!snapshot || snapshot.get() == INVALID_HANDLE_VALUE) {
+      return;
+    }
+    bool found = false;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof entry;
+    for (BOOL more = Process32FirstW(snapshot.get(), &entry); more; more = Process32NextW(snapshot.get(), &entry)) {
+      const auto match = std::find_if(missing.begin(), missing.end(), [&](const std::wstring& name) {
+        return CompareStringOrdinal(name.c_str(), -1, entry.szExeFile, -1, TRUE) == CSTR_EQUAL;
+      });
+      if (match == missing.end()) {
+        continue;
+      }
+      const wil::unique_handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID));
+      wchar_t path[MAX_PATH]{};
+      DWORD size = MAX_PATH;
+      if (process && QueryFullProcessImageNameW(process.get(), 0, path, &size)) {
+        sovereign::tray::SetAppPath(settings_, Narrow(*match), Narrow(std::wstring(path, size)));
+        missing.erase(match);
+        found = true;
+      }
+    }
+    if (found) {
+      Save();
+    }
+  }
+
   void Publish() {
     auto& shared = State();
     auto protocols = Protocols();  // reads config.json: outside the lock
@@ -780,6 +962,8 @@ class Worker {
       v.connections = model_.Connections();
       v.error = model_.LastError();
       v.hasSubscription = !settings_.subscriptionUrl.empty();
+      v.subscriptionUrl = settings_.subscriptionUrl;
+      v.hasConfig = seenConfig_.has_value();
       v.subscriptionHost = sovereign::tray::UrlHost(Widen(settings_.subscriptionUrl));
       v.lastRefresh = settings_.lastRefresh;
       v.updateHours = settings_.updateHours;
@@ -795,6 +979,11 @@ class Worker {
       v.noticePage = noticePage_;
       v.appsMode = settings_.appsMode;
       v.apps = settings_.apps;
+      v.appPaths.clear();
+      for (const std::string& app : settings_.apps) {
+        const std::string* path = sovereign::tray::AppPath(settings_, app);
+        v.appPaths.push_back(path != nullptr ? *path : std::string());
+      }
       std::tie(v.protocols, v.protocol) = protocols;
       v.delays.clear();
       for (const std::string& tag : v.protocols) {
@@ -803,6 +992,9 @@ class Worker {
       }
       v.delaysTesting = testing_;
       v.delayError = delayError_;
+      v.exitIp = exit_;
+      v.hideExitIp = settings_.hideExitIp;
+      v.logLevel = settings_.logLevel;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -818,6 +1010,7 @@ class Worker {
   std::wstring noticeText_;
   bool noticeIsError_ = false;
   std::optional<UiPage> noticePage_;
+  std::optional<TrayModel::Clock::time_point> lastPathLookup_;
   bool edited_ = false;
   bool waiting_ = false;
   std::optional<std::string> seenOriginal_;  // the texts edited_ was computed from
@@ -832,6 +1025,10 @@ class Worker {
   std::int64_t generation_ = -1;        // the box the results belong to
   std::int64_t testedGeneration_ = -1;  // the box last tested automatically
   std::string delayError_;
+  sovereign::tray::ExitIp exit_;
+  std::string exitTag_;               // the server exit_ is about
+  std::int64_t exitGeneration_ = -1;  // and the box
+  std::optional<TrayModel::Clock::time_point> exitAsked_;
 };
 
 // NOTIFYICONDATA as RAII: the icon leaves the notification area whatever
@@ -922,18 +1119,104 @@ std::wstring ClipboardText(HWND window) {
   return first == std::wstring::npos ? std::wstring{} : text.substr(first, last - first + 1);
 }
 
-void RequestImport(HWND window) {
-  const std::wstring url = ClipboardText(window);
-  if (!sovereign::tray::IsHttpsUrl(url)) {
-    if (g_trayIcon != nullptr) {
-      g_trayIcon->Balloon(L"Sovereign", L"В буфере обмена нет https-ссылки на подписку. Скопируй её и повтори.");
-    }
-    return;
-  }
+void RequestLocalConfig(std::string text) {
   {
     auto& shared = State();
     const std::scoped_lock lock(shared.mutex);
-    shared.pendingImport = Narrow(url);
+    shared.pendingLocalConfig = std::move(text);
+  }
+  Wake();
+}
+
+// "Paste": a subscription link, or a whole config of the user's own - the
+// clipboard says which.
+void RequestImport(HWND window) {
+  const std::wstring text = ClipboardText(window);
+  if (sovereign::tray::IsHttpsUrl(text)) {
+    {
+      auto& shared = State();
+      const std::scoped_lock lock(shared.mutex);
+      shared.pendingImport = Narrow(text);
+    }
+    Wake();
+    return;
+  }
+  if (text.starts_with(L'{') && text.size() * sizeof(wchar_t) <= 2 * sovereign::tray::kMaxSubscriptionBytes) {
+    RequestLocalConfig(Narrow(text));  // the worker checks it, and says why not
+    return;
+  }
+  if (g_trayIcon != nullptr) {
+    g_trayIcon->Balloon(L"Sovereign",
+                        L"В буфере обмена нет ни https-ссылки на подписку, ни конфига sing-box. Скопируй одно из них и повтори.");
+  }
+}
+
+// "File...": a config of the user's own from disk.
+void ImportFile(HWND window) {
+  std::wstring path;
+  try {
+    const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
+    const COMDLG_FILTERSPEC filter{L"Конфиг sing-box", L"*.json"};
+    THROW_IF_FAILED(dialog->SetFileTypes(1, &filter));
+    THROW_IF_FAILED(dialog->SetTitle(L"Свой конфиг для Sovereign"));
+    const HRESULT shown = dialog->Show(window);
+    if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+      return;
+    }
+    THROW_IF_FAILED(shown);
+    wil::com_ptr<IShellItem> item;
+    THROW_IF_FAILED(dialog->GetResult(&item));
+    wil::unique_cotaskmem_string name;
+    THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &name));
+    path = name.get();
+  } catch (...) {
+    LOG_CAUGHT_EXCEPTION_MSG("the file dialog failed");
+    return;
+  }
+  std::ifstream in(std::filesystem::path(path), std::ios::binary);
+  std::string text;
+  if (in) {
+    text.resize(sovereign::tray::kMaxSubscriptionBytes + 1);
+    in.read(text.data(), static_cast<std::streamsize>(text.size()));
+    text.resize(static_cast<std::size_t>(in.gcount()));
+  }
+  if (!in.eof() && !in) {
+    if (g_trayIcon != nullptr) {
+      g_trayIcon->Balloon(L"Sovereign", L"Не удалось прочитать файл.");
+    }
+    return;
+  }
+  RequestLocalConfig(std::move(text));  // too big or not a config: the worker says so
+}
+
+bool CopyText(HWND owner, const std::wstring& text) {
+  if (!OpenClipboard(owner)) {
+    return false;
+  }
+  bool copied = false;
+  if (EmptyClipboard()) {
+    const std::size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    wil::unique_hglobal memory(GlobalAlloc(GMEM_MOVEABLE, bytes));
+    if (memory) {
+      if (void* locked = GlobalLock(memory.get()); locked != nullptr) {
+        std::memcpy(locked, text.c_str(), bytes);
+        GlobalUnlock(memory.get());
+        if (SetClipboardData(CF_UNICODETEXT, memory.get()) != nullptr) {
+          memory.release();  // the clipboard owns it now
+          copied = true;
+        }
+      }
+    }
+  }
+  CloseClipboard();
+  return copied;
+}
+
+void RequestUnsubscribe() {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingUnsubscribe = true;
   }
   Wake();
 }
@@ -960,10 +1243,15 @@ bool SameName(const std::string& a, const std::string& b) {
   return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
-// Exe names of the programs with a visible window - what "add from running"
-// offers - sorted, without duplicates and without the ones already listed.
-std::vector<std::string> RunningApps(const std::vector<std::string>& listed) {
-  std::vector<std::string> names;
+struct RunningApp {
+  std::string name;  // the exe's, what the rule matches
+  std::string path;  // the exe's full path, for its icon
+};
+
+// The programs with a visible window - what "add from running" offers -
+// sorted by name, without duplicates and without the ones already listed.
+std::vector<RunningApp> RunningApps(const std::vector<std::string>& listed) {
+  std::vector<RunningApp> names;
   EnumWindows(
       [](HWND w, LPARAM out) -> BOOL {
         if (!IsWindowVisible(w) || GetWindowTextLengthW(w) == 0 || GetWindow(w, GW_OWNER) != nullptr) {
@@ -980,18 +1268,20 @@ std::vector<std::string> RunningApps(const std::vector<std::string>& listed) {
         if (QueryFullProcessImageNameW(process.get(), 0, path, &size)) {
           const std::wstring full(path, size);
           // EnumWindows hands its context back as an LPARAM - the cast is the API's shape.
-          reinterpret_cast<std::vector<std::string>*>(out)->push_back(  // NOLINT(performance-no-int-to-ptr)
-              Narrow(full.substr(full.find_last_of(L'\\') + 1)));
+          reinterpret_cast<std::vector<RunningApp>*>(out)->push_back(  // NOLINT(performance-no-int-to-ptr)
+              {Narrow(full.substr(full.find_last_of(L'\\') + 1)), Narrow(full)});
         }
         return TRUE;
       },
       reinterpret_cast<LPARAM>(&names));
-  std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
-    return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_LESS_THAN;
+  std::sort(names.begin(), names.end(), [](const RunningApp& a, const RunningApp& b) {
+    return CompareStringOrdinal(Widen(a.name).c_str(), -1, Widen(b.name).c_str(), -1, TRUE) == CSTR_LESS_THAN;
   });
-  names.erase(std::unique(names.begin(), names.end(), SameName), names.end());
-  std::erase_if(names, [&](const std::string& n) {
-    return std::any_of(listed.begin(), listed.end(), [&](const std::string& l) { return SameName(n, l); });
+  names.erase(std::unique(names.begin(), names.end(),
+                          [](const RunningApp& a, const RunningApp& b) { return SameName(a.name, b.name); }),
+              names.end());
+  std::erase_if(names, [&](const RunningApp& n) {
+    return std::any_of(listed.begin(), listed.end(), [&](const std::string& l) { return SameName(n.name, l); });
   });
   if (names.size() > kMenuMaxItems) {
     names.resize(kMenuMaxItems);
@@ -999,9 +1289,9 @@ std::vector<std::string> RunningApps(const std::vector<std::string>& listed) {
   return names;
 }
 
-// "Add exe...": the exe name of a file the user picks (the file dialog is
-// just a convenient way to spell it right; only the name is kept).
-std::optional<std::string> PickExe(HWND window) {
+// "Add exe...": the full path of an exe the user picks (the rule keeps only
+// its name; the path is for the icon).
+std::optional<std::wstring> PickExe(HWND window) {
   try {
     const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
     const COMDLG_FILTERSPEC filter{L"Программы", L"*.exe"};
@@ -1016,8 +1306,7 @@ std::optional<std::string> PickExe(HWND window) {
     THROW_IF_FAILED(dialog->GetResult(&item));
     wil::unique_cotaskmem_string name;
     THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &name));
-    const std::wstring full(name.get());
-    return Narrow(full.substr(full.find_last_of(L'\\') + 1));
+    return std::wstring(name.get());
   } catch (...) {
     LOG_CAUGHT_EXCEPTION_MSG("the file dialog failed");
     return std::nullopt;
@@ -1033,13 +1322,13 @@ View CurrentView() {
 // window's button; the pick is added to the list.
 void AddFromRunning(HWND window, POINT at) {
   const View view = CurrentView();
-  const std::vector<std::string> running = RunningApps(view.apps);
+  const std::vector<RunningApp> running = RunningApps(view.apps);
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
     return;
   }
   for (std::size_t i = 0; i < running.size(); ++i) {
-    AppendMenuW(menu.get(), MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i]).c_str());
+    AppendMenuW(menu.get(), MF_STRING, kMenuAddRunning + static_cast<UINT>(i), Widen(running[i].name).c_str());
   }
   if (running.empty()) {
     AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"нет подходящих окон");
@@ -1052,18 +1341,20 @@ void AddFromRunning(HWND window, POINT at) {
                      nullptr));
   PostMessageW(window, WM_NULL, 0, 0);
   if (command >= kMenuAddRunning && command < kMenuAddRunning + running.size()) {
-    AppsChange change{view.appsMode, view.apps};
-    change.list.push_back(running[command - kMenuAddRunning]);
+    const RunningApp& pick = running[command - kMenuAddRunning];
+    AppsChange change{view.appsMode, view.apps, {{pick.name, pick.path}}};
+    change.list.push_back(pick.name);
     RequestApps(std::move(change));
   }
 }
 
 void AddExe(HWND window) {
   const View view = CurrentView();
-  if (const auto exe = PickExe(window)) {
-    if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, *exe); })) {
-      AppsChange change{view.appsMode, view.apps};
-      change.list.push_back(*exe);
+  if (const auto path = PickExe(window)) {
+    const std::string exe = Narrow(path->substr(path->find_last_of(L'\\') + 1));
+    if (std::none_of(view.apps.begin(), view.apps.end(), [&](const std::string& a) { return SameName(a, exe); })) {
+      AppsChange change{view.appsMode, view.apps, {{exe, Narrow(*path)}}};
+      change.list.push_back(exe);
       RequestApps(std::move(change));
     }
   }
@@ -1096,6 +1387,74 @@ void RequestChoice(ConfigChoice choice) {
   Wake();
 }
 
+// A country's name as the system says it ("Нидерланды" on a Russian
+// Windows); the code itself if it doesn't know it.
+std::wstring CountryName(const std::wstring& code) {
+  if (code.size() != 2) {
+    return code;
+  }
+  // Windows 10 1709+, and the SDK declares it only when built for that:
+  // looked up at run time instead.
+  using GetGeoInfoExFn = int(WINAPI*)(PWSTR, GEOTYPE, PWSTR, int);
+  // Through an integer, as go_core.cpp's ResolveExport: clang rejects a
+  // direct FARPROC-to-function cast.
+  static const auto getGeoInfoEx = reinterpret_cast<GetGeoInfoExFn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetGeoInfoEx")));
+  if (getGeoInfoEx == nullptr) {
+    return code;
+  }
+  std::wstring location = code;
+  wchar_t name[128]{};
+  const int n = getGeoInfoEx(location.data(), GEO_FRIENDLYNAME, name, static_cast<int>(std::size(name)));
+  return n > 1 ? std::wstring(name) : code;
+}
+
+// "запись: …": a menu of what the core may write to the log; a pick restarts
+// the box (the effective config changes).
+void ChooseLogLevel(HWND window, POINT at) {
+  const View view = CurrentView();
+  wil::unique_hmenu menu(CreatePopupMenu());
+  if (!menu) {
+    return;
+  }
+  constexpr UINT kFirst = 1;
+  static constexpr std::array<std::pair<std::string_view, const wchar_t*>, 5> kItems = {{
+      {"", L"Как в конфиге"},
+      {"debug", L"Всё, с отладкой (debug)"},
+      {"info", L"Обычное (info)"},
+      {"warn", L"Предупреждения и ошибки (warn)"},
+      {"error", L"Только ошибки (error)"},
+  }};
+  for (std::size_t i = 0; i < kItems.size(); ++i) {
+    const UINT checked = kItems[i].first == view.logLevel ? MF_CHECKED : MF_UNCHECKED;
+    AppendMenuW(menu.get(), MF_STRING | checked, kFirst + static_cast<UINT>(i), kItems[i].second);
+  }
+  AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"Смена перезапускает подключение");
+  SetForegroundWindow(window);
+  const auto command = static_cast<UINT>(
+      TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN, at.x, at.y, 0, window,
+                     nullptr));
+  PostMessageW(window, WM_NULL, 0, 0);
+  if (command >= kFirst && command < kFirst + kItems.size()) {
+    {
+      auto& shared = State();
+      const std::scoped_lock lock(shared.mutex);
+      shared.pendingLogLevel = std::string(kItems[command - kFirst].first);
+    }
+    Wake();
+  }
+}
+
+void RequestToggleExitIp() {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingToggleExitIp = true;
+  }
+  Wake();
+}
+
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
 // What the window shows, from the worker's view.
@@ -1108,6 +1467,7 @@ UiContent ContentFrom(const View& v) {
   c.connections = v.connections;
   c.error = v.display == Display::Error ? Widen(v.error) : std::wstring();
   c.hasSubscription = v.hasSubscription;
+  c.hasConfig = v.hasConfig;
   c.subscriptionHost = v.subscriptionHost;
   c.subscriptionError = Widen(v.subscriptionError);
   c.updateHours = v.hasSubscription ? v.updateHours : 0;
@@ -1128,6 +1488,9 @@ UiContent ContentFrom(const View& v) {
   for (const std::string& app : v.apps) {
     c.apps.push_back(Widen(app));
   }
+  for (const std::string& path : v.appPaths) {
+    c.appPaths.push_back(Widen(path));
+  }
   for (const std::string& p : v.protocols) {
     c.protocols.push_back(Widen(p));
   }
@@ -1146,6 +1509,12 @@ UiContent ContentFrom(const View& v) {
   c.delaysTesting = v.delaysTesting;
   c.canTestDelays = v.display == Display::On && !v.protocols.empty();
   c.delayError = Widen(v.delayError);
+  c.exitIp = Widen(v.exitIp.ip);
+  c.exitCountry = Widen(v.exitIp.country);
+  c.exitCountryName = CountryName(c.exitCountry);
+  c.exitPending = v.exitIp.pending;
+  c.hideExitIp = v.hideExitIp;
+  c.logLevel = Widen(v.logLevel);
   c.autostart = sovereign::tray::AutostartEnabled();
   c.version = SOVEREIGN_VERSION_W L" · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
   if (g_updater != nullptr) {
@@ -1225,6 +1594,23 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::KeepConfig:
       RequestChoice(ConfigChoice::KeepMine);
       break;
+    case UiCommand::ImportFile:
+      ImportFile(owner);
+      break;
+    case UiCommand::CopySubscription:
+      if (!view.subscriptionUrl.empty() && CopyText(owner, Widen(view.subscriptionUrl)) && g_trayIcon != nullptr) {
+        g_trayIcon->Balloon(L"Sovereign: ссылка скопирована",
+                            L"В ней твой ключ доступа - отдавай только своим устройствам.", NIIF_INFO);
+      }
+      break;
+    case UiCommand::RemoveSubscription:
+      if (MessageBoxW(owner,
+                      L"Отключить подписку?\n\nКонфиг останется как есть и будет работать, но обновляться "
+                      L"больше не будет. Подключить снова - вставить ссылку.",
+                      L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
+        RequestUnsubscribe();
+      }
+      break;
     case UiCommand::CarryOverEdits:
       RequestChoice(ConfigChoice::CarryOver);
       break;
@@ -1237,7 +1623,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     case UiCommand::SetAppsMode:
-      RequestApps({args.index == 1 ? AppsMode::Include : AppsMode::Exclude, view.apps});
+      RequestApps({args.index == 1 ? AppsMode::Include : AppsMode::Exclude, view.apps, {}});
       break;
     case UiCommand::RemoveApp:
       if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.apps.size()) {
@@ -1262,6 +1648,12 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         g_trayIcon->Balloon(L"Sovereign", L"Не удалось изменить автозапуск (реестр отказал).");
       }
       UpdateWindows();
+      break;
+    case UiCommand::ChooseLogLevel:
+      ChooseLogLevel(owner, args.anchor);
+      break;
+    case UiCommand::ToggleExitIp:
+      RequestToggleExitIp();
       break;
     case UiCommand::TestDelays:
       RequestUrlTest();

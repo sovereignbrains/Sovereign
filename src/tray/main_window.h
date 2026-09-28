@@ -15,15 +15,16 @@
 
 namespace sovereign::tray {
 
-// The tray's window: compact, one screen for every day - the switch and the
-// state, the servers with their latency, rows into the subscription and the
-// apps, the log and the settings behind two icons; those pages open in its
-// place, back with the arrow or Esc. Drawn with Direct2D/DirectWrite in DIPs,
-// in ui_style.h's palette.
+// The tray's window: compact, one screen for every day - the state and speed
+// at the top, tiles into the subscription, the apps, the log and the
+// settings, and a bar at the bottom with the switch and the server in use
+// (which opens the servers); those pages open in its place, back with the
+// arrow or Esc. Drawn with Direct2D/DirectWrite in DIPs, in ui_style.h's
+// palette.
 //
 // A click on the tray icon shows it in the corner by the notification area
 // (Toggle); closing it only hides it - the tray keeps running. Tab and
-// Shift+Tab move the focus, Enter or Space activate, Ctrl+1..5 switch pages.
+// Shift+Tab move the focus, Enter or Space activate, Ctrl+1..6 switch pages.
 // UI thread only.
 class MainWindow {
  public:

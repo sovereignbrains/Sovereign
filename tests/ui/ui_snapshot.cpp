@@ -36,15 +36,21 @@ UiContent SampleContent() {
   c.connections = 37;
   c.subscription = L"27.09 19:20";
   c.hasSubscription = true;
+  c.hasConfig = true;
   c.subscriptionHost = L"packetlab.tech";
   c.updateHours = 12;
   c.appsInclude = false;
-  c.apps = {L"steam.exe", L"Telegram.exe", L"qbittorrent.exe", L"EpicGamesLauncher.exe"};
+  c.apps = {L"steam.exe", L"Telegram.exe", L"qbittorrent.exe", L"notepad.exe"};
+  // One exe that is there on any Windows: its real icon; the rest aren't known.
+  c.appPaths = {L"", L"", L"", L"C:\\Windows\\System32\\notepad.exe"};
   c.protocols = {L"auto", L"AnyTLS · Нидерланды", L"AnyTLS · Финляндия", L"REALITY · Германия", L"REALITY · Польша"};
   c.protocol = 1;
   using State = sovereign::tray::UiDelay::State;
   c.delays = {{State::Ok, 48}, {State::Ok, 52}, {State::Ok, 310}, {State::Failed, 0}, {State::Pending, 0}};
   c.canTestDelays = true;
+  c.exitIp = L"185.12.34.56";
+  c.exitCountry = L"NL";
+  c.exitCountryName = L"Нидерланды";
   c.update = sovereign::tray::UiUpdate::Available;
   c.updateVersion = L"0.3.0";
   c.autostart = true;
@@ -67,8 +73,8 @@ std::vector<std::wstring> SampleLogs() {
 int Snapshots(const std::wstring& dir) {
   const UiContent content = SampleContent();
   const std::vector<std::wstring> logs = SampleLogs();
-  constexpr const wchar_t* kNames[sovereign::tray::kUiPageCount] = {L"overview", L"subscription", L"apps", L"logs",
-                                                                     L"settings"};
+  constexpr const wchar_t* kNames[sovereign::tray::kUiPageCount] = {L"overview", L"servers", L"subscription",
+                                                                     L"apps",     L"logs",    L"settings"};
   CreateDirectoryW(dir.c_str(), nullptr);
   for (int p = 0; p < sovereign::tray::kUiPageCount; ++p) {
     const std::wstring path = dir + L"\\" + kNames[p] + L".png";
@@ -102,6 +108,12 @@ int Snapshots(const std::wstring& dir) {
   waiting.choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
   sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 360, 640, 96,
                                             dir + L"\\subscription-waiting-narrow.png");
+  // The exit's address hidden: the flag and the country.
+  UiContent hidden = content;
+  hidden.hideExitIp = true;
+  sovereign::tray::RenderMainWindowSnapshot(hidden, UiPage::Overview, logs, 400, 620, 96,
+                                            dir + L"\\overview-ip-hidden.png");
+
   UiContent merged = content;
   merged.configEdited = true;
   merged.mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};

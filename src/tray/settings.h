@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app_rules.h"
@@ -17,7 +18,8 @@ namespace sovereign::tray {
 // SYSTEM/admins) can read - it holds a config with passwords and keys.
 //
 //   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours",
-//                 "appsMode", "apps", "protocol"}
+//                 "appsMode", "apps", "appPaths", "protocol", "hideExitIp",
+//                 "logLevel"}
 //   config.json            the sing-box config: the subscription's copy, the
 //                          user's edits on it, or by hand when there's no
 //                          subscription; the tray adds its own bits (the
@@ -39,8 +41,18 @@ struct TraySettings {
   int updateHours = 12;              // from Profile-Update-Interval, else the default
   AppsMode appsMode = AppsMode::Exclude;  // per-app routing (app_rules.h)
   std::vector<std::string> apps;          // exe names, as sing-box's process_name
+  // Where a listed app's exe was last seen, by its name in `apps`: only for
+  // its icon in the window - the rule matches the name wherever it runs. Not
+  // a std::map: MSVC's debug map allocates when moved, and settings move.
+  std::vector<std::pair<std::string, std::string>> appPaths;
   std::string protocol;  // the proxy selector's default to use; empty = the config's (protocol_choice.h)
+  bool hideExitIp = false;  // the window shows the exit's country, not its address
+  std::string logLevel;     // what the core writes (log_level.h); empty = the config's
 };
+
+// An app's remembered exe path, or null; and setting one (replacing).
+const std::string* AppPath(const TraySettings& settings, const std::string& app);
+void SetAppPath(TraySettings& settings, const std::string& app, std::string path);
 
 // A missing or unreadable tray.json gives the defaults: a broken settings file
 // must not keep the tray from starting.
@@ -57,7 +69,8 @@ std::optional<std::string> LoadOriginal();
 void SaveOriginal(const std::string& text);
 std::optional<std::string> LoadPending();
 void SavePending(const std::string& text);
-void ClearPending();  // no error if there is none
+void ClearPending();   // no error if there is none
+void ClearOriginal();  // likewise: no subscription, no base
 
 // Keeps `text` (config.json about to be replaced) in history\, dropping the
 // oldest beyond kHistoryKeep.
