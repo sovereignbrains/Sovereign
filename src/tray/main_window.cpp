@@ -277,9 +277,22 @@ std::wstring CurrentProtocol(const UiContent& c) {
   return {};
 }
 
+std::wstring StateDetailBase(const UiContent& c);
+
 // The overview's lines under the state: which server and how fast, or what
-// to do about it.
+// to do about it - and when the kill switch holds the internet closed, that.
 std::wstring StateDetail(const UiContent& c) {
+  std::wstring detail = StateDetailBase(c);
+  if (c.killSwitchActive && c.display != Display::On && c.display != Display::Off) {
+    detail += L"\nИнтернет закрыт kill switch'ем, пока подключение не восстановится.";
+  } else if (c.display == Display::ServiceDown && c.killSwitch) {
+    detail += L"\nЕсли включён kill switch, интернета нет, пока служба не запустится; снять вручную: "
+              L"sovereign-core.exe --unblock от администратора.";
+  }
+  return detail;
+}
+
+std::wstring StateDetailBase(const UiContent& c) {
   switch (c.display) {
     case Display::ServiceDown:
       return L"sovereign-core не отвечает. Установи службу от администратора: sovereign-core.exe --install";
@@ -677,7 +690,30 @@ class Painter {
          c.display == Display::Error);
     tile(3, kGlyphSettings, L"Настройки", L"Sovereign " + c.version.substr(0, c.version.find(L' ')), UiPage::Settings,
          c.update == UiUpdate::Available);
-    return y + 2 * kTile + 10;
+    y += 2 * kTile + 10 + kGap;
+
+    // The kill switch: on the overview, it's what decides what a drop does.
+    return KillSwitchCard(l, c, x0, x1, y);
+  }
+
+  float KillSwitchCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
+    Item kill = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 60}, L"Kill switch", nullptr,
+                            UiCommand::ToggleKillSwitch);
+    kill.checked = c.killSwitch;
+    if (!c.killSwitch) {
+      kill.detail = L"при обрыве трафик пойдёт напрямую";
+    } else if (c.killSwitchActive && c.display != Display::On && c.display != Display::Off) {
+      kill.detail = L"интернет закрыт до восстановления";
+    } else {
+      kill.detail = L"при обрыве трафик не пойдёт мимо прокси";
+    }
+    l.items.push_back(std::move(kill));
+    y += 64;
+    if (!c.killSwitchError.empty()) {
+      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y + 8);
+    }
+    return y;
   }
 
   // The overview's bottom: the switch, and under it the server in use - a
@@ -990,6 +1026,25 @@ class Painter {
     autostart.checked = c.autostart;
     l.items.push_back(std::move(autostart));
     y += 68 + kGap;
+
+    // The kill switch and what it lets through.
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 128}));
+    Item kill = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 60}, L"Kill switch", nullptr,
+                            UiCommand::ToggleKillSwitch);
+    kill.detail = L"Трафик не пойдёт мимо прокси.";
+    kill.checked = c.killSwitch;
+    l.items.push_back(std::move(kill));
+    l.items.push_back(Make(Kind::Divider, {x0 + 16, y + 64, x1 - 16, y + 65}));
+    Item lan = CommandItem(Kind::Switch, {x0 + 4, y + 68, x1 - 4, y + 124}, L"Локальная сеть", nullptr,
+                           UiCommand::ToggleKillSwitchLan);
+    lan.detail = L"Принтер, NAS — доступны и при обрыве.";
+    lan.checked = c.killSwitchLan;
+    lan.enabled = c.killSwitch;
+    l.items.push_back(std::move(lan));
+    y += 128 + kGap;
+    if (!c.killSwitchError.empty()) {
+      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
+    }
 
     // Version and updates: the button under the text, the window is narrow.
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 110}));

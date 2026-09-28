@@ -65,6 +65,7 @@
 #include "main_window.h"
 #include "pipe_client.h"
 #include "settings.h"
+#include "share_links.h"
 #include "sha256.h"
 #include "subscription.h"
 #include "tray_model.h"
@@ -109,6 +110,9 @@ constexpr std::chrono::minutes kRefreshRetry{30};
 // one poll reads at most (a flood is read on over the next seconds).
 constexpr std::size_t kLogKeep = 5000;
 constexpr int kLogPagesPerPoll = 20;
+
+// A kill switch the service couldn't apply is tried again after this.
+constexpr std::chrono::seconds kKillSwitchRetry{10};
 
 // The exit IP: how often a running lookup is polled, and a known one rechecked.
 constexpr std::chrono::seconds kExitIpPoll{2};
@@ -206,6 +210,10 @@ struct View {
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
   bool hideExitIp = false;
   std::string logLevel;
+  bool killSwitch = false;
+  bool killSwitchLan = true;
+  bool killSwitchActive = false;
+  std::string killSwitchError;
 };
 
 // What to do with the config when a newer subscription meets the user's
@@ -254,6 +262,8 @@ struct Shared {
   bool pendingUrlTest = false;
   bool pendingToggleExitIp = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
+  bool pendingToggleKillSwitch = false;
+  bool pendingToggleKillSwitchLan = false;
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   std::optional<ConfigChoice> pendingChoice;
@@ -266,7 +276,8 @@ struct Shared {
 
   bool HasRequests() const {
     return pendingWant || pendingImport || pendingLocalConfig || pendingUnsubscribe || pendingRefresh ||
-           pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingApps || pendingProtocol ||
+           pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingToggleKillSwitch ||
+           pendingToggleKillSwitchLan || pendingApps || pendingProtocol ||
            pendingChoice;
   }
 };
@@ -368,6 +379,8 @@ std::optional<sovereign::tray::Stats> PollStats() {
       .connections = sovereign::tray::Field<std::int64_t>(json, "connections", 0),
       .generation = sovereign::tray::Field<std::int64_t>(json, "generation", 0),
       .configSha256 = sovereign::tray::Field<std::string>(json, "config_sha256", {}),
+      .killSwitch = sovereign::tray::Field<bool>(json, "kill_switch", false),
+      .killSwitchLan = sovereign::tray::Field<bool>(json, "kill_switch_lan", true),
   };
 }
 
@@ -411,6 +424,8 @@ class Worker {
       bool urlTest = false;
       bool toggleExitIp = false;
       std::optional<std::string> logLevel;
+      bool toggleKillSwitch = false;
+      bool toggleKillSwitchLan = false;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
@@ -424,6 +439,8 @@ class Worker {
         urlTest = std::exchange(shared.pendingUrlTest, false);
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
+        toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
+        toggleKillSwitchLan = std::exchange(shared.pendingToggleKillSwitchLan, false);
       }
       if (want) {
         settings_.wantOn = *want;
@@ -473,6 +490,19 @@ class Worker {
         settings_.hideExitIp = !settings_.hideExitIp;
         Save();
       }
+      if (toggleKillSwitch) {
+        settings_.killSwitch = !settings_.killSwitch;
+        killSwitchError_.clear();
+        lastKillSwitchTry_.reset();
+        Save();
+      }
+      if (toggleKillSwitchLan) {
+        settings_.killSwitchLan = !settings_.killSwitchLan;
+        killSwitchError_.clear();
+        lastKillSwitchTry_.reset();
+        Save();
+      }
+      UpdateKillSwitch(stats);
       if (logLevel && *logLevel != settings_.logLevel) {
         settings_.logLevel = *logLevel;
         Save();  // the effective config changes: the model restarts the box
@@ -575,13 +605,22 @@ class Worker {
     if (settings_.subscriptionUrl.empty()) {
       return;
     }
-    const auto fetched = sovereign::tray::FetchSubscription(Widen(settings_.subscriptionUrl), kUserAgent);
+    auto fetched = sovereign::tray::FetchSubscription(Widen(settings_.subscriptionUrl), kUserAgent);
     std::string error;
     sovereign::tray::ConfigCheck check;
     if (!fetched) {
       error = fetched.error();
     } else {
       check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
+      // A server that answers with keys (a base64 list, as for V2Ray
+      // clients) instead of a sing-box config: the config is made from them.
+      if (!check.ok) {
+        if (auto built = sovereign::tray::BuildConfigFromLinks(sovereign::tray::RecognizeImport(fetched->body).links);
+            built.config) {
+          fetched->body = std::move(*built.config);
+          check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
+        }
+      }
       error = check.error;
     }
     if (!error.empty()) {
@@ -795,6 +834,36 @@ class Worker {
     }
   }
 
+  // The kill switch as it should be - on while the connection is meant to be
+  // on - against what the service reports; told when they differ (a failure
+  // is retried now and then, not every second).
+  void UpdateKillSwitch(const std::optional<sovereign::tray::Stats>& stats) {
+    if (!stats) {
+      killSwitchActive_ = false;
+      return;
+    }
+    killSwitchActive_ = stats->killSwitch;
+    const bool enabled = settings_.killSwitch && settings_.wantOn;
+    const bool differs =
+        stats->killSwitch != enabled || (enabled && stats->killSwitchLan != settings_.killSwitchLan);
+    if (!differs) {
+      killSwitchError_.clear();
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    if (lastKillSwitchTry_ && now - *lastKillSwitchTry_ < kKillSwitchRetry) {
+      return;
+    }
+    lastKillSwitchTry_ = now;
+    killSwitchError_ = ServiceCall(
+        nlohmann::json{{"cmd", "kill_switch"}, {"enabled", enabled}, {"allow_lan", settings_.killSwitchLan}},
+        "kill_switch");
+    if (killSwitchError_.empty()) {
+      killSwitchActive_ = enabled;
+      lastKillSwitchTry_.reset();
+    }
+  }
+
   // The exit IP through the server in use: asked for when a box starts or
   // the server changes, polled while the lookup runs, and asked again now
   // and then (auto may have moved to another server).
@@ -995,6 +1064,10 @@ class Worker {
       v.exitIp = exit_;
       v.hideExitIp = settings_.hideExitIp;
       v.logLevel = settings_.logLevel;
+      v.killSwitch = settings_.killSwitch;
+      v.killSwitchLan = settings_.killSwitchLan;
+      v.killSwitchActive = killSwitchActive_;
+      v.killSwitchError = killSwitchError_;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -1029,6 +1102,9 @@ class Worker {
   std::string exitTag_;               // the server exit_ is about
   std::int64_t exitGeneration_ = -1;  // and the box
   std::optional<TrayModel::Clock::time_point> exitAsked_;
+  bool killSwitchActive_ = false;
+  std::string killSwitchError_;
+  std::optional<TrayModel::Clock::time_point> lastKillSwitchTry_;
 };
 
 // NOTIFYICONDATA as RAII: the icon leaves the notification area whatever
@@ -1128,37 +1204,65 @@ void RequestLocalConfig(std::string text) {
   Wake();
 }
 
-// "Paste": a subscription link, or a whole config of the user's own - the
-// clipboard says which.
-void RequestImport(HWND window) {
-  const std::wstring text = ClipboardText(window);
-  if (sovereign::tray::IsHttpsUrl(text)) {
-    {
-      auto& shared = State();
-      const std::scoped_lock lock(shared.mutex);
-      shared.pendingImport = Narrow(text);
+// What was pasted or read from a file, whatever it is (share_links.h): a
+// subscription link, a whole config, or proxy keys - made into a config.
+void ImportText(const std::string& text) {
+  const auto balloon = [](const std::wstring& message) {
+    if (g_trayIcon != nullptr) {
+      g_trayIcon->Balloon(L"Sovereign", message);
     }
-    Wake();
+  };
+  if (text.size() > sovereign::tray::kMaxSubscriptionBytes) {
+    balloon(L"Слишком большой текст: больше 4 МБ.");
     return;
   }
-  if (text.starts_with(L'{') && text.size() * sizeof(wchar_t) <= 2 * sovereign::tray::kMaxSubscriptionBytes) {
-    RequestLocalConfig(Narrow(text));  // the worker checks it, and says why not
+  const auto items = sovereign::tray::RecognizeImport(text);
+  if (items.json) {
+    RequestLocalConfig(*items.json);  // the worker checks it, and says why not
     return;
   }
-  if (g_trayIcon != nullptr) {
-    g_trayIcon->Balloon(L"Sovereign",
-                        L"В буфере обмена нет ни https-ссылки на подписку, ни конфига sing-box. Скопируй одно из них и повтори.");
+  if (!items.links.empty()) {
+    const auto built = sovereign::tray::BuildConfigFromLinks(items.links);
+    if (!built.config) {
+      balloon(L"Ни один ключ не подошёл: " + Widen(built.errors.empty() ? std::string() : built.errors.front()));
+      return;
+    }
+    if (!built.errors.empty()) {
+      balloon(std::format(L"Взято ключей: {} из {}. {}", built.servers, items.links.size(), Widen(built.errors.front())));
+    }
+    RequestLocalConfig(*built.config);
+    return;
   }
+  for (const std::string& url : items.urls) {
+    if (sovereign::tray::IsHttpsUrl(Widen(url))) {
+      {
+        auto& shared = State();
+        const std::scoped_lock lock(shared.mutex);
+        shared.pendingImport = url;
+      }
+      Wake();
+      return;
+    }
+  }
+  if (!items.jsonError.empty()) {
+    balloon(L"Конфиг с ошибкой: " + Widen(items.jsonError));
+    return;
+  }
+  balloon(L"Не нашёл ни https-ссылки на подписку, ни конфига sing-box, ни ключей (vless://, vmess://, trojan://, "
+          L"ss://, hysteria2://, tuic://).");
 }
 
-// "File...": a config of the user's own from disk.
+// "Paste": whatever the clipboard holds.
+void RequestImport(HWND window) { ImportText(Narrow(ClipboardText(window))); }
+
+// "File...": a config, or a text with keys or a link, from disk.
 void ImportFile(HWND window) {
   std::wstring path;
   try {
     const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
-    const COMDLG_FILTERSPEC filter{L"Конфиг sing-box", L"*.json"};
-    THROW_IF_FAILED(dialog->SetFileTypes(1, &filter));
-    THROW_IF_FAILED(dialog->SetTitle(L"Свой конфиг для Sovereign"));
+    const std::array<COMDLG_FILTERSPEC, 2> filters{{{L"Конфиг или ключи", L"*.json;*.txt;*.conf"}, {L"Все файлы", L"*.*"}}};
+    THROW_IF_FAILED(dialog->SetFileTypes(static_cast<UINT>(filters.size()), filters.data()));
+    THROW_IF_FAILED(dialog->SetTitle(L"Конфиг, ключи или ссылка для Sovereign"));
     const HRESULT shown = dialog->Show(window);
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
       return;
@@ -1186,7 +1290,7 @@ void ImportFile(HWND window) {
     }
     return;
   }
-  RequestLocalConfig(std::move(text));  // too big or not a config: the worker says so
+  ImportText(text);
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
@@ -1515,6 +1619,10 @@ UiContent ContentFrom(const View& v) {
   c.exitPending = v.exitIp.pending;
   c.hideExitIp = v.hideExitIp;
   c.logLevel = Widen(v.logLevel);
+  c.killSwitch = v.killSwitch;
+  c.killSwitchLan = v.killSwitchLan;
+  c.killSwitchActive = v.killSwitchActive;
+  c.killSwitchError = Widen(v.killSwitchError);
   c.autostart = sovereign::tray::AutostartEnabled();
   c.version = SOVEREIGN_VERSION_W L" · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
   if (g_updater != nullptr) {
@@ -1649,6 +1757,17 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       UpdateWindows();
       break;
+    case UiCommand::ToggleKillSwitch:
+    case UiCommand::ToggleKillSwitchLan: {
+      {
+        auto& shared = State();
+        const std::scoped_lock lock(shared.mutex);
+        (command == UiCommand::ToggleKillSwitch ? shared.pendingToggleKillSwitch : shared.pendingToggleKillSwitchLan) =
+            true;
+      }
+      Wake();
+      break;
+    }
     case UiCommand::ChooseLogLevel:
       ChooseLogLevel(owner, args.anchor);
       break;

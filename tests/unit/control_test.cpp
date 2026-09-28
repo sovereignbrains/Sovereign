@@ -1,6 +1,7 @@
 // The control-pipe protocol driven through a fake ICore: proves the service
 // talks to "a core", not to GoCore specifically, and pins down every command's
 // request/response shape without a DLL, a pipe or a running sing-box.
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -210,6 +211,81 @@ void TestExitIp() {
   core.exitIp = {{}, false, {}, {}, "i/o timeout"};
   answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl"})");
   CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","error":"i/o timeout"})"));
+}
+
+class FakeKillSwitch final : public sovereign::service::IKillSwitch {
+ public:
+  std::string Apply(const std::vector<sovereign::service::KillSwitchRule>& rules) override {
+    ++applied;
+    if (!error.empty()) {
+      return error;
+    }
+    last = rules;
+    active = !rules.empty();
+    return {};
+  }
+  bool Active() override { return active; }
+
+  bool active = false;
+  int applied = 0;
+  std::string error;
+  std::vector<sovereign::service::KillSwitchRule> last;
+};
+
+void TestKillSwitch() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  // Unavailable without one.
+  {
+    ControlHandler none(&core, log, lastConfig);
+    CHECK(IsError(Send(none, R"({"cmd":"kill_switch","enabled":true})"), "kill switch unavailable"));
+    CHECK(Send(none, R"({"cmd":"box_stats"})").value("kill_switch", true) == false);
+  }
+
+  FakeKillSwitch killSwitch;
+  ControlHandler handler(&core, log, lastConfig, {}, &killSwitch);
+  CHECK(Send(handler, R"({"cmd":"kill_switch"})").value("cmd", "") == "error");
+  CHECK(Send(handler, R"({"cmd":"kill_switch","enabled":"yes"})").value("cmd", "") == "error");
+  CHECK(Send(handler, R"({"cmd":"kill_switch","enabled":true,"allow_lan":1})").value("cmd", "") == "error");
+  CHECK(killSwitch.applied == 0);
+
+  // On: the rules go in, without a tunnel yet (no config ran).
+  json answer = Send(handler, R"({"cmd":"kill_switch","enabled":true})");
+  CHECK(answer == json::parse(R"({"cmd":"kill_switch","active":true,"allow_lan":true})"));
+  CHECK(killSwitch.applied == 1 && !killSwitch.last.empty());
+  CHECK(std::none_of(killSwitch.last.begin(), killSwitch.last.end(), [](const auto& r) { return !r.localPrefixes.empty(); }));
+  // The same again: nothing to do.
+  Send(handler, R"({"cmd":"kill_switch","enabled":true})");
+  CHECK(killSwitch.applied == 1);
+
+  // A box starts: its tunnel's addresses are let through.
+  core.running = false;
+  const json started = Send(handler, R"({"cmd":"box_start","config":{"inbounds":[{"type":"tun","address":["172.19.0.1/30"]}]}})");
+  CHECK(started.value("cmd", "") == "box_started" && !started.contains("kill_switch_error"));
+  CHECK(killSwitch.applied == 2);
+  CHECK(std::any_of(killSwitch.last.begin(), killSwitch.last.end(), [](const auto& r) { return !r.localPrefixes.empty(); }));
+  const json stats = Send(handler, R"({"cmd":"box_stats"})");
+  CHECK(stats.value("kill_switch", false) == true && stats.value("kill_switch_lan", false) == true);
+
+  // A failure keeps what was in force, and says why.
+  killSwitch.error = "access denied";
+  CHECK(IsError(Send(handler, R"({"cmd":"kill_switch","enabled":true,"allow_lan":false})"), "access denied"));
+  CHECK(Send(handler, R"({"cmd":"box_stats"})").value("kill_switch_lan", false) == true);
+  killSwitch.error.clear();
+
+  // Off: nothing left.
+  answer = Send(handler, R"({"cmd":"kill_switch","enabled":false})");
+  CHECK(answer.value("active", true) == false && killSwitch.last.empty());
+  CHECK(Send(handler, R"({"cmd":"box_stats"})").value("kill_switch", true) == false);
+
+  // A restart finds persistent filters in place: reported active until told.
+  FakeKillSwitch leftover;
+  leftover.active = true;
+  ControlHandler restarted(&core, log, lastConfig, {}, &leftover);
+  CHECK(Send(restarted, R"({"cmd":"box_stats"})").value("kill_switch", false) == true);
+  Send(restarted, R"({"cmd":"kill_switch","enabled":false})");
+  CHECK(leftover.applied == 1 && !leftover.active);
 }
 
 void TestSha256KnownVectors() {
@@ -426,6 +502,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestLogsCarryTime();
     TestUrlTest();
     TestExitIp();
+    TestKillSwitch();
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;

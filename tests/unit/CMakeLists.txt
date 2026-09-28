@@ -6,6 +6,11 @@ target_link_libraries(unit-log-ring PRIVATE sovereign_service_lib)
 sovereign_copy_asan_runtime(unit-log-ring)
 add_test(NAME unit-log-ring COMMAND unit-log-ring)
 
+add_executable(unit-kill-switch kill_switch_test.cpp check.h)
+target_link_libraries(unit-kill-switch PRIVATE sovereign_service_lib)
+sovereign_copy_asan_runtime(unit-kill-switch)
+add_test(NAME unit-kill-switch COMMAND unit-kill-switch)
+
 add_executable(unit-control control_test.cpp check.h)
 target_link_libraries(unit-control PRIVATE sovereign_service_lib)
 sovereign_copy_asan_runtime(unit-control)
@@ -60,6 +65,11 @@ add_executable(unit-log-level log_level_test.cpp check.h)
 target_link_libraries(unit-log-level PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-level)
 add_test(NAME unit-log-level COMMAND unit-log-level)
+
+add_executable(unit-share-links share_links_test.cpp check.h)
+target_link_libraries(unit-share-links PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-share-links)
+add_test(NAME unit-share-links COMMAND unit-share-links)
 
 add_executable(unit-log-lines log_lines_test.cpp check.h)
 target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)

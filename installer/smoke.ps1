@@ -50,6 +50,13 @@ function Check-Installed([string]$when) {
   $pong = ''
   try { $pong = Send-PipeCommand '{"cmd":"box_ping"}' } catch { Write-Host "  pipe: $_" }
   Expect ($pong -match 'box_pong') "the core answers over the pipe ($pong)"
+  # The kill switch: off, and the filtering engine reachable (nothing is
+  # blocked here - the runner's own connections would go too).
+  $kill = ''
+  try { $kill = Send-PipeCommand '{"cmd":"kill_switch","enabled":false}' } catch { Write-Host "  pipe: $_" }
+  Expect ($kill -match '"active":false') "the kill switch is off ($kill)"
+  $unblock = Start-Process -FilePath (Join-Path $app 'sovereign-core.exe') -ArgumentList '--unblock' -PassThru -Wait -WindowStyle Hidden
+  Expect ($unblock.ExitCode -eq 0) '--unblock opens the filtering engine'
   $shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Sovereign.lnk'
   Expect (Test-Path $shortcut) 'a Start menu shortcut'
 }

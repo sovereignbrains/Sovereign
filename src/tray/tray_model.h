@@ -25,6 +25,8 @@ struct Stats {
   std::int64_t connections = 0;
   std::int64_t generation = 0;
   std::string configSha256;  // of the config the box runs; empty if unknown
+  bool killSwitch = false;     // the kill switch's filters are in place
+  bool killSwitchLan = true;   // and let the local network through
 };
 
 enum class Action : std::uint8_t { None, Start, Stop };

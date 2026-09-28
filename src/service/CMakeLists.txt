@@ -55,6 +55,8 @@ add_library(sovereign_service_lib STATIC
   core.h
   control.cpp
   control.h
+  kill_switch.cpp
+  kill_switch.h
   log_ring.cpp
   log_ring.h
 )
@@ -79,9 +81,11 @@ add_executable(sovereign-core
   trace.h
   autologger.cpp
   autologger.h
+  kill_switch_wfp.cpp
+  kill_switch_wfp.h
 )
 
-target_link_libraries(sovereign-core PRIVATE sovereign_gocore_host sovereign_service_lib sovereign_common advapi32)
+target_link_libraries(sovereign-core PRIVATE sovereign_gocore_host sovereign_service_lib sovereign_common advapi32 fwpuclnt)
 sovereign_copy_asan_runtime(sovereign-core)
 
 add_dependencies(sovereign-core sovereign_gocore_dll)

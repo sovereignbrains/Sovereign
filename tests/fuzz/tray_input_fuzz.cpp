@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,6 +23,7 @@
 #include "log_lines.h"
 #include "log_level.h"
 #include "protocol_choice.h"
+#include "share_links.h"
 #include "subscription.h"
 #include "update.h"
 
@@ -73,6 +75,19 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   (void)ParseVersion(text);
   (void)IsHttpsUrl(std::wstring(text.begin(), text.end()));
   (void)UrlHost(std::wstring(text.begin(), text.end()));
+
+  // What the user pastes, or a QR code holds: the keys found must make a
+  // config the tray takes, and base64 must come back as it went.
+  const ImportItems items = RecognizeImport(text);
+  (void)ParseShareLink(text);
+  if (const LinksConfig built = BuildConfigFromLinks(items.links); built.config) {
+    if (!CheckSubscriptionConfig(*built.config).ok || built.servers == 0) {
+      std::abort();
+    }
+  }
+  if (DecodeBase64(EncodeBase64(text)) != std::optional<std::string>(text) && !text.empty()) {
+    std::abort();
+  }
 
   const bool object = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false).is_object();
   const std::vector<std::string> apps{"app.exe"};

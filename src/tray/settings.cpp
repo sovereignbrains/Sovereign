@@ -115,6 +115,12 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("hideExitIp"); v != json.end() && v->is_boolean()) {
     settings.hideExitIp = v->get<bool>();
   }
+  if (const auto v = json.find("killSwitch"); v != json.end() && v->is_boolean()) {
+    settings.killSwitch = v->get<bool>();
+  }
+  if (const auto v = json.find("killSwitchLan"); v != json.end() && v->is_boolean()) {
+    settings.killSwitchLan = v->get<bool>();
+  }
   if (const auto v = json.find("logLevel"); v != json.end() && v->is_string() && IsLogLevel(v->get<std::string>())) {
     settings.logLevel = v->get<std::string>();
   }
@@ -136,6 +142,8 @@ void SaveSettings(const TraySettings& settings) {
   json["protocol"] = settings.protocol;
   json["hideExitIp"] = settings.hideExitIp;
   json["logLevel"] = settings.logLevel;
+  json["killSwitch"] = settings.killSwitch;
+  json["killSwitchLan"] = settings.killSwitchLan;
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
 }
 

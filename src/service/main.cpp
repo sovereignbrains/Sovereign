@@ -15,6 +15,7 @@
 #include "control.h"
 #include "core.h"
 #include "go_core.h"
+#include "kill_switch_wfp.h"
 #include "log_ring.h"
 #include "pipe_server.h"
 #include "protocol.h"
@@ -134,10 +135,19 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
   }
 }
 
+// This exe's full path: the kill switch lets its connections through (the
+// core dials the proxies from here).
+std::wstring OwnPath() {
+  wchar_t path[MAX_PATH]{};
+  const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
+  return n == 0 || n == MAX_PATH ? std::wstring() : std::wstring(path, n);
+}
+
 void RunPipeServer(const std::stop_token& stopToken, ServiceState& state) {
+  sovereign::service::WfpKillSwitch killSwitch(OwnPath());
   sovereign::service::ControlHandler handler(
       state.core.get(), state.coreLog, state.lastConfig,
-      [](const sovereign::service::CommandRecord& record) { trace::Command(record); });
+      [](const sovereign::service::CommandRecord& record) { trace::Command(record); }, &killSwitch);
   sovereign::service::PipeServer server(
       sovereign::ipc::kPipeName,
       [&handler](const std::string& request) { return handler.Handle(request); });
@@ -240,6 +250,18 @@ void StopService(SC_HANDLE service) {
   THROW_WIN32(ERROR_SERVICE_REQUEST_TIMEOUT);
 }
 
+// Lifts the kill switch: for --unblock, and --uninstall - a machine without
+// Sovereign mustn't keep its filters.
+bool Unblock() {
+  const std::string error = sovereign::service::RemoveKillSwitch();
+  if (!error.empty()) {
+    std::wcerr << L"Не удалось снять kill switch: " << std::wstring(error.begin(), error.end()) << L"\n";
+    return false;
+  }
+  std::wcout << L"Kill switch снят: трафик идёт как обычно.\n";
+  return true;
+}
+
 void UninstallService() {
   // First, so a service that's already gone doesn't leave the session behind.
   // The recorded .etl files stay.
@@ -252,13 +274,16 @@ void UninstallService() {
       OpenServiceW(scm.get(), kServiceName, DELETE | SERVICE_STOP | SERVICE_QUERY_STATUS));
   if (!service && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST) {
     std::wcout << L"Службы " << kServiceName << L" нет.\n";
+    Unblock();
     return;
   }
   THROW_LAST_ERROR_IF(!service);
   StopService(service.get());
   THROW_LAST_ERROR_IF(!DeleteService(service.get()));
-
   std::wcout << L"Служба " << kServiceName << L" удалена.\n";
+
+  // After the service is gone: nothing can put the filters back then.
+  Unblock();
 }
 
 BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
@@ -300,6 +325,9 @@ int wmain(int argc, wchar_t* argv[]) {
     if (arg == L"--uninstall") {
       UninstallService();
       return 0;
+    }
+    if (arg == L"--unblock") {
+      return Unblock() ? 0 : 1;
     }
     if (arg == L"--run") {
       RunInConsole();
