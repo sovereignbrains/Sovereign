@@ -63,8 +63,8 @@ struct UiContent {
 };
 
 // The window's pages: the overview, and the ones it opens (back with Esc).
-enum class UiPage : std::uint8_t { Overview, Subscription, Apps, Logs, Settings };
-inline constexpr int kUiPageCount = 5;
+enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings };
+inline constexpr int kUiPageCount = 6;
 
 enum class UiCommand : std::uint8_t {
   Toggle,

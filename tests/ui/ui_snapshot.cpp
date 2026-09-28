@@ -70,8 +70,8 @@ std::vector<std::wstring> SampleLogs() {
 int Snapshots(const std::wstring& dir) {
   const UiContent content = SampleContent();
   const std::vector<std::wstring> logs = SampleLogs();
-  constexpr const wchar_t* kNames[sovereign::tray::kUiPageCount] = {L"overview", L"subscription", L"apps", L"logs",
-                                                                     L"settings"};
+  constexpr const wchar_t* kNames[sovereign::tray::kUiPageCount] = {L"overview", L"servers", L"subscription",
+                                                                     L"apps",     L"logs",    L"settings"};
   CreateDirectoryW(dir.c_str(), nullptr);
   for (int p = 0; p < sovereign::tray::kUiPageCount; ++p) {
     const std::wstring path = dir + L"\\" + kNames[p] + L".png";
