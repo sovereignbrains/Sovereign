@@ -7,6 +7,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "check.h"
@@ -22,17 +23,17 @@ using sovereign::tray::ExtractShareLinks;
 using sovereign::tray::ParseShareLink;
 using sovereign::tray::RecognizeImport;
 
-const std::string kVless =
+constexpr std::string_view kVless =
     "vless://11111111-2222-3333-4444-555555555555@nl.example.com:443?type=tcp&security=reality&sni=www.microsoft.com"
     "&fp=chrome&pbk=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE&sid=6ba85179e30d4fc2&flow=xtls-rprx-vision"
     "#%F0%9F%87%B3%F0%9F%87%B1%20Netherlands";
-const std::string kTrojan = "trojan://p%40ss@de.example.com:8443?type=ws&path=%2Fws%3Fed%3D2048&host=cdn.example.com#DE";
-const std::string kSs = "ss://YWVzLTI1Ni1nY206c2VjcmV0@1.2.3.4:8388#SS";
-const std::string kHy2 = "hy2://pass@hy.example.com:443?sni=hy.example.com&obfs=salamander&obfs-password=ob&insecure=1#HY";
-const std::string kTuic =
+constexpr std::string_view kTrojan = "trojan://p%40ss@de.example.com:8443?type=ws&path=%2Fws%3Fed%3D2048&host=cdn.example.com#DE";
+constexpr std::string_view kSs = "ss://YWVzLTI1Ni1nY206c2VjcmV0@1.2.3.4:8388#SS";
+constexpr std::string_view kHy2 = "hy2://pass@hy.example.com:443?sni=hy.example.com&obfs=salamander&obfs-password=ob&insecure=1#HY";
+constexpr std::string_view kTuic =
     "tuic://11111111-2222-3333-4444-555555555555:pw@tuic.example.com:443?congestion_control=bbr&alpn=h3#TUIC";
 
-json Outbound(const std::string& link) {
+json Outbound(std::string_view link) {
   const auto parsed = ParseShareLink(link);
   if (!parsed.outbound) {
     std::cerr << "  " << link << ": " << parsed.error << "\n";
@@ -144,7 +145,8 @@ void TestHysteria2AndTuic() {
 
 // However the keys come, each comes out whole.
 void TestExtraction() {
-  const std::vector<std::string> all = {kVless, kTrojan, kSs, kHy2, kTuic};
+  const std::vector<std::string> all = {std::string(kVless), std::string(kTrojan), std::string(kSs),
+                                        std::string(kHy2), std::string(kTuic)};
   std::string lines;
   std::string spaced;
   std::string glued;
@@ -178,16 +180,16 @@ void TestRecognize() {
   const auto broken = RecognizeImport("{\"outbounds\": [\n}");
   CHECK(!broken.json && !broken.jsonError.empty());
 
-  const auto mixed = RecognizeImport("https://sub.example.com/abc?x=1\n" + kVless + "\nhttps://other.example.com/s");
+  const auto mixed = RecognizeImport("https://sub.example.com/abc?x=1\n" + std::string(kVless) + "\nhttps://other.example.com/s");
   CHECK(mixed.urls == std::vector<std::string>({"https://sub.example.com/abc?x=1", "https://other.example.com/s"}));
-  CHECK(mixed.links == std::vector<std::string>({kVless}));
+  CHECK(mixed.links == std::vector<std::string>({std::string(kVless)}));
 
   CHECK(RecognizeImport("просто текст").Empty());
   CHECK(RecognizeImport("").Empty());
 }
 
 void TestBuildConfig() {
-  const auto built = BuildConfigFromLinks({kVless, kTrojan, "vless://id@host:1?type=xhttp", kVless});
+  const auto built = BuildConfigFromLinks({std::string(kVless), std::string(kTrojan), "vless://id@host:1?type=xhttp", std::string(kVless)});
   CHECK(built.servers == 3);
   CHECK(built.errors.size() == 1 && built.errors[0].starts_with("ключ 3:"));
   const json config = json::parse(built.config.value_or("{}"));
@@ -198,7 +200,7 @@ void TestBuildConfig() {
   CHECK(outbounds[4]["tag"] == "\xF0\x9F\x87\xB3\xF0\x9F\x87\xB1 Netherlands 2");
   CHECK(config["route"]["final"] == "proxy");
 
-  const auto one = BuildConfigFromLinks({kSs});
+  const auto one = BuildConfigFromLinks({std::string(kSs)});
   const json single = json::parse(one.config.value_or("{}"));
   CHECK(single["outbounds"][0]["outbounds"] == json::array({"SS"}));  // no "auto" for one server
 
