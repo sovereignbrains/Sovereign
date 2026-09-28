@@ -66,6 +66,11 @@ target_link_libraries(unit-log-level PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-level)
 add_test(NAME unit-log-level COMMAND unit-log-level)
 
+add_executable(unit-share-links share_links_test.cpp check.h)
+target_link_libraries(unit-share-links PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-share-links)
+add_test(NAME unit-share-links COMMAND unit-share-links)
+
 add_executable(unit-log-lines log_lines_test.cpp check.h)
 target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-lines)

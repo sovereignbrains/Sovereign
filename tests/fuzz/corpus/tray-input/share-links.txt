@@ -1,0 +1,12 @@
+vless://11111111-2222-3333-4444-555555555555@nl.example.com:443?type=tcp&security=reality&sni=www.microsoft.com&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=6ba85179e30d4fc2&flow=xtls-rprx-vision#NL Reality
+vless://11111111-2222-3333-4444-555555555555@[2001:db8::1]:443?type=grpc&serviceName=svc&security=tls&sni=a.example.com&alpn=h2,http/1.1#grpc
+vless://11111111-2222-3333-4444-555555555555@h.example.com:80?type=httpupgrade&path=%2Fup&host=h.example.com#upgrade
+vless://11111111-2222-3333-4444-555555555555@h.example.com:80?type=tcp&headerType=http&host=a.com,b.com&path=/#tcphttp
+trojan://p%40ss@de.example.com:8443?type=ws&path=%2Fws%3Fed%3D2048&host=cdn.example.com#DE
+ss://YWVzLTI1Ni1nY206c2VjcmV0@1.2.3.4:8388#SS
+ss://2022-blake3-aes-128-gcm:MTIzNDU2Nzg5MDEyMzQ1Ng%3D%3D@h.example.com:443#SS2022
+ss://YWVzLTI1Ni1nY206c2VjcmV0@1.2.3.4:8388/?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dx.com#obfs
+hy2://pass@hy.example.com:443?sni=hy.example.com&obfs=salamander&obfs-password=ob&insecure=1#HY
+hysteria2://p@h.example.com:443,5000-6000#HYmulti
+tuic://11111111-2222-3333-4444-555555555555:pw@tuic.example.com:443?congestion_control=bbr&alpn=h3&udp_relay_mode=native#TUIC
+vmess://eyJ2IjoiMiIsInBzIjoiVk0iLCJhZGQiOiJ2bS5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6IjExMTExMTExLTIyMjItMzMzMy00NDQ0LTU1NTU1NTU1NTU1NSIsImFpZCI6IjAiLCJzY3kiOiJhdXRvIiwibmV0Ijoid3MiLCJ0eXBlIjoibm9uZSIsImhvc3QiOiJ2bS5leGFtcGxlLmNvbSIsInBhdGgiOiIvdiIsInRscyI6InRscyIsInNuaSI6InZtLmV4YW1wbGUuY29tIn0=

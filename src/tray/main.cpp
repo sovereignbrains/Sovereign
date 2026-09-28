@@ -65,6 +65,7 @@
 #include "main_window.h"
 #include "pipe_client.h"
 #include "settings.h"
+#include "share_links.h"
 #include "sha256.h"
 #include "subscription.h"
 #include "tray_model.h"
@@ -604,13 +605,22 @@ class Worker {
     if (settings_.subscriptionUrl.empty()) {
       return;
     }
-    const auto fetched = sovereign::tray::FetchSubscription(Widen(settings_.subscriptionUrl), kUserAgent);
+    auto fetched = sovereign::tray::FetchSubscription(Widen(settings_.subscriptionUrl), kUserAgent);
     std::string error;
     sovereign::tray::ConfigCheck check;
     if (!fetched) {
       error = fetched.error();
     } else {
       check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
+      // A server that answers with keys (a base64 list, as for V2Ray
+      // clients) instead of a sing-box config: the config is made from them.
+      if (!check.ok) {
+        if (auto built = sovereign::tray::BuildConfigFromLinks(sovereign::tray::RecognizeImport(fetched->body).links);
+            built.config) {
+          fetched->body = std::move(*built.config);
+          check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
+        }
+      }
       error = check.error;
     }
     if (!error.empty()) {
@@ -1194,37 +1204,65 @@ void RequestLocalConfig(std::string text) {
   Wake();
 }
 
-// "Paste": a subscription link, or a whole config of the user's own - the
-// clipboard says which.
-void RequestImport(HWND window) {
-  const std::wstring text = ClipboardText(window);
-  if (sovereign::tray::IsHttpsUrl(text)) {
-    {
-      auto& shared = State();
-      const std::scoped_lock lock(shared.mutex);
-      shared.pendingImport = Narrow(text);
+// What was pasted or read from a file, whatever it is (share_links.h): a
+// subscription link, a whole config, or proxy keys - made into a config.
+void ImportText(const std::string& text) {
+  const auto balloon = [](const std::wstring& message) {
+    if (g_trayIcon != nullptr) {
+      g_trayIcon->Balloon(L"Sovereign", message);
     }
-    Wake();
+  };
+  if (text.size() > sovereign::tray::kMaxSubscriptionBytes) {
+    balloon(L"Слишком большой текст: больше 4 МБ.");
     return;
   }
-  if (text.starts_with(L'{') && text.size() * sizeof(wchar_t) <= 2 * sovereign::tray::kMaxSubscriptionBytes) {
-    RequestLocalConfig(Narrow(text));  // the worker checks it, and says why not
+  const auto items = sovereign::tray::RecognizeImport(text);
+  if (items.json) {
+    RequestLocalConfig(*items.json);  // the worker checks it, and says why not
     return;
   }
-  if (g_trayIcon != nullptr) {
-    g_trayIcon->Balloon(L"Sovereign",
-                        L"В буфере обмена нет ни https-ссылки на подписку, ни конфига sing-box. Скопируй одно из них и повтори.");
+  if (!items.links.empty()) {
+    const auto built = sovereign::tray::BuildConfigFromLinks(items.links);
+    if (!built.config) {
+      balloon(L"Ни один ключ не подошёл: " + Widen(built.errors.empty() ? std::string() : built.errors.front()));
+      return;
+    }
+    if (!built.errors.empty()) {
+      balloon(std::format(L"Взято ключей: {} из {}. {}", built.servers, items.links.size(), Widen(built.errors.front())));
+    }
+    RequestLocalConfig(*built.config);
+    return;
   }
+  for (const std::string& url : items.urls) {
+    if (sovereign::tray::IsHttpsUrl(Widen(url))) {
+      {
+        auto& shared = State();
+        const std::scoped_lock lock(shared.mutex);
+        shared.pendingImport = url;
+      }
+      Wake();
+      return;
+    }
+  }
+  if (!items.jsonError.empty()) {
+    balloon(L"Конфиг с ошибкой: " + Widen(items.jsonError));
+    return;
+  }
+  balloon(L"Не нашёл ни https-ссылки на подписку, ни конфига sing-box, ни ключей (vless://, vmess://, trojan://, "
+          L"ss://, hysteria2://, tuic://).");
 }
 
-// "File...": a config of the user's own from disk.
+// "Paste": whatever the clipboard holds.
+void RequestImport(HWND window) { ImportText(Narrow(ClipboardText(window))); }
+
+// "File...": a config, or a text with keys or a link, from disk.
 void ImportFile(HWND window) {
   std::wstring path;
   try {
     const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
-    const COMDLG_FILTERSPEC filter{L"Конфиг sing-box", L"*.json"};
-    THROW_IF_FAILED(dialog->SetFileTypes(1, &filter));
-    THROW_IF_FAILED(dialog->SetTitle(L"Свой конфиг для Sovereign"));
+    const std::array<COMDLG_FILTERSPEC, 2> filters{{{L"Конфиг или ключи", L"*.json;*.txt;*.conf"}, {L"Все файлы", L"*.*"}}};
+    THROW_IF_FAILED(dialog->SetFileTypes(static_cast<UINT>(filters.size()), filters.data()));
+    THROW_IF_FAILED(dialog->SetTitle(L"Конфиг, ключи или ссылка для Sovereign"));
     const HRESULT shown = dialog->Show(window);
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
       return;
@@ -1252,7 +1290,7 @@ void ImportFile(HWND window) {
     }
     return;
   }
-  RequestLocalConfig(std::move(text));  // too big or not a config: the worker says so
+  ImportText(text);
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
