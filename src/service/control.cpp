@@ -216,8 +216,8 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     // A new config may bring a tunnel of other addresses: the kill switch
     // follows. Its failure doesn't undo the start - it's reported with it.
     if (killSwitch_ != nullptr && killSettings_.enabled) {
-      if (const std::string error = ApplyKillSwitch(killSettings_); !error.empty()) {
-        response["kill_switch_error"] = error;
+      if (const std::string killError = ApplyKillSwitch(killSettings_); !killError.empty()) {
+        response["kill_switch_error"] = killError;
       }
     }
     return Dump(response);
