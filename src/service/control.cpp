@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <utility>
 
 namespace sovereign::service {
@@ -107,8 +108,26 @@ bool IsTestUrl(const Json& url) {
 }  // namespace
 
 ControlHandler::ControlHandler(ICore* core, const LogRing& coreLog,
-                               std::optional<std::string>& lastConfig, CommandObserver observer)
-    : core_(core), coreLog_(coreLog), lastConfig_(lastConfig), observer_(std::move(observer)) {}
+                               std::optional<std::string>& lastConfig, CommandObserver observer,
+                               IKillSwitch* killSwitch)
+    : core_(core),
+      coreLog_(coreLog),
+      lastConfig_(lastConfig),
+      observer_(std::move(observer)),
+      killSwitch_(killSwitch),
+      killActive_(killSwitch != nullptr && killSwitch->Active()) {
+  killSettings_.enabled = killActive_;
+}
+
+std::string ControlHandler::ApplyKillSwitch(const KillSwitchSettings& settings) {
+  const std::vector<Prefix> tun = lastConfig_ ? TunPrefixes(*lastConfig_) : std::vector<Prefix>{};
+  std::string error = killSwitch_->Apply(BuildKillSwitchRules(settings, tun));
+  if (error.empty()) {
+    killSettings_ = settings;
+    killActive_ = settings.enabled;
+  }
+  return error;
+}
 
 std::string ControlHandler::Handle(const std::string& request) {
   const auto started = std::chrono::steady_clock::now();
@@ -154,7 +173,8 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   // outcome.cmd only ever points at these literals, never at request text.
   const std::string cmd = parsed.value("cmd", "");
   for (const std::string_view known :
-       {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays", "box_exitip"}) {
+       {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays", "box_exitip",
+        "kill_switch"}) {
     if (cmd == known) {
       outcome.cmd = known;
     }
@@ -193,6 +213,13 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     lastConfig_ = configJson;
     Json response;
     response["cmd"] = "box_started";
+    // A new config may bring a tunnel of other addresses: the kill switch
+    // follows. Its failure doesn't undo the start - it's reported with it.
+    if (killSwitch_ != nullptr && killSettings_.enabled) {
+      if (const std::string error = ApplyKillSwitch(killSettings_); !error.empty()) {
+        response["kill_switch_error"] = error;
+      }
+    }
     return Dump(response);
   }
 
@@ -215,6 +242,30 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     if (lastConfig_) {
       response["config_sha256"] = Sha256Hex(*lastConfig_);
     }
+    response["kill_switch"] = killActive_;
+    response["kill_switch_lan"] = killSettings_.allowLan;
+    return Dump(response);
+  }
+
+  if (cmd == "kill_switch") {
+    if (killSwitch_ == nullptr) {
+      return fail("kill switch unavailable");
+    }
+    const Json enabled = parsed.value("enabled", Json());
+    const Json allowLan = parsed.value("allow_lan", Json(true));
+    if (!enabled.is_boolean() || !allowLan.is_boolean()) {
+      return fail("enabled and allow_lan must be booleans");
+    }
+    const KillSwitchSettings settings{.enabled = enabled.get<bool>(), .allowLan = allowLan.get<bool>()};
+    if (settings != killSettings_ || settings.enabled != killActive_) {
+      if (const std::string error = ApplyKillSwitch(settings); !error.empty()) {
+        return fail(error);
+      }
+    }
+    Json response;
+    response["cmd"] = "kill_switch";
+    response["active"] = killActive_;
+    response["allow_lan"] = killSettings_.allowLan;
     return Dump(response);
   }
 

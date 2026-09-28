@@ -34,6 +34,7 @@ The client works and is in daily use; the project is between its MVP and its con
 - **servers**: pick any option of the subscription's selector (or `auto`), with each server's latency - sing-box's own URL test through every option, run on each connect and on demand;
 - **per-app routing**: everything except a list of programs, or only the list; each shown with its own icon (the exe path is remembered when it is added, or found among running processes);
 - **log**: the core's lines with their levels in color; filters by level (with counts), pause (new lines wait, counted), a click shows the line in full, right-click to copy, select all, save to a .txt or clear; what the core writes at all (debug/info/warn/error, or the config's) is picked there too;
+- **kill switch** (the overview and settings): while the connection is on, nothing goes out except through the proxy - if the core or the service falls over, or the machine reboots mid-session, the internet stays closed until it's back (the window says so); turning the connection off opens it. The local network (printers, NAS) can stay reachable, DNS there excepted;
 - start at sign-in, updates.
 
 Every page (servers, subscription, apps, the log and settings) opens in the window's place, back with the arrow or Esc. What waits for a click (a new version, a subscription meeting your edits) is one line above the tiles. Drawn with Direct2D, keyboard-navigable (Tab, Enter, Ctrl+1..6, Esc). Started by hand the tray opens the window; from the Run key (`--background`) it stays in the notification area; a second start brings the running tray's window up. Closing it only hides it.
@@ -42,6 +43,7 @@ Every page (servers, subscription, apps, the log and settings) opens in the wind
 
 - hosts sing-box (`sovereign-gocore.dll`, the pinned version built with upstream's Windows release tags) behind an `ICore` interface;
 - TUN through wintun; system DNS settings are never touched — DNS is hijacked inside the route;
+- enforces the kill switch with Windows Filtering Platform filters of its own (persistent, in their own sublayer): only `sovereign-core.exe`, loopback, DHCP, the TUN's addresses and optionally the LAN get out;
 - restarts the box after sleep; keeps a cache file so remote rule-sets don't block a start without network;
 - logs through ETW (TraceLogging provider `Sovereign.Core`) with an always-on flight recorder.
 
@@ -124,7 +126,8 @@ Releases are built by `.github/workflows/release.yml`: push a tag `vX.Y.Z` (or r
 
 ```
 sovereign-core.exe --install     (admin) register and start the service and its ETW recorder
-sovereign-core.exe --uninstall   (admin) remove both
+sovereign-core.exe --uninstall   (admin) remove both, and the kill switch
+sovereign-core.exe --unblock     (admin) lift the kill switch by hand, if the service can't
 sovereign-core.exe --run         run in a console instead, for debugging
 sovereign-tray.exe               the tray and its window; copy a subscription link and use "paste"
 ```

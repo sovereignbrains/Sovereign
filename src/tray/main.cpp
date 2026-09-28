@@ -110,6 +110,9 @@ constexpr std::chrono::minutes kRefreshRetry{30};
 constexpr std::size_t kLogKeep = 5000;
 constexpr int kLogPagesPerPoll = 20;
 
+// A kill switch the service couldn't apply is tried again after this.
+constexpr std::chrono::seconds kKillSwitchRetry{10};
+
 // The exit IP: how often a running lookup is polled, and a known one rechecked.
 constexpr std::chrono::seconds kExitIpPoll{2};
 constexpr std::chrono::minutes kExitIpRecheck{5};
@@ -206,6 +209,10 @@ struct View {
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
   bool hideExitIp = false;
   std::string logLevel;
+  bool killSwitch = false;
+  bool killSwitchLan = true;
+  bool killSwitchActive = false;
+  std::string killSwitchError;
 };
 
 // What to do with the config when a newer subscription meets the user's
@@ -254,6 +261,8 @@ struct Shared {
   bool pendingUrlTest = false;
   bool pendingToggleExitIp = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
+  bool pendingToggleKillSwitch = false;
+  bool pendingToggleKillSwitchLan = false;
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   std::optional<ConfigChoice> pendingChoice;
@@ -266,7 +275,8 @@ struct Shared {
 
   bool HasRequests() const {
     return pendingWant || pendingImport || pendingLocalConfig || pendingUnsubscribe || pendingRefresh ||
-           pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingApps || pendingProtocol ||
+           pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingToggleKillSwitch ||
+           pendingToggleKillSwitchLan || pendingApps || pendingProtocol ||
            pendingChoice;
   }
 };
@@ -368,6 +378,8 @@ std::optional<sovereign::tray::Stats> PollStats() {
       .connections = sovereign::tray::Field<std::int64_t>(json, "connections", 0),
       .generation = sovereign::tray::Field<std::int64_t>(json, "generation", 0),
       .configSha256 = sovereign::tray::Field<std::string>(json, "config_sha256", {}),
+      .killSwitch = sovereign::tray::Field<bool>(json, "kill_switch", false),
+      .killSwitchLan = sovereign::tray::Field<bool>(json, "kill_switch_lan", true),
   };
 }
 
@@ -411,6 +423,8 @@ class Worker {
       bool urlTest = false;
       bool toggleExitIp = false;
       std::optional<std::string> logLevel;
+      bool toggleKillSwitch = false;
+      bool toggleKillSwitchLan = false;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
@@ -424,6 +438,8 @@ class Worker {
         urlTest = std::exchange(shared.pendingUrlTest, false);
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
+        toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
+        toggleKillSwitchLan = std::exchange(shared.pendingToggleKillSwitchLan, false);
       }
       if (want) {
         settings_.wantOn = *want;
@@ -473,6 +489,19 @@ class Worker {
         settings_.hideExitIp = !settings_.hideExitIp;
         Save();
       }
+      if (toggleKillSwitch) {
+        settings_.killSwitch = !settings_.killSwitch;
+        killSwitchError_.clear();
+        lastKillSwitchTry_.reset();
+        Save();
+      }
+      if (toggleKillSwitchLan) {
+        settings_.killSwitchLan = !settings_.killSwitchLan;
+        killSwitchError_.clear();
+        lastKillSwitchTry_.reset();
+        Save();
+      }
+      UpdateKillSwitch(stats);
       if (logLevel && *logLevel != settings_.logLevel) {
         settings_.logLevel = *logLevel;
         Save();  // the effective config changes: the model restarts the box
@@ -795,6 +824,36 @@ class Worker {
     }
   }
 
+  // The kill switch as it should be - on while the connection is meant to be
+  // on - against what the service reports; told when they differ (a failure
+  // is retried now and then, not every second).
+  void UpdateKillSwitch(const std::optional<sovereign::tray::Stats>& stats) {
+    if (!stats) {
+      killSwitchActive_ = false;
+      return;
+    }
+    killSwitchActive_ = stats->killSwitch;
+    const bool enabled = settings_.killSwitch && settings_.wantOn;
+    const bool differs =
+        stats->killSwitch != enabled || (enabled && stats->killSwitchLan != settings_.killSwitchLan);
+    if (!differs) {
+      killSwitchError_.clear();
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    if (lastKillSwitchTry_ && now - *lastKillSwitchTry_ < kKillSwitchRetry) {
+      return;
+    }
+    lastKillSwitchTry_ = now;
+    killSwitchError_ = ServiceCall(
+        nlohmann::json{{"cmd", "kill_switch"}, {"enabled", enabled}, {"allow_lan", settings_.killSwitchLan}},
+        "kill_switch");
+    if (killSwitchError_.empty()) {
+      killSwitchActive_ = enabled;
+      lastKillSwitchTry_.reset();
+    }
+  }
+
   // The exit IP through the server in use: asked for when a box starts or
   // the server changes, polled while the lookup runs, and asked again now
   // and then (auto may have moved to another server).
@@ -995,6 +1054,10 @@ class Worker {
       v.exitIp = exit_;
       v.hideExitIp = settings_.hideExitIp;
       v.logLevel = settings_.logLevel;
+      v.killSwitch = settings_.killSwitch;
+      v.killSwitchLan = settings_.killSwitchLan;
+      v.killSwitchActive = killSwitchActive_;
+      v.killSwitchError = killSwitchError_;
       window = shared.window;
     }
     PostMessageW(window, kViewChangedMessage, 0, 0);
@@ -1029,6 +1092,9 @@ class Worker {
   std::string exitTag_;               // the server exit_ is about
   std::int64_t exitGeneration_ = -1;  // and the box
   std::optional<TrayModel::Clock::time_point> exitAsked_;
+  bool killSwitchActive_ = false;
+  std::string killSwitchError_;
+  std::optional<TrayModel::Clock::time_point> lastKillSwitchTry_;
 };
 
 // NOTIFYICONDATA as RAII: the icon leaves the notification area whatever
@@ -1515,6 +1581,10 @@ UiContent ContentFrom(const View& v) {
   c.exitPending = v.exitIp.pending;
   c.hideExitIp = v.hideExitIp;
   c.logLevel = Widen(v.logLevel);
+  c.killSwitch = v.killSwitch;
+  c.killSwitchLan = v.killSwitchLan;
+  c.killSwitchActive = v.killSwitchActive;
+  c.killSwitchError = Widen(v.killSwitchError);
   c.autostart = sovereign::tray::AutostartEnabled();
   c.version = SOVEREIGN_VERSION_W L" · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
   if (g_updater != nullptr) {
@@ -1649,6 +1719,17 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       UpdateWindows();
       break;
+    case UiCommand::ToggleKillSwitch:
+    case UiCommand::ToggleKillSwitchLan: {
+      {
+        auto& shared = State();
+        const std::scoped_lock lock(shared.mutex);
+        (command == UiCommand::ToggleKillSwitch ? shared.pendingToggleKillSwitch : shared.pendingToggleKillSwitchLan) =
+            true;
+      }
+      Wake();
+      break;
+    }
     case UiCommand::ChooseLogLevel:
       ChooseLogLevel(owner, args.anchor);
       break;

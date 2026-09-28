@@ -57,11 +57,26 @@ class FakeCore final : public ICore {
   bool running_ = false;
 };
 
+// Takes any rules: a kill_switch request - and a box_start's config, whose
+// tunnel addresses become rules - get as far as the filters.
+class FakeKillSwitch final : public sovereign::service::IKillSwitch {
+ public:
+  std::string Apply(const std::vector<sovereign::service::KillSwitchRule>& rules) override {
+    active_ = !rules.empty();
+    return {};
+  }
+  bool Active() override { return active_; }
+
+ private:
+  bool active_ = false;
+};
+
 struct World {
   FakeCore core;
+  FakeKillSwitch killSwitch;
   LogRing log{16};
   std::optional<std::string> lastConfig;
-  ControlHandler handler{&core, log, lastConfig};
+  ControlHandler handler{&core, log, lastConfig, {}, &killSwitch};
 
   World() {
     log.Append(LogLevel::Info, "started");

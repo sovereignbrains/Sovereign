@@ -56,5 +56,6 @@ target_include_directories(fuzz-tray-input PRIVATE "${CMAKE_SOURCE_DIR}/src/tray
 # The service's control protocol: what any local user can send a SYSTEM service.
 sovereign_fuzz_target(fuzz-control control_fuzz.cpp
   "${CMAKE_SOURCE_DIR}/src/service/control.cpp"
-  "${CMAKE_SOURCE_DIR}/src/service/log_ring.cpp")
+  "${CMAKE_SOURCE_DIR}/src/service/log_ring.cpp"
+  "${CMAKE_SOURCE_DIR}/src/service/kill_switch.cpp")
 target_include_directories(fuzz-control PRIVATE "${CMAKE_SOURCE_DIR}/src/service")

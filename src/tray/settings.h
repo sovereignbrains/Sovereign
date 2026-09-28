@@ -19,7 +19,7 @@ namespace sovereign::tray {
 //
 //   tray.json    {"wantOn", "subscriptionUrl", "lastRefresh", "updateHours",
 //                 "appsMode", "apps", "appPaths", "protocol", "hideExitIp",
-//                 "logLevel"}
+//                 "logLevel", "killSwitch", "killSwitchLan"}
 //   config.json            the sing-box config: the subscription's copy, the
 //                          user's edits on it, or by hand when there's no
 //                          subscription; the tray adds its own bits (the
@@ -48,6 +48,10 @@ struct TraySettings {
   std::string protocol;  // the proxy selector's default to use; empty = the config's (protocol_choice.h)
   bool hideExitIp = false;  // the window shows the exit's country, not its address
   std::string logLevel;     // what the core writes (log_level.h); empty = the config's
+  // The kill switch (the service's kill_switch.h): in force while the
+  // connection is meant to be on, so a drop doesn't let traffic around it.
+  bool killSwitch = false;
+  bool killSwitchLan = true;  // the local network stays reachable
 };
 
 // An app's remembered exe path, or null; and setting one (replacing).

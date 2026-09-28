@@ -95,6 +95,16 @@ int Snapshots(const std::wstring& dir) {
   sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 400, 620, 96, dir + L"\\overview-error.png");
   sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Subscription, logs, 400, 620, 96,
                                             dir + L"\\subscription-error.png");
+  // A drop with the kill switch on: the internet held closed, and the switch
+  // saying so; in settings, both switches.
+  UiContent held = content;
+  held.display = sovereign::tray::Display::Error;
+  held.error = L"ядро остановилось";
+  held.killSwitch = true;
+  held.killSwitchActive = true;
+  sovereign::tray::RenderMainWindowSnapshot(held, UiPage::Overview, logs, 400, 620, 96, dir + L"\\overview-killswitch.png");
+  held.killSwitchError = L"WFP: доступ запрещён";
+  sovereign::tray::RenderMainWindowSnapshot(held, UiPage::Settings, logs, 400, 620, 96, dir + L"\\settings-killswitch.png");
 
   // A newer subscription over the user's edits: the choice; then, narrow,
   // the buttons stacked; and after a carry-over, where both sides met.

@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "core.h"
+#include "kill_switch.h"
 #include "log_ring.h"
 
 namespace sovereign::service {
@@ -37,7 +38,7 @@ using CommandObserver = std::function<void(const CommandRecord&)>;
 //
 // Commands: ping (echo), box_ping, box_start {config}, box_stop,
 // box_stats, box_logs {since}, box_urltest {tags, url?, timeout_ms?},
-// box_delays, box_exitip {tag, refresh?}.
+// box_delays, box_exitip {tag, refresh?}, kill_switch {enabled, allow_lan?}.
 class ControlHandler {
  public:
   // box_urltest's limits: what one test may ask of the core.
@@ -58,8 +59,11 @@ class ControlHandler {
   // everything else still works. lastConfig is the service's memory of the
   // last successful box_start (replayed on resume from sleep): set on
   // box_start, cleared on box_stop.
+  // killSwitch may be null too: kill_switch then answers an error. What it
+  // holds on construction (persistent filters from before a restart) is
+  // reported as active until the tray says otherwise.
   ControlHandler(ICore* core, const LogRing& coreLog, std::optional<std::string>& lastConfig,
-                 CommandObserver observer = {});
+                 CommandObserver observer = {}, IKillSwitch* killSwitch = nullptr);
 
   std::string Handle(const std::string& request);
 
@@ -71,11 +75,16 @@ class ControlHandler {
   };
 
   std::string Dispatch(const std::string& request, Outcome& outcome);
+  // The kill switch's rules for `settings` over the running config's tunnel.
+  std::string ApplyKillSwitch(const KillSwitchSettings& settings);
 
   ICore* core_;
   const LogRing& coreLog_;
   std::optional<std::string>& lastConfig_;
   CommandObserver observer_;
+  IKillSwitch* killSwitch_;
+  KillSwitchSettings killSettings_;  // as last applied
+  bool killActive_ = false;          // filters in place
 };
 
 }  // namespace sovereign::service
