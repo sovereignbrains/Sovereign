@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <ctime>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -69,28 +70,91 @@ void SetAppPath(TraySettings& settings, const std::string& app, std::string path
   }
 }
 
+namespace {
+
+// A config.json in the folder itself - a tray's one configuration from
+// before profiles, or one put there by hand - becomes a profile: its files
+// move into the profile's folder. `legacy` is tray.json from before profiles
+// (its subscription and choices go with the config), or null.
+void AdoptRootConfig(TraySettings& settings, const nlohmann::json& legacy) {
+  const std::filesystem::path root = DataDir();
+  std::error_code ec;
+  const bool hasConfig = std::filesystem::is_regular_file(root / L"config.json", ec);
+  const auto field = [&](const char* key) {
+    const auto v = legacy.is_object() ? legacy.find(key) : legacy.end();
+    return legacy.is_object() && v != legacy.end() ? *v : nlohmann::json();
+  };
+  const std::string url = field("subscriptionUrl").is_string() ? field("subscriptionUrl").get<std::string>() : "";
+  if (!hasConfig && url.empty()) {
+    return;
+  }
+  Profile profile;
+  profile.id = legacy.is_object() && FindProfile(settings.profiles, "p1") == nullptr
+                   ? std::string("p1")
+                   : NewProfileId(settings.profiles, std::time(nullptr));
+  profile.url = url;
+  profile.name = UniqueProfileName(settings.profiles, DefaultProfileName(url));
+  if (field("lastRefresh").is_number_integer()) {
+    profile.lastRefresh = field("lastRefresh").get<std::int64_t>();
+  }
+  if (field("updateHours").is_number_integer()) {
+    profile.updateHours = std::clamp(field("updateHours").get<int>(), 1, 24 * 7);
+  }
+  if (field("protocol").is_string()) {
+    profile.protocol = field("protocol").get<std::string>();
+  }
+  try {
+    const std::filesystem::path dir = ProfileDir(profile.id);
+    for (const wchar_t* name : {L"config.json", L"subscription.json", L"subscription.new.json"}) {
+      const std::filesystem::path from = root / name;
+      if (std::filesystem::is_regular_file(from, ec)) {
+        THROW_IF_WIN32_BOOL_FALSE(MoveFileExW(from.c_str(), (dir / name).c_str(),
+                                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED));
+      }
+    }
+    // The old history goes with the old configuration.
+    if (legacy.is_object() && std::filesystem::is_directory(root / L"history", ec) &&
+        !std::filesystem::exists(dir / L"history", ec)) {
+      std::filesystem::rename(root / L"history", dir / L"history", ec);
+    }
+  } catch (...) {
+    LOG_CAUGHT_EXCEPTION_MSG("moving the configuration into its profile failed");
+    return;  // tried again on the next start
+  }
+  settings.profiles.push_back(profile);
+  if (settings.activeProfile.empty() || legacy.is_object()) {
+    settings.activeProfile = profile.id;
+  }
+  try {
+    SaveSettings(settings);  // tray.json knows the profile now: nothing is moved twice
+  } catch (...) {
+    LOG_CAUGHT_EXCEPTION_MSG("saving tray.json after moving the configuration failed");
+  }
+}
+
+}  // namespace
+
 TraySettings LoadSettings() {
   TraySettings settings;
   const auto text = ReadText(DataDir() / L"tray.json");
-  if (!text) {
-    return settings;
-  }
-  const auto json = nlohmann::json::parse(*text, nullptr, /*allow_exceptions=*/false);
+  const auto json = text ? nlohmann::json::parse(*text, nullptr, /*allow_exceptions=*/false) : nlohmann::json();
   if (!json.is_object()) {
+    AdoptRootConfig(settings, nlohmann::json());
     return settings;
   }
   // Field by field: one wrong type doesn't cost the others.
   if (const auto v = json.find("wantOn"); v != json.end() && v->is_boolean()) {
     settings.wantOn = v->get<bool>();
   }
-  if (const auto v = json.find("subscriptionUrl"); v != json.end() && v->is_string()) {
-    settings.subscriptionUrl = v->get<std::string>();
+  const auto profiles = json.find("profiles");
+  if (profiles != json.end()) {
+    settings.profiles = ProfilesFromJson(*profiles);
   }
-  if (const auto v = json.find("lastRefresh"); v != json.end() && v->is_number_integer()) {
-    settings.lastRefresh = v->get<std::int64_t>();
+  if (const auto v = json.find("activeProfile"); v != json.end() && v->is_string()) {
+    settings.activeProfile = v->get<std::string>();
   }
-  if (const auto v = json.find("updateHours"); v != json.end() && v->is_number_integer()) {
-    settings.updateHours = std::clamp(v->get<int>(), 1, 24 * 7);
+  if (FindProfile(settings.profiles, settings.activeProfile) == nullptr) {
+    settings.activeProfile = settings.profiles.empty() ? std::string() : settings.profiles.front().id;
   }
   if (const auto v = json.find("appsMode"); v != json.end() && v->is_string()) {
     settings.appsMode = ParseAppsMode(v->get<std::string>());
@@ -109,9 +173,7 @@ TraySettings LoadSettings() {
       }
     }
   }
-  if (const auto v = json.find("protocol"); v != json.end() && v->is_string()) {
-    settings.protocol = v->get<std::string>();
-  }
+
   if (const auto v = json.find("hideExitIp"); v != json.end() && v->is_boolean()) {
     settings.hideExitIp = v->get<bool>();
   }
@@ -124,55 +186,82 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("logLevel"); v != json.end() && v->is_string() && IsLogLevel(v->get<std::string>())) {
     settings.logLevel = v->get<std::string>();
   }
+  AdoptRootConfig(settings, profiles == json.end() ? json : nlohmann::json());
   return settings;
 }
 
 void SaveSettings(const TraySettings& settings) {
   nlohmann::json json;
   json["wantOn"] = settings.wantOn;
-  json["subscriptionUrl"] = settings.subscriptionUrl;
-  json["lastRefresh"] = settings.lastRefresh;
-  json["updateHours"] = settings.updateHours;
+  json["profiles"] = ProfilesToJson(settings.profiles);
+  json["activeProfile"] = settings.activeProfile;
   json["appsMode"] = std::string(AppsModeName(settings.appsMode));
   json["apps"] = settings.apps;
   json["appPaths"] = nlohmann::json::object();
   for (const auto& [app, path] : settings.appPaths) {
     json["appPaths"][app] = path;
   }
-  json["protocol"] = settings.protocol;
+
   json["hideExitIp"] = settings.hideExitIp;
   json["logLevel"] = settings.logLevel;
   json["killSwitch"] = settings.killSwitch;
   json["killSwitchLan"] = settings.killSwitchLan;
-  WriteTextAtomically(DataDir() / L"tray.json", json.dump(2) + "\n");
+  // Names came from subscription servers: not UTF-8 must not throw.
+  WriteTextAtomically(DataDir() / L"tray.json", json.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
 }
 
-std::optional<std::string> LoadConfig() { return ReadText(DataDir() / L"config.json"); }
-
-void SaveConfig(const std::string& text) { WriteTextAtomically(DataDir() / L"config.json", text); }
-
-std::optional<std::string> LoadOriginal() { return ReadText(DataDir() / L"subscription.json"); }
-
-void SaveOriginal(const std::string& text) { WriteTextAtomically(DataDir() / L"subscription.json", text); }
-
-std::optional<std::string> LoadPending() { return ReadText(DataDir() / L"subscription.new.json"); }
-
-void SavePending(const std::string& text) { WriteTextAtomically(DataDir() / L"subscription.new.json", text); }
-
-void ClearPending() {
+std::filesystem::path ProfileDir(const std::string& id) {
+  THROW_HR_IF(E_INVALIDARG, !IsProfileId(id));
+  const std::filesystem::path dir = DataDir() / L"profiles" / std::filesystem::path(id);
   std::error_code ec;
-  std::filesystem::remove(DataDir() / L"subscription.new.json", ec);  // no file: false, not an error
+  std::filesystem::create_directories(dir, ec);
+  THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
+  return dir;
+}
+
+void RemoveProfileDir(const std::string& id) {
+  THROW_HR_IF(E_INVALIDARG, !IsProfileId(id));
+  std::error_code ec;
+  std::filesystem::remove_all(DataDir() / L"profiles" / std::filesystem::path(id), ec);
   THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
 }
 
-void ClearOriginal() {
+std::optional<std::string> LoadConfig(const std::filesystem::path& dir) { return ReadText(dir / L"config.json"); }
+
+void SaveConfig(const std::filesystem::path& dir, const std::string& text) {
+  WriteTextAtomically(dir / L"config.json", text);
+}
+
+std::optional<std::string> LoadOriginal(const std::filesystem::path& dir) {
+  return ReadText(dir / L"subscription.json");
+}
+
+void SaveOriginal(const std::filesystem::path& dir, const std::string& text) {
+  WriteTextAtomically(dir / L"subscription.json", text);
+}
+
+std::optional<std::string> LoadPending(const std::filesystem::path& dir) {
+  return ReadText(dir / L"subscription.new.json");
+}
+
+void SavePending(const std::filesystem::path& dir, const std::string& text) {
+  WriteTextAtomically(dir / L"subscription.new.json", text);
+}
+
+void ClearPending(const std::filesystem::path& dir) {
   std::error_code ec;
-  std::filesystem::remove(DataDir() / L"subscription.json", ec);  // no file: false, not an error
+  std::filesystem::remove(dir / L"subscription.new.json", ec);  // no file: false, not an error
   THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
 }
 
-void SaveHistory(const std::string& text) {
-  const std::filesystem::path dir = DataDir() / L"history";
+void ClearOriginal(const std::filesystem::path& dir) {
+  std::error_code ec;
+  std::filesystem::remove(dir / L"subscription.json", ec);  // no file: false, not an error
+  THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
+}
+
+void SaveHistory(const std::filesystem::path& base, const std::string& text) {
+  const std::filesystem::path dir = base / L"history";
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
   THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
@@ -195,5 +284,4 @@ void SaveHistory(const std::string& text) {
     std::filesystem::remove(kept[i], ec);
   }
 }
-
 }  // namespace sovereign::tray

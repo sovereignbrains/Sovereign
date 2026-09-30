@@ -25,6 +25,13 @@ struct UiDelay {
 // Where the updater is (updater.h), as the windows show it.
 enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Failed };
 
+// A configuration in the list (profiles.h).
+struct UiProfile {
+  std::wstring name;
+  std::wstring detail;  // "подписка · 30.09 14:20", "свой конфиг"
+  bool failed = false;  // its last refresh failed
+};
+
 // What the tray's window shows; built by main.cpp from the worker's view.
 // Strings are ready to draw.
 struct UiContent {
@@ -45,6 +52,10 @@ struct UiContent {
   bool subscriptionWaiting = false;  // a newer subscription waits for the user's choice
   std::wstring choiceError;          // why that choice didn't go through
   std::vector<std::wstring> mergeNotes;  // where carrying the edits over met the subscription's changes
+  // Every configuration, and the one in use (-1: none); the subscription
+  // fields above are about that one.
+  std::vector<UiProfile> profiles;
+  int activeProfile = -1;
 
   bool appsInclude = false;      // per-app mode: false = all except the list
   std::vector<std::wstring> apps;
@@ -87,6 +98,8 @@ enum class UiCommand : std::uint8_t {
   RevertConfig,      // the config back to the subscription as it arrived
   ImportFile,        // a config, keys or a QR code's picture from a file
   ScanScreen,        // QR codes on the screen
+  ActivateProfile,   // index into profiles: use that configuration
+  RemoveProfile,     // index into profiles: remove it (after asking)
   CopySubscription,  // the subscription link onto the clipboard
   RemoveSubscription,  // no more refreshes; the config stays
   ToggleExitIp,        // show or hide the exit's address

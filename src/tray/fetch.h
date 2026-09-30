@@ -11,6 +11,7 @@ namespace sovereign::tray {
 struct FetchResult {
   std::string body;
   std::optional<std::chrono::hours> updateInterval;  // Profile-Update-Interval, if sent
+  std::optional<std::string> title;                  // Profile-Title, if sent (profiles.h)
 };
 
 // GET over https with WinHTTP (system proxy settings, 10-30 s timeouts, the

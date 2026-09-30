@@ -64,6 +64,7 @@
 #include "log_lines.h"
 #include "main_window.h"
 #include "pipe_client.h"
+#include "profiles.h"
 #include "settings.h"
 #include "share_links.h"
 #include "sha256.h"
@@ -78,6 +79,7 @@ namespace {
 using sovereign::tray::Action;
 using sovereign::tray::AppsMode;
 using sovereign::tray::Display;
+using sovereign::tray::Profile;
 using sovereign::tray::FormatRate;
 using sovereign::tray::UiCommand;
 using sovereign::tray::UiContent;
@@ -193,6 +195,17 @@ struct View {
   bool subscriptionWaiting = false;  // a newer subscription waits for the user's choice
   std::string choiceError;        // why the last choice didn't go through
   std::vector<std::string> mergeNotes;  // where the last carry-over had both sides change the same thing
+  // The configurations (profiles.h), in the settings' order, and the one in
+  // use (-1: none). The fields above are about that one.
+  struct ProfileView {
+    std::string id;
+    std::string name;
+    bool subscription = false;  // refreshed from a link; else the user's own
+    std::int64_t lastRefresh = 0;
+    std::string error;          // its last refresh failed with this
+  };
+  std::vector<ProfileView> profiles;
+  int activeProfile = -1;
   // A balloon to show once: the UI shows it when noticeId changes.
   unsigned noticeId = 0;
   std::wstring noticeTitle;
@@ -225,6 +238,12 @@ enum class ConfigChoice : std::uint8_t {
   Revert,    // back to the subscription as it arrived (the newest, if one waits)
 };
 
+// A config of the user's own to add as a configuration, and what to call it.
+struct LocalImport {
+  std::string text;
+  std::string name;  // UTF-8: what it was made from ("Ключи: NL-1", a file's name)
+};
+
 // A new per-app setup from the window.
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
@@ -255,8 +274,10 @@ struct Shared {
   std::mutex mutex;
   std::condition_variable_any wake;
   std::optional<bool> pendingWant;
-  std::optional<std::string> pendingImport;  // a new subscription URL (UTF-8)
-  std::optional<std::string> pendingLocalConfig;  // a config of the user's own (a file, the clipboard)
+  std::optional<std::string> pendingImport;  // a subscription URL to add (UTF-8)
+  std::optional<LocalImport> pendingLocalConfig;  // a config of the user's own to add (a file, the clipboard)
+  std::optional<std::string> pendingActivate;  // a profile id to use
+  std::optional<std::string> pendingRemove;    // a profile id to remove
   bool pendingUnsubscribe = false;
   bool pendingRefresh = false;
   bool pendingUrlTest = false;
@@ -275,7 +296,8 @@ struct Shared {
   std::uint64_t logsAdded = 0;
 
   bool HasRequests() const {
-    return pendingWant || pendingImport || pendingLocalConfig || pendingUnsubscribe || pendingRefresh ||
+    return pendingWant || pendingImport || pendingLocalConfig || pendingActivate || pendingRemove ||
+           pendingUnsubscribe || pendingRefresh ||
            pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingToggleKillSwitch ||
            pendingToggleKillSwitchLan || pendingApps || pendingProtocol ||
            pendingChoice;
@@ -330,7 +352,7 @@ std::optional<std::wstring> ForeignSingTun() {
 // `config` is the effective one: config.json with the per-app rules applied.
 std::string StartBox(const std::optional<std::string>& config) {
   if (!config) {
-    return "нет конфига: вставь ссылку-подписку (меню) или положи config.json в %LOCALAPPDATA%\\Sovereign";
+    return "нет конфига: добавь подписку, ключи или файл (окно → Подписка)";
   }
   auto parsed = nlohmann::json::parse(*config, nullptr, /*allow_exceptions=*/false);
   if (parsed.is_discarded()) {
@@ -411,14 +433,18 @@ class Worker {
 
   void Run(const std::stop_token& stop) {
     auto& shared = State();
-    AdoptOriginal();
+    for (const Profile& profile : settings_.profiles) {
+      AdoptOriginal(profile);
+    }
     while (!stop.stop_requested()) {
       std::optional<bool> want;
       std::optional<std::string> import;
       std::optional<AppsChange> apps;
       std::optional<std::string> protocol;
       std::optional<ConfigChoice> choice;
-      std::optional<std::string> local;
+      std::optional<LocalImport> local;
+      std::optional<std::string> activate;
+      std::optional<std::string> remove;
       bool unsubscribe = false;
       bool refresh = false;
       bool urlTest = false;
@@ -434,6 +460,8 @@ class Worker {
         choice = std::exchange(shared.pendingChoice, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
         local = std::exchange(shared.pendingLocalConfig, std::nullopt);
+        activate = std::exchange(shared.pendingActivate, std::nullopt);
+        remove = std::exchange(shared.pendingRemove, std::nullopt);
         unsubscribe = std::exchange(shared.pendingUnsubscribe, false);
         refresh = std::exchange(shared.pendingRefresh, false);
         urlTest = std::exchange(shared.pendingUrlTest, false);
@@ -448,19 +476,26 @@ class Worker {
         Execute(model_, model_.SetWantOn(*want, TrayModel::Clock::now()), EffectiveConfig());
       }
       if (local) {
-        UseLocalConfig(*local);
+        AddLocal(local->text, local->name);
+      }
+      if (activate) {
+        Activate(*activate);
+      }
+      if (remove) {
+        RemoveProfile(*remove);
       }
       if (unsubscribe) {
         Unsubscribe();
       }
       if (import) {
-        settings_.subscriptionUrl = *import;
-        settings_.lastRefresh = 0;
-        Save();
-        Refresh();
-      } else if (refresh || RefreshDue()) {
-        Refresh();
+        AddSubscription(*import);
       }
+      if (refresh) {
+        if (const Profile* active = Active(); active != nullptr && !active->url.empty()) {
+          Refresh(active->id, RefreshReason::Asked);
+        }
+      }
+      RefreshDue();
       if (choice) {
         Choose(*choice);
       }
@@ -477,8 +512,10 @@ class Worker {
       }
       FindAppPaths();
       if (protocol) {
-        settings_.protocol = *protocol;
-        Save();  // likewise
+        if (Profile* active = Active()) {
+          active->protocol = *protocol;
+          Save();  // likewise
+        }
       }
       const auto config = EffectiveConfig();
       model_.SetExpectedConfig(ExpectedConfigHash(config));
@@ -516,14 +553,49 @@ class Worker {
   }
 
  private:
-  // config.json with the protocol pick, the per-app rules and the cache file
-  // applied - what the box must run.
+  // Why a subscription is fetched: what the user hears about it.
+  enum class RefreshReason : std::uint8_t {
+    Due,    // its interval passed: a balloon only for the one in use
+    Asked,  // "Refresh": always a balloon
+    Added,  // just added: the caller speaks
+  };
+
+  // What the worker knows about a profile besides its settings.
+  struct ProfileRuntime {
+    std::string error;  // the last refresh failed with this
+    std::optional<TrayModel::Clock::time_point> lastFailure;
+  };
+
+  Profile* Active() { return sovereign::tray::FindProfile(settings_.profiles, settings_.activeProfile); }
+  const Profile* Active() const { return sovereign::tray::FindProfile(settings_.profiles, settings_.activeProfile); }
+
+  // A profile's folder; nullopt if it can't be made (the user's profile
+  // folder is gone or read-only) - WIL has reported why.
+  static std::optional<std::filesystem::path> DirOf(const std::string& id) {
+    try {
+      return sovereign::tray::ProfileDir(id);
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("the profile's folder can't be used");
+      return std::nullopt;
+    }
+  }
+  std::optional<std::filesystem::path> ActiveDir() const {
+    const Profile* active = Active();
+    return active != nullptr ? DirOf(active->id) : std::nullopt;
+  }
+  std::optional<std::string> ActiveConfig() const {
+    const auto dir = ActiveDir();
+    return dir ? sovereign::tray::LoadConfig(*dir) : std::nullopt;
+  }
+
+  // The active config with the protocol pick, the per-app rules and the
+  // cache file applied - what the box must run.
   std::optional<std::string> EffectiveConfig() const {
-    const auto config = sovereign::tray::LoadConfig();
+    const auto config = ActiveConfig();
     if (!config) {
       return std::nullopt;
     }
-    return sovereign::tray::EffectiveConfig(*config, {.protocol = settings_.protocol,
+    return sovereign::tray::EffectiveConfig(*config, {.protocol = Active()->protocol,
                                                       .appsMode = settings_.appsMode,
                                                       .apps = settings_.apps,
                                                       .logLevel = settings_.logLevel,
@@ -533,7 +605,7 @@ class Worker {
   // The selector's options and which one the box uses: the user's pick if
   // the config still has it, else the config's default.
   std::pair<std::vector<std::string>, int> Protocols() const {
-    const auto config = sovereign::tray::LoadConfig();
+    const auto config = ActiveConfig();
     if (!config) {
       return {{}, -1};
     }
@@ -542,7 +614,8 @@ class Worker {
       const auto it = std::find(choices.options.begin(), choices.options.end(), tag);
       return it == choices.options.end() ? -1 : static_cast<int>(it - choices.options.begin());
     };
-    int current = settings_.protocol.empty() ? -1 : find(settings_.protocol);
+    const std::string& pick = Active()->protocol;
+    int current = pick.empty() ? -1 : find(pick);
     if (current < 0) {
       current = find(choices.configDefault);
     }
@@ -558,14 +631,24 @@ class Worker {
     }
   }
 
-  bool RefreshDue() const {
-    if (settings_.subscriptionUrl.empty()) {
-      return false;
+  // Every subscription whose interval has passed, each on its own schedule.
+  void RefreshDue() {
+    std::vector<std::string> due;
+    for (const Profile& profile : settings_.profiles) {
+      if (profile.url.empty()) {
+        continue;
+      }
+      const auto& failure = runtime_[profile.id].lastFailure;
+      if (failure && TrayModel::Clock::now() - *failure < kRefreshRetry) {
+        continue;
+      }
+      if (std::time(nullptr) - profile.lastRefresh >= std::int64_t{profile.updateHours} * 3600) {
+        due.push_back(profile.id);
+      }
     }
-    if (lastFailure_ && TrayModel::Clock::now() - *lastFailure_ < kRefreshRetry) {
-      return false;
+    for (const std::string& id : due) {  // by id: a refresh may rename, not reorder
+      Refresh(id, RefreshReason::Due);
     }
-    return std::time(nullptr) - settings_.lastRefresh >= std::int64_t{settings_.updateHours} * 3600;
   }
 
   void Notify(std::wstring title, std::wstring text, bool isError, std::optional<UiPage> page = std::nullopt) {
@@ -578,14 +661,18 @@ class Worker {
 
   // A tray from before subscription.json: its config.json is the
   // subscription as it arrived (refreshes overwrote it), so that's the base.
-  void AdoptOriginal() {
-    if (settings_.subscriptionUrl.empty()) {
+  static void AdoptOriginal(const Profile& profile) {
+    if (profile.url.empty()) {
+      return;
+    }
+    const auto dir = DirOf(profile.id);
+    if (!dir) {
       return;
     }
     try {
-      if (!sovereign::tray::LoadOriginal()) {
-        if (const auto config = sovereign::tray::LoadConfig()) {
-          sovereign::tray::SaveOriginal(*config);
+      if (!sovereign::tray::LoadOriginal(*dir)) {
+        if (const auto config = sovereign::tray::LoadConfig(*dir)) {
+          sovereign::tray::SaveOriginal(*dir, *config);
         }
       }
     } catch (...) {
@@ -594,18 +681,26 @@ class Worker {
   }
 
   // config.json becomes `text`; the one it replaces goes to history.
-  static void ReplaceConfig(const std::optional<std::string>& old, const std::string& text) {
+  static void ReplaceConfig(const std::filesystem::path& dir, const std::optional<std::string>& old,
+                            const std::string& text) {
     if (old && !sovereign::tray::SameConfig(*old, text)) {
-      sovereign::tray::SaveHistory(*old);
+      sovereign::tray::SaveHistory(dir, *old);
     }
-    sovereign::tray::SaveConfig(text);
+    sovereign::tray::SaveConfig(dir, text);
   }
 
-  void Refresh() {
-    if (settings_.subscriptionUrl.empty()) {
-      return;
+  // Fetches profile `id`'s subscription into its folder. False, with the
+  // reason in its runtime error, if nothing usable came.
+  bool Refresh(const std::string& id, RefreshReason reason) {
+    Profile* profile = sovereign::tray::FindProfile(settings_.profiles, id);
+    const auto dir = profile != nullptr ? DirOf(id) : std::nullopt;
+    if (profile == nullptr || profile->url.empty() || !dir) {
+      return false;
     }
-    auto fetched = sovereign::tray::FetchSubscription(Widen(settings_.subscriptionUrl), kUserAgent);
+    const bool active = id == settings_.activeProfile;
+    ProfileRuntime& state = runtime_[id];
+    auto fetched = sovereign::tray::FetchSubscription(Widen(profile->url), kUserAgent);
+    profile = sovereign::tray::FindProfile(settings_.profiles, id);  // the fetch took a while; same thread, same list
     std::string error;
     sovereign::tray::ConfigCheck check;
     if (!fetched) {
@@ -621,13 +716,16 @@ class Worker {
       error = check.error;
     }
     if (!error.empty()) {
-      lastFailure_ = TrayModel::Clock::now();
-      subscriptionError_ = error;
-      Notify(L"Sovereign: подписка не обновилась", Widen(error) + L" (работает прежний конфиг)", true);
-      return;
+      state.lastFailure = TrayModel::Clock::now();
+      state.error = error;
+      if (reason == RefreshReason::Asked || (reason == RefreshReason::Due && active)) {
+        Notify(L"Sovereign: подписка «" + Widen(profile->name) + L"» не обновилась",
+               Widen(error) + L" (работает прежний конфиг)", true);
+      }
+      return false;
     }
-    lastFailure_.reset();
-    subscriptionError_.clear();
+    state.lastFailure.reset();
+    state.error.clear();
 
     // Taken whole if the config has no edits of its own; otherwise it waits
     // for the user (config_sync.h).
@@ -635,118 +733,249 @@ class Worker {
     Arrival arrival = Arrival::Unchanged;
     bool alreadyWaiting = false;
     try {
-      const auto original = sovereign::tray::LoadOriginal();
-      const auto config = sovereign::tray::LoadConfig();
+      const auto original = sovereign::tray::LoadOriginal(*dir);
+      const auto config = sovereign::tray::LoadConfig(*dir);
       arrival = sovereign::tray::ClassifyArrival(original, config, fetched->body);
       switch (arrival) {
         case Arrival::Unchanged:
           if (!original) {
-            sovereign::tray::SaveOriginal(fetched->body);
+            sovereign::tray::SaveOriginal(*dir, fetched->body);
           }
-          sovereign::tray::ClearPending();  // the subscription went back to what the config is based on
+          if (!config) {
+            sovereign::tray::SaveConfig(*dir, fetched->body);
+          }
+          sovereign::tray::ClearPending(*dir);  // the subscription went back to what the config is based on
           break;
         case Arrival::Replace:
-          ReplaceConfig(config, fetched->body);
-          sovereign::tray::SaveOriginal(fetched->body);
-          sovereign::tray::ClearPending();
-          mergeNotes_.clear();  // about a config that's gone
+          ReplaceConfig(*dir, config, fetched->body);
+          sovereign::tray::SaveOriginal(*dir, fetched->body);
+          sovereign::tray::ClearPending(*dir);
+          if (active) {
+            mergeNotes_.clear();  // about a config that's gone
+          }
           break;
         case Arrival::Ask: {
-          const auto waiting = sovereign::tray::LoadPending();
+          const auto waiting = sovereign::tray::LoadPending(*dir);
           alreadyWaiting = waiting && sovereign::tray::SameConfig(*waiting, fetched->body);
           if (!alreadyWaiting) {
-            sovereign::tray::SavePending(fetched->body);
+            sovereign::tray::SavePending(*dir, fetched->body);
           }
           break;
         }
       }
     } catch (...) {
       LOG_CAUGHT_EXCEPTION_MSG("saving the subscription failed");
-      subscriptionError_ = "не удалось сохранить конфиг в %LOCALAPPDATA%\\Sovereign";
-      return;
+      state.error = "не удалось сохранить конфиг в %LOCALAPPDATA%\\Sovereign";
+      return false;
     }
-    settings_.lastRefresh = std::time(nullptr);
-    settings_.updateHours =
+    profile->lastRefresh = std::time(nullptr);
+    profile->updateHours =
         static_cast<int>(fetched->updateInterval.value_or(sovereign::tray::kDefaultUpdateInterval).count());
+    // The panel's own name for the subscription, when it sends one.
+    if (fetched->title && *fetched->title != profile->name) {
+      std::vector<Profile> others;
+      std::copy_if(settings_.profiles.begin(), settings_.profiles.end(), std::back_inserter(others),
+                   [&](const Profile& p) { return p.id != id; });
+      profile->name = sovereign::tray::UniqueProfileName(others, *fetched->title);
+    }
     Save();
+    if (reason == RefreshReason::Added) {
+      return true;
+    }
     if (arrival == Arrival::Ask) {
-      if (!alreadyWaiting) {
-        Notify(L"Sovereign: новая версия подписки",
+      if (!alreadyWaiting && (active || reason == RefreshReason::Asked)) {
+        Notify(L"Sovereign: новая версия подписки «" + Widen(profile->name) + L"»",
                L"В конфиге есть твои правки, поэтому он не заменён. Нажми, чтобы выбрать, что оставить.", false,
                UiPage::Subscription);
       }
-      return;
+      return true;
     }
-    Notify(L"Sovereign: подписка обновлена",
-           std::format(L"выходов в конфиге: {}{}", check.outbounds,
-                       arrival == Arrival::Replace ? L"" : L" (без изменений)"),
-           false);
+    if (active || reason == RefreshReason::Asked) {
+      Notify(L"Sovereign: подписка «" + Widen(profile->name) + L"» обновлена",
+             std::format(L"выходов в конфиге: {}{}", check.outbounds,
+                         arrival == Arrival::Replace ? L"" : L" (без изменений)"),
+             false);
+    }
     // A running box with the old config is restarted by the model: the hash
     // the service reports no longer matches (ExpectedConfigHash).
+    return true;
   }
 
-  // A config of the user's own (a file, the clipboard): it replaces the
-  // config, and there's no subscription any more to replace it back.
-  void UseLocalConfig(const std::string& text) {
+  // A subscription link: a new configuration next to the others, in use from
+  // now on - or, when that link is already one, that one refreshed and used.
+  void AddSubscription(const std::string& url) {
+    if (const Profile* known = sovereign::tray::FindProfileByUrl(settings_.profiles, url)) {
+      const std::string id = known->id;
+      Activate(id);
+      Refresh(id, RefreshReason::Asked);
+      return;
+    }
+    Profile profile;
+    profile.id = sovereign::tray::NewProfileId(settings_.profiles, std::time(nullptr));
+    profile.url = url;
+    profile.name = sovereign::tray::UniqueProfileName(settings_.profiles, sovereign::tray::DefaultProfileName(url));
+    settings_.profiles.push_back(profile);
+    if (!Refresh(profile.id, RefreshReason::Added)) {
+      // Nothing came: no configuration to keep - the link was wrong, or the
+      // server is down (then pasting it again later adds it).
+      const std::string error = runtime_[profile.id].error;
+      ForgetProfile(profile.id);
+      Notify(L"Sovereign: подписка не добавлена", Widen(error), true, UiPage::Subscription);
+      return;
+    }
+    Activate(profile.id);
+    const Profile* added = sovereign::tray::FindProfile(settings_.profiles, profile.id);
+    Notify(L"Sovereign: подписка добавлена",
+           std::format(L"«{}» — теперь она в работе. Остальные конфигурации на месте.", Widen(added->name)), false);
+  }
+
+  // A config of the user's own (keys, a file, a QR code): a configuration of
+  // its own, in use from now on. `name` says what it was made from.
+  void AddLocal(const std::string& text, const std::string& name) {
     const auto check = sovereign::tray::CheckSubscriptionConfig(text);
     if (!check.ok) {
       Notify(L"Sovereign: конфиг не загружен", Widen(check.error), true, UiPage::Subscription);
       return;
     }
+    // The same config pasted again: that one, not a copy of it.
+    for (const Profile& existing : settings_.profiles) {
+      const auto dir = existing.url.empty() ? DirOf(existing.id) : std::nullopt;
+      const auto config = dir ? sovereign::tray::LoadConfig(*dir) : std::nullopt;
+      if (config && sovereign::tray::SameConfig(*config, text)) {
+        const std::string id = existing.id;
+        const std::wstring shown = Widen(existing.name);
+        Activate(id);
+        Notify(L"Sovereign: такая конфигурация уже есть", L"«" + shown + L"» — теперь она в работе.", false);
+        return;
+      }
+    }
+    Profile profile;
+    profile.id = sovereign::tray::NewProfileId(settings_.profiles, std::time(nullptr));
+    std::string base = sovereign::tray::CleanProfileName(name);
+    profile.name = sovereign::tray::UniqueProfileName(settings_.profiles, base.empty() ? "Мой конфиг" : base);
+    const auto dir = DirOf(profile.id);
+    bool saved = false;
     try {
-      ReplaceConfig(sovereign::tray::LoadConfig(), text);
-      sovereign::tray::ClearPending();
-      sovereign::tray::ClearOriginal();
+      if (dir) {
+        sovereign::tray::SaveConfig(*dir, text);
+        saved = true;
+      }
     } catch (...) {
       LOG_CAUGHT_EXCEPTION_MSG("saving the local config failed");
+    }
+    if (!saved) {
       Notify(L"Sovereign: конфиг не загружен", L"не удалось записать config.json", true, UiPage::Subscription);
       return;
     }
-    const bool hadSubscription = !settings_.subscriptionUrl.empty();
-    ForgetSubscription();
-    Notify(L"Sovereign: загружен свой конфиг",
-           std::format(L"выходов: {}{}", check.outbounds, hadSubscription ? L"; подписка отключена" : L""), false);
+    settings_.profiles.push_back(profile);
+    Activate(profile.id);
+    Notify(L"Sovereign: конфигурация добавлена",
+           std::format(L"«{}», выходов: {} — теперь она в работе. Остальные на месте.", Widen(profile.name),
+                       check.outbounds),
+           false);
   }
 
-  // No more refreshes; config.json stays as it is, now the user's own.
-  void Unsubscribe() {
+  // The configuration the box runs from now on; a running box is restarted
+  // with it by the model (the config's hash changes).
+  void Activate(const std::string& id) {
+    if (sovereign::tray::FindProfile(settings_.profiles, id) == nullptr || id == settings_.activeProfile) {
+      return;
+    }
+    settings_.activeProfile = id;
+    mergeNotes_.clear();
+    choiceError_.clear();
+    delays_.clear();  // another config's servers
+    Save();
+  }
+
+  // A profile out of the list and its folder gone - its config.json kept in
+  // the data folder's history\ first, in case it was removed by mistake.
+  void RemoveProfile(const std::string& id) {
+    if (sovereign::tray::FindProfile(settings_.profiles, id) == nullptr) {
+      return;
+    }
     try {
-      sovereign::tray::ClearPending();
-      sovereign::tray::ClearOriginal();
+      if (const auto dir = DirOf(id)) {
+        if (const auto config = sovereign::tray::LoadConfig(*dir)) {
+          sovereign::tray::SaveHistory(sovereign::tray::DataDir(), *config);
+        }
+      }
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("keeping the removed configuration failed");
+    }
+    const bool wasActive = id == settings_.activeProfile;
+    ForgetProfile(id);
+    if (wasActive) {
+      mergeNotes_.clear();
+      choiceError_.clear();
+      delays_.clear();
+    }
+    // Nothing left to run: the box stops rather than go on with a config
+    // that's gone.
+    if (settings_.profiles.empty() && model_.WantOn()) {
+      settings_.wantOn = false;
+      Save();
+      Execute(model_, model_.SetWantOn(false, TrayModel::Clock::now()), std::nullopt);
+    }
+  }
+
+  // Out of the list, its folder removed, another one in use if it was.
+  void ForgetProfile(const std::string& id) {
+    settings_.activeProfile = sovereign::tray::ActiveAfterRemoval(settings_.profiles, settings_.activeProfile, id);
+    std::erase_if(settings_.profiles, [&](const Profile& p) { return p.id == id; });
+    runtime_.erase(id);
+    try {
+      sovereign::tray::RemoveProfileDir(id);
+    } catch (...) {
+      LOG_CAUGHT_EXCEPTION_MSG("removing the profile's folder failed");  // a leftover folder, nothing more
+    }
+    Save();
+  }
+
+  // The configuration in use stops refreshing; its config.json stays, now
+  // the user's own.
+  void Unsubscribe() {
+    Profile* active = Active();
+    const auto dir = ActiveDir();
+    if (active == nullptr || !dir) {
+      return;
+    }
+    try {
+      sovereign::tray::ClearPending(*dir);
+      sovereign::tray::ClearOriginal(*dir);
     } catch (...) {
       LOG_CAUGHT_EXCEPTION_MSG("removing the subscription's files failed");
     }
-    ForgetSubscription();
-  }
-
-  void ForgetSubscription() {
-    settings_.subscriptionUrl.clear();
-    settings_.lastRefresh = 0;
-    subscriptionError_.clear();
-    lastFailure_.reset();
+    active->url.clear();
+    active->lastRefresh = 0;
+    runtime_.erase(active->id);
     mergeNotes_.clear();
     Save();
   }
 
   void Choose(ConfigChoice choice) {
     choiceError_.clear();
+    const auto dir = ActiveDir();
+    if (!dir) {
+      return;
+    }
     try {
-      const auto original = sovereign::tray::LoadOriginal();
-      const auto config = sovereign::tray::LoadConfig();
-      const auto waiting = sovereign::tray::LoadPending();
+      const auto original = sovereign::tray::LoadOriginal(*dir);
+      const auto config = sovereign::tray::LoadConfig(*dir);
+      const auto waiting = sovereign::tray::LoadPending(*dir);
       switch (choice) {
         case ConfigChoice::TakeNew:
           if (waiting) {
-            ReplaceConfig(config, *waiting);
-            sovereign::tray::SaveOriginal(*waiting);
-            sovereign::tray::ClearPending();
+            ReplaceConfig(*dir, config, *waiting);
+            sovereign::tray::SaveOriginal(*dir, *waiting);
+            sovereign::tray::ClearPending(*dir);
             mergeNotes_.clear();
           }
           break;
         case ConfigChoice::KeepMine:
           if (waiting) {
-            sovereign::tray::SaveOriginal(*waiting);
-            sovereign::tray::ClearPending();
+            sovereign::tray::SaveOriginal(*dir, *waiting);
+            sovereign::tray::ClearPending(*dir);
           }
           break;
         case ConfigChoice::CarryOver: {
@@ -763,18 +992,18 @@ class Worker {
             choiceError_ = "после переноса правок конфиг не годится: " + check.error;
             break;
           }
-          ReplaceConfig(config, merged->config);
-          sovereign::tray::SaveOriginal(*waiting);
-          sovereign::tray::ClearPending();
+          ReplaceConfig(*dir, config, merged->config);
+          sovereign::tray::SaveOriginal(*dir, *waiting);
+          sovereign::tray::ClearPending(*dir);
           mergeNotes_ = merged->conflicts;
           break;
         }
         case ConfigChoice::Revert: {
           const auto& to = waiting ? waiting : original;
           if (to) {
-            ReplaceConfig(config, *to);
-            sovereign::tray::SaveOriginal(*to);
-            sovereign::tray::ClearPending();
+            ReplaceConfig(*dir, config, *to);
+            sovereign::tray::SaveOriginal(*dir, *to);
+            sovereign::tray::ClearPending(*dir);
             mergeNotes_.clear();
           }
           break;
@@ -787,16 +1016,19 @@ class Worker {
     // As with a refresh: a changed config restarts the box through its hash.
   }
 
-  // Whether config.json has edits of its own and a subscription waits -
-  // re-read every poll (config.json may be edited by hand), compared only
-  // when a file changed.
+  // Whether the active config.json has edits of its own and a subscription
+  // waits - re-read every poll (config.json may be edited by hand), compared
+  // only when a file changed.
   void UpdateConfigState() {
     std::optional<std::string> original;
     std::optional<std::string> config;
+    const auto dir = ActiveDir();
     try {
-      original = sovereign::tray::LoadOriginal();
-      config = sovereign::tray::LoadConfig();
-      waiting_ = sovereign::tray::LoadPending().has_value();
+      if (dir) {
+        original = sovereign::tray::LoadOriginal(*dir);
+        config = sovereign::tray::LoadConfig(*dir);
+      }
+      waiting_ = dir && sovereign::tray::LoadPending(*dir).has_value();
     } catch (...) {
       LOG_CAUGHT_EXCEPTION_MSG("reading the config failed");
       return;
@@ -1027,13 +1259,27 @@ class Worker {
       v.up = model_.UpRate();
       v.connections = model_.Connections();
       v.error = model_.LastError();
-      v.hasSubscription = !settings_.subscriptionUrl.empty();
-      v.subscriptionUrl = settings_.subscriptionUrl;
+      const Profile* active = Active();
+      const std::string url = active != nullptr ? active->url : std::string();
+      v.hasSubscription = !url.empty();
+      v.subscriptionUrl = url;
       v.hasConfig = seenConfig_.has_value();
-      v.subscriptionHost = sovereign::tray::UrlHost(Widen(settings_.subscriptionUrl));
-      v.lastRefresh = settings_.lastRefresh;
-      v.updateHours = settings_.updateHours;
-      v.subscriptionError = subscriptionError_;
+      v.subscriptionHost = sovereign::tray::UrlHost(Widen(url));
+      v.lastRefresh = active != nullptr ? active->lastRefresh : 0;
+      v.updateHours = active != nullptr ? active->updateHours : 0;
+      v.subscriptionError = active != nullptr ? runtime_[active->id].error : std::string();
+      v.profiles.clear();
+      v.activeProfile = -1;
+      for (const Profile& profile : settings_.profiles) {
+        if (profile.id == settings_.activeProfile) {
+          v.activeProfile = static_cast<int>(v.profiles.size());
+        }
+        v.profiles.push_back({.id = profile.id,
+                              .name = profile.name,
+                              .subscription = !profile.url.empty(),
+                              .lastRefresh = profile.lastRefresh,
+                              .error = runtime_[profile.id].error});
+      }
       v.configEdited = edited_;
       v.subscriptionWaiting = waiting_;
       v.choiceError = choiceError_;
@@ -1073,8 +1319,7 @@ class Worker {
   TraySettings settings_;
   TrayModel model_;
   std::string cacheFile_;  // UTF-8; empty: no cache file
-  std::optional<TrayModel::Clock::time_point> lastFailure_;
-  std::string subscriptionError_;
+  std::map<std::string, ProfileRuntime> runtime_;  // by profile id
   unsigned noticeId_ = 0;
   std::wstring noticeTitle_;
   std::wstring noticeText_;
@@ -1192,13 +1437,48 @@ std::wstring ClipboardText(HWND window) {
   return first == std::wstring::npos ? std::wstring{} : text.substr(first, last - first + 1);
 }
 
-void RequestLocalConfig(std::string text) {
+void RequestLocalConfig(std::string text, std::string name) {
   {
     auto& shared = State();
     const std::scoped_lock lock(shared.mutex);
-    shared.pendingLocalConfig = std::move(text);
+    shared.pendingLocalConfig = LocalImport{.text = std::move(text), .name = std::move(name)};
   }
   Wake();
+}
+
+// A configuration to use, or to remove, by its id (profiles.h).
+void RequestActivateProfile(std::string id) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingActivate = std::move(id);
+  }
+  Wake();
+}
+
+void RequestRemoveProfile(std::string id) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingRemove = std::move(id);
+  }
+  Wake();
+}
+
+// A configuration made of servers is named after them: the first one's
+// name, and how many more.
+std::string ServersName(const sovereign::tray::ImportItems& items, std::size_t servers) {
+  std::string first;
+  if (!items.links.empty()) {
+    first = sovereign::tray::ParseShareLink(items.links.front()).name;
+  } else if (!items.outbounds.empty()) {
+    first = sovereign::tray::Field<std::string>(
+        nlohmann::json::parse(items.outbounds.front(), nullptr, /*allow_exceptions=*/false), "tag", {});
+  }
+  if (first.empty()) {
+    first = "Ключи";
+  }
+  return servers > 1 ? std::format("{} и ещё {}", first, servers - 1) : first;
 }
 
 void ImportBalloon(const std::wstring& message) {
@@ -1216,14 +1496,17 @@ constexpr const wchar_t* kNothingToImport =
 // the shapes and formats it knows - made into a config. False when nothing
 // in it was recognized; `quiet` leaves saying so to the caller, who may
 // look elsewhere (a picture next to the text on the clipboard).
-bool ImportText(const std::string& text, bool quiet = false) {
+// `source` names the configuration when one is made (a file's name); empty:
+// it's named after what's in it.
+bool ImportText(const std::string& text, bool quiet = false, const std::string& source = {}) {
   if (text.size() > sovereign::tray::kMaxSubscriptionBytes) {
     ImportBalloon(L"Слишком большой текст: больше 4 МБ.");
     return true;
   }
   const auto items = sovereign::tray::RecognizeImport(text);
   if (items.json) {
-    RequestLocalConfig(*items.json);  // the worker checks it, and says why not
+    // The worker checks it, and says why not.
+    RequestLocalConfig(*items.json, source.empty() ? std::string("Конфиг sing-box") : source);
     return true;
   }
   if (items.Servers() || !items.skipped.empty()) {
@@ -1236,7 +1519,7 @@ bool ImportText(const std::string& text, bool quiet = false) {
     if (!built.errors.empty()) {
       ImportBalloon(std::format(L"Взято серверов: {} из {}. {}", built.servers, built.found, why));
     }
-    RequestLocalConfig(*built.config);
+    RequestLocalConfig(*built.config, source.empty() ? ServersName(items, built.servers) : source);
     return true;
   }
   for (const std::string& url : items.urls) {
@@ -1308,7 +1591,7 @@ bool ImportPath(const std::wstring& path, bool quiet) {
     }
     return false;
   }
-  return ImportText(text, quiet);
+  return ImportText(text, quiet, Narrow(std::filesystem::path(path).stem().wstring()));
 }
 
 // "Paste": whatever the clipboard holds - text, a picture with QR codes
@@ -1682,6 +1965,20 @@ UiContent ContentFrom(const View& v) {
   } else {
     c.subscription = v.lastRefresh ? LocalTime(v.lastRefresh) : L"ещё не загружена";
   }
+  for (const View::ProfileView& profile : v.profiles) {
+    sovereign::tray::UiProfile shown;
+    shown.name = Widen(profile.name);
+    shown.failed = !profile.error.empty();
+    if (!profile.subscription) {
+      shown.detail = L"свой конфиг";
+    } else if (shown.failed) {
+      shown.detail = L"подписка · не обновилась";
+    } else {
+      shown.detail = profile.lastRefresh ? L"подписка · " + LocalTime(profile.lastRefresh) : L"подписка";
+    }
+    c.profiles.push_back(std::move(shown));
+  }
+  c.activeProfile = v.activeProfile;
   c.appsInclude = v.appsMode == AppsMode::Include;
   for (const std::string& app : v.apps) {
     c.apps.push_back(Widen(app));
@@ -1802,6 +2099,25 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ScanScreen:
       ScanScreen();
       break;
+    case UiCommand::ActivateProfile:
+      if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.profiles.size()) {
+        RequestActivateProfile(view.profiles[static_cast<std::size_t>(args.index)].id);
+      }
+      break;
+    case UiCommand::RemoveProfile:
+      if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.profiles.size()) {
+        const View::ProfileView& profile = view.profiles[static_cast<std::size_t>(args.index)];
+        const bool last = view.profiles.size() == 1;
+        const std::wstring question =
+            L"Удалить конфигурацию «" + Widen(profile.name) + L"»?\n\n" +
+            (profile.subscription ? L"Подписка больше не будет обновляться. " : L"") +
+            (last ? L"Других конфигураций нет — подключение выключится. " : L"") +
+            L"Её config.json останется в папке history на всякий случай.";
+        if (MessageBoxW(owner, question.c_str(), L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
+          RequestRemoveProfile(profile.id);
+        }
+      }
+      break;
     case UiCommand::CopySubscription:
       if (!view.subscriptionUrl.empty() && CopyText(owner, Widen(view.subscriptionUrl)) && g_trayIcon != nullptr) {
         g_trayIcon->Balloon(L"Sovereign: ссылка скопирована",
@@ -1810,8 +2126,8 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::RemoveSubscription:
       if (MessageBoxW(owner,
-                      L"Отключить подписку?\n\nКонфиг останется как есть и будет работать, но обновляться "
-                      L"больше не будет. Подключить снова - вставить ссылку.",
+                      L"Больше не обновлять эту подписку?\n\nКонфиг останется как есть и будет работать, но станет "
+                      L"твоим: подписка его больше не заменит. Чтобы снова получать обновления - добавь ссылку.",
                       L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
         RequestUnsubscribe();
       }

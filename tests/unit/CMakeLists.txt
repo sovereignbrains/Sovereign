@@ -91,6 +91,17 @@ if (SOVEREIGN_REFERENCE_SINGBOX)
            COMMAND unit-import-formats --check "${SOVEREIGN_REFERENCE_SINGBOX}")
 endif()
 
+add_executable(unit-profiles profiles_test.cpp check.h)
+target_link_libraries(unit-profiles PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-profiles)
+add_test(NAME unit-profiles COMMAND unit-profiles)
+
+# The tray's files in a temporary %LOCALAPPDATA%: the move into profiles.
+add_executable(unit-settings settings_test.cpp check.h)
+target_link_libraries(unit-settings PRIVATE sovereign_tray_settings)
+sovereign_copy_asan_runtime(unit-settings)
+add_test(NAME unit-settings COMMAND unit-settings)
+
 # ZXing's writer draws the codes the reader gets back.
 add_executable(unit-qr-codes qr_codes_test.cpp check.h)
 target_link_libraries(unit-qr-codes PRIVATE sovereign_tray_lib ZXing::ZXing)

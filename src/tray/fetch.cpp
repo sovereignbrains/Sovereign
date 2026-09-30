@@ -5,11 +5,15 @@
 
 #include <wil/resource.h>
 
+#include <array>
 #include <format>
+#include <initializer_list>
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "profiles.h"
 #include "subscription.h"
 
 namespace sovereign::tray {
@@ -20,16 +24,6 @@ std::string Failure(std::string_view what) {
   return std::format("{} (код {})", what, GetLastError());
 }
 
-std::string Narrow(std::wstring_view wide) {
-  if (wide.empty()) {
-    return {};
-  }
-  const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-  std::string out(static_cast<std::size_t>(n), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
-  return out;
-}
-
 }  // namespace
 
 namespace {
@@ -37,13 +31,14 @@ namespace {
 struct Response {
   DWORD status = 0;
   std::string body;
-  std::optional<std::string> header;  // `headerName`'s value, if asked for and sent
+  std::vector<std::optional<std::string>> headers;  // per name asked for: its value, if sent
 };
 
 // One GET over https; `what` names the server in errors ("сервер подписки").
 // Redirects are followed https to https only (WinHTTP's default policy).
 std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std::wstring& userAgent,
-                                              std::size_t maxBytes, const wchar_t* headerName, std::string_view what) {
+                                              std::size_t maxBytes, std::initializer_list<const wchar_t*> headerNames,
+                                              std::string_view what) {
   if (!IsHttpsUrl(url)) {
     return std::unexpected("ссылка должна быть https://");
   }
@@ -91,13 +86,21 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
   if (response.status != 200) {
     return response;
   }
-  if (headerName != nullptr) {
-    wchar_t header[64]{};
-    DWORD headerSize = sizeof header;
-    if (WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CUSTOM, headerName, header, &headerSize,
+  for (const wchar_t* name : headerNames) {
+    // WinHTTP widens the header's bytes one by one (ISO-8859-1): narrowed
+    // back the same way, UTF-8 in it (Profile-Title) comes out whole.
+    std::array<wchar_t, 1024> header{};
+    DWORD headerSize = static_cast<DWORD>(header.size() * sizeof(wchar_t));
+    std::optional<std::string> value;
+    if (WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CUSTOM, name, header.data(), &headerSize,
                             WINHTTP_NO_HEADER_INDEX)) {
-      response.header = Narrow(std::wstring_view(header, headerSize / sizeof(wchar_t)));
+      std::string bytes;
+      for (std::size_t i = 0; i < headerSize / sizeof(wchar_t); ++i) {
+        bytes.push_back(static_cast<char>(header[i] & 0xFF));
+      }
+      value = std::move(bytes);
     }
+    response.headers.push_back(std::move(value));
   }
 
   for (;;) {
@@ -125,7 +128,8 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
 }  // namespace
 
 std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent) {
-  auto response = HttpsGet(url, userAgent, kMaxSubscriptionBytes, L"Profile-Update-Interval", "сервер подписки");
+  auto response = HttpsGet(url, userAgent, kMaxSubscriptionBytes, {L"Profile-Update-Interval", L"Profile-Title"},
+                           "сервер подписки");
   if (!response) {
     return std::unexpected(response.error());
   }
@@ -136,15 +140,20 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
   }
   FetchResult result;
   result.body = std::move(response->body);
-  if (response->header) {
-    result.updateInterval = ParseUpdateInterval(*response->header);
+  if (response->headers.size() == 2) {
+    if (response->headers[0]) {
+      result.updateInterval = ParseUpdateInterval(*response->headers[0]);
+    }
+    if (response->headers[1]) {
+      result.title = ParseProfileTitle(*response->headers[1]);
+    }
   }
   return result;
 }
 
 std::expected<std::string, std::string> Download(const std::wstring& url, const std::wstring& userAgent,
                                                  std::size_t maxBytes) {
-  auto response = HttpsGet(url, userAgent, maxBytes, nullptr, "сервер");
+  auto response = HttpsGet(url, userAgent, maxBytes, {}, "сервер");
   if (!response) {
     return std::unexpected(response.error());
   }

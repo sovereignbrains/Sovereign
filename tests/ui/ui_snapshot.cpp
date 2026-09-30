@@ -39,6 +39,10 @@ UiContent SampleContent() {
   c.hasConfig = true;
   c.subscriptionHost = L"packetlab.tech";
   c.updateHours = 12;
+  c.profiles = {{L"packetlab", L"подписка · 27.09 19:20", false},
+                {L"NL-1 и ещё 2", L"свой конфиг", false},
+                {L"sub.example.com", L"подписка · не обновилась", true}};
+  c.activeProfile = 0;
   c.appsInclude = false;
   c.apps = {L"steam.exe", L"Telegram.exe", L"qbittorrent.exe", L"notepad.exe"};
   // One exe that is there on any Windows: its real icon; the rest aren't known.
