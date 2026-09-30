@@ -104,7 +104,7 @@ Needs Windows 10/11 x64, and:
 - Visual Studio 2022 Build Tools (C++ workload; the Clang tools component for clang-tidy), CMake ≥ 3.28, Ninja;
 - vcpkg at `C:\vcpkg`;
 - Go (see `gocore/go.mod`) and a MinGW-w64 `gcc` on `PATH` — cgo needs it for the DLL;
-- the pinned sources: `git clone --depth 1 --branch v1.14.1 https://github.com/SagerNet/sing-box vendor/sing-box` (tag from `tools/codegen/sing-box.version`), and `vendor/wintun/amd64/wintun.dll` from the zip pinned in `tools/codegen/wintun.version`.
+- the pinned sources: `git clone --depth 1 --branch v1.14.2 https://github.com/SagerNet/sing-box vendor/sing-box` (tag from `tools/codegen/sing-box.version`), and `vendor/wintun/amd64/wintun.dll` from the zip pinned in `tools/codegen/wintun.version`.
 
 From a Developer Command Prompt:
 
