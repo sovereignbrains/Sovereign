@@ -80,6 +80,11 @@ target_link_libraries(unit-share-links PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-share-links)
 add_test(NAME unit-share-links COMMAND unit-share-links)
 
+add_executable(unit-effective-config effective_config_test.cpp check.h)
+target_link_libraries(unit-effective-config PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-effective-config)
+add_test(NAME unit-effective-config COMMAND unit-effective-config)
+
 add_executable(unit-log-lines log_lines_test.cpp check.h)
 target_link_libraries(unit-log-lines PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-log-lines)

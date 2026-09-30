@@ -13,12 +13,13 @@ add_test(NAME conformance-client-hello
 # side runs only when the release binary is configured (CI downloads it,
 # sha256-pinned). Neither runs under ASan: issue #9.
 add_executable(conformance-harness harness.cpp)
-target_link_libraries(conformance-harness PRIVATE sovereign_conformance sovereign_gocore_host sovereign_common ws2_32)
+target_link_libraries(conformance-harness PRIVATE sovereign_conformance sovereign_gocore_host sovereign_service_lib
+                      sovereign_tray_lib sovereign_common ws2_32)
 add_dependencies(conformance-harness sovereign_gocore_dll)
 
 set(SOVEREIGN_REFERENCE_SINGBOX "" CACHE FILEPATH
     "The pinned official sing-box release binary, the conformance reference; empty skips its tests")
-set(conformanceCases anytls-reality-chrome anytls-tls-chrome)
+set(conformanceCases anytls-reality-chrome anytls-tls-chrome vless-reality-firefox)
 if (NOT SOVEREIGN_ENABLE_ASAN)
   foreach(case IN LISTS conformanceCases)
     add_test(NAME conformance-gocore-${case}

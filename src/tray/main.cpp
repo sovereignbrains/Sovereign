@@ -52,16 +52,15 @@
 
 #include "app_rules.h"
 #include "autostart.h"
-#include "cache_file.h"
 #include "config_sync.h"
 #include "delays.h"
+#include "effective_config.h"
 #include "exit_ip.h"
 #include "fetch.h"
 #include "protocol_choice.h"
 #include "icons.h"
 #include "json_field.h"
 #include "log_lines.h"
-#include "log_level.h"
 #include "main_window.h"
 #include "pipe_client.h"
 #include "settings.h"
@@ -523,11 +522,11 @@ class Worker {
     if (!config) {
       return std::nullopt;
     }
-    std::string effective = sovereign::tray::ApplyLogLevel(
-        sovereign::tray::ApplyAppRules(sovereign::tray::ApplyProtocolChoice(*config, settings_.protocol),
-                                       settings_.appsMode, settings_.apps),
-        settings_.logLevel);
-    return cacheFile_.empty() ? effective : sovereign::tray::ApplyCacheFile(effective, cacheFile_);
+    return sovereign::tray::EffectiveConfig(*config, {.protocol = settings_.protocol,
+                                                      .appsMode = settings_.appsMode,
+                                                      .apps = settings_.apps,
+                                                      .logLevel = settings_.logLevel,
+                                                      .cacheFile = cacheFile_});
   }
 
   // The selector's options and which one the box uses: the user's pick if

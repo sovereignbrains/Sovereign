@@ -7,17 +7,29 @@
 //   conformance-harness <case> --binary <sing-box.exe>         --golden <file> [--runs N]
 //   conformance-harness <case> --binary <sing-box.exe> --record <golden file> [--save <dir>] [--runs N]
 //
-// --gocore is our path: the DLL the service ships, through the same GoCore
-// bridge the service uses, in this process (the service's pipe name is fixed,
-// so a second service can't run next to an installed one). --binary runs an
-// executable the way a user would (`sing-box run -c`). Both get the same
-// config: a mixed inbound on loopback and the outbound under test pointed at
-// this harness's listener, which records the first TLS record of every
-// connection and closes it - nothing leaves the machine. The outbound goes
-// through our generated AnyTLSOutbound type before it reaches the core, as a
-// config does in Sovereign - its `tls` object included (OutboundTLSOptions,
-// OutboundUTLSOptions, OutboundRealityOptions are generated structs), so a
-// serde slip there would show up on the wire.
+// Both sides get a mixed inbound on loopback and the outbound under test
+// pointed at this harness's listener, which records the first TLS record of
+// every connection and closes it - nothing leaves the machine. Behind a
+// "proxy" selector, as in a subscription.
+//
+// --binary is the reference: an executable run the way a user would
+// (`sing-box run -c`), given the outbound as one would write it by hand.
+//
+// --gocore is Sovereign, the whole way a config travels in it, in this
+// process (the service's pipe name is fixed, so a second service can't run
+// next to an installed one - only the pipe transport itself is skipped):
+//   - the outbound as Sovereign gets it: a share link through the tray's
+//     importer (share_links.h) for cases that have one, else JSON as a
+//     subscription delivers it - for AnyTLS also round-tripped through our
+//     generated AnyTLSOutbound type (its `tls` object is OutboundTLSOptions,
+//     OutboundUTLSOptions, OutboundRealityOptions), which checks the codegen;
+//     the tray itself doesn't use the generated types yet;
+//   - the tray's additions (effective_config.h: a protocol pick, a per-app
+//     rule, a log level, the cache file) - what it sends to box_start;
+//   - a box_start request through the service's ControlHandler, which
+//     re-serializes the config, into GoCore and the DLL the service ships.
+// A slip anywhere on that way that reshapes the TLS options shows up on the
+// wire while the connection would still work.
 //
 // --record writes one raw capture as the golden file (after checking that all
 // captures agree with each other), --save also writes every capture as
@@ -53,8 +65,12 @@
 #include "adapters/outbound_envelope.h"
 #include "anytls_outbound.gen.h"
 #include "client_hello.h"
+#include "control.h"
 #include "core.h"
+#include "effective_config.h"
 #include "go_core.h"
+#include "log_ring.h"
+#include "share_links.h"
 
 namespace {
 
@@ -77,16 +93,45 @@ constexpr int kDefaultRuns = 5;
 constexpr int kWaitMs = 10000;
 constexpr std::uint8_t kHandshakeRecord = 22;
 
+constexpr std::string_view kServerName = "www.ebay.com";
+constexpr std::string_view kShortId = "0123abcd";
+constexpr std::string_view kVlessUuid = "b831381d-6324-4d53-ad4f-8cda48b30811";
+
+enum class Protocol : std::uint8_t { AnyTLS, Vless };
+
 struct Case {
   std::string_view name;
+  Protocol protocol = Protocol::AnyTLS;
   bool reality = false;
+  std::string_view fingerprint;
   CanonicalOptions canonical;
 };
 
+// uTLS HelloFirefox_120's GREASE ECH (u_parrots.go): CandidatePayloadLens
+// {223} plus the 16-byte tag, AES-128-GCM or ChaCha20-Poly1305 per connection.
+constexpr std::array<std::size_t, 1> kFirefoxEchPayloads{239};
+constexpr std::array<std::uint16_t, 2> kFirefoxEchAeads{0x0001, 0x0003};
+
 // uTLS chrome permutes its extensions per connection (client_hello.h).
+// VLESS comes from a share link on our side, with a fingerprint that isn't
+// the importer's REALITY default (chrome): an importer that dropped `fp`
+// would still connect, and only the wire would tell.
 constexpr std::array kCases{
-    Case{.name = "anytls-reality-chrome", .reality = true, .canonical = {.extensionOrderRandomized = true}},
-    Case{.name = "anytls-tls-chrome", .reality = false, .canonical = {.extensionOrderRandomized = true}},
+    Case{.name = "anytls-reality-chrome",
+         .reality = true,
+         .fingerprint = "chrome",
+         .canonical = {.extensionOrderRandomized = true}},
+    Case{.name = "anytls-tls-chrome",
+         .reality = false,
+         .fingerprint = "chrome",
+         .canonical = {.extensionOrderRandomized = true}},
+    Case{.name = "vless-reality-firefox",
+         .protocol = Protocol::Vless,
+         .reality = true,
+         .fingerprint = "firefox",
+         .canonical = {.extensionOrderRandomized = false,
+                       .echPayloadLengths = kFirefoxEchPayloads,
+                       .echAeads = kFirefoxEchAeads}},
 };
 
 class Winsock {
@@ -198,28 +243,66 @@ std::vector<Bytes> Capture(SOCKET listener, std::uint16_t inboundPort, int runs)
   return records;
 }
 
-Json Config(const Case& c, std::uint16_t capturePort, std::uint16_t inboundPort) {
+std::string Utf8(const fs::path& path) {
+  const std::u8string text = path.u8string();
+  return {text.begin(), text.end()};
+}
+
+// The outbound under test as one would write it for sing-box by hand.
+Json PlainOutbound(const Case& c, std::uint16_t capturePort) {
   Json tls = Json::object();
   tls["enabled"] = true;
-  tls["server_name"] = "www.ebay.com";
-  tls["utls"] = {{"enabled", true}, {"fingerprint", "chrome"}};
+  tls["server_name"] = kServerName;
+  tls["utls"] = {{"enabled", true}, {"fingerprint", c.fingerprint}};
   if (c.reality) {
-    tls["reality"] = {{"enabled", true}, {"public_key", kRealityPublicKey}, {"short_id", "0123abcd"}};
+    tls["reality"] = {{"enabled", true}, {"public_key", kRealityPublicKey}, {"short_id", kShortId}};
   }
   Json outbound = Json::object();
-  outbound["type"] = "anytls";
   outbound["tag"] = "out";
   outbound["server"] = "127.0.0.1";
   outbound["server_port"] = capturePort;
-  outbound["password"] = "conformance";
+  if (c.protocol == Protocol::Vless) {
+    outbound["type"] = "vless";
+    outbound["uuid"] = kVlessUuid;
+    outbound["flow"] = "xtls-rprx-vision";
+    outbound["packet_encoding"] = "xudp";
+  } else {
+    outbound["type"] = "anytls";
+    outbound["password"] = "conformance";
+  }
   outbound["tls"] = std::move(tls);
-  const AnyTLSOutbound typed = outbound.get<AnyTLSOutbound>();  // through the generated type
+  return outbound;
+}
 
+// The outbound the way it reaches Sovereign (see the top of the file).
+Json SovereignOutbound(const Case& c, std::uint16_t capturePort) {
+  if (c.protocol == Protocol::Vless) {
+    const std::string link = std::format(
+        "vless://{}@127.0.0.1:{}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={}&fp={}&pbk={}&sid={}"
+        "&type=tcp#conformance",
+        kVlessUuid, capturePort, kServerName, c.fingerprint, kRealityPublicKey, kShortId);
+    const auto parsed = sovereign::tray::ParseShareLink(link);
+    if (!parsed.outbound) {
+      throw std::runtime_error("the share link didn't import: " + parsed.error);
+    }
+    Json outbound = Json::parse(*parsed.outbound);
+    outbound["tag"] = "out";
+    return outbound;
+  }
+  return Json(PlainOutbound(c, capturePort).get<AnyTLSOutbound>());
+}
+
+Json Config(Json outbound, std::uint16_t inboundPort) {
   Json inbound = Json::object();
   inbound["type"] = "mixed";
   inbound["tag"] = "in";
   inbound["listen"] = "127.0.0.1";
   inbound["listen_port"] = inboundPort;
+
+  Json selector = Json::object();
+  selector["type"] = "selector";
+  selector["tag"] = "proxy";
+  selector["outbounds"] = Json::array({"out"});
 
   Json config = Json::object();
   // The listener hangs up on every connection by design, so every run would
@@ -227,9 +310,23 @@ Json Config(const Case& c, std::uint16_t capturePort, std::uint16_t inboundPort)
   // (a box that doesn't start fails Start() with its reason anyway).
   config["log"] = {{"level", "fatal"}};
   config["inbounds"] = Json::array({inbound});
-  config["outbounds"] = Json::array({Json(typed)});
-  config["route"] = {{"final", "out"}};
+  config["outbounds"] = Json::array({selector, std::move(outbound)});
+  config["route"] = {{"final", "proxy"}};
   return config;
+}
+
+// What the tray would send for that config, with a user's settings: a
+// protocol pick, an app rule and the cache file. The app rule names no real
+// program, so the harness's own connections still go through the proxy. No
+// log level: it can't reach an outbound, and at any level the tray offers
+// every run would log the listener's hang-up.
+std::string SovereignConfig(const Case& c, std::uint16_t capturePort, std::uint16_t inboundPort,
+                            const fs::path& cacheFile) {
+  return sovereign::tray::EffectiveConfig(Config(SovereignOutbound(c, capturePort), inboundPort).dump(),
+                                          {.protocol = "out",
+                                           .appsMode = sovereign::tray::AppsMode::Exclude,
+                                           .apps = {"not-this-harness.exe"},
+                                           .cacheFile = Utf8(cacheFile)});
 }
 
 class Driver {
@@ -246,6 +343,8 @@ class Driver {
   virtual std::string_view Name() const = 0;
 };
 
+// The service's side of box_start/box_stop: its ControlHandler over GoCore,
+// fed the requests the tray would send down the pipe.
 class GoCoreDriver final : public Driver {
  public:
   explicit GoCoreDriver(const fs::path& dll) : core_(dll.wstring()) {
@@ -255,23 +354,31 @@ class GoCoreDriver final : public Driver {
       }
     });
   }
-  ~GoCoreDriver() override { core_.Stop(); }
+  ~GoCoreDriver() override { Stop(); }
   GoCoreDriver(const GoCoreDriver&) = delete;
   GoCoreDriver& operator=(const GoCoreDriver&) = delete;
   GoCoreDriver(GoCoreDriver&&) = delete;
   GoCoreDriver& operator=(GoCoreDriver&&) = delete;
 
   void Start(const std::string& config) override {
-    const std::string error = core_.Start(config);
-    if (!error.empty()) {
-      throw std::runtime_error("box_start: " + error);
+    Json request = Json::object();
+    request["cmd"] = "box_start";
+    request["config"] = Json::parse(config);  // as the tray's StartBox sends it
+    const Json response = Json::parse(control_.Handle(request.dump()));
+    if (response.value("cmd", "") != "box_started") {
+      throw std::runtime_error("box_start: " + response.value("message", response.dump()));
     }
   }
-  void Stop() override { core_.Stop(); }
+  void Stop() override { control_.Handle(R"({"cmd":"box_stop"})"); }
   std::string_view Name() const override { return "gocore"; }
 
  private:
+  static constexpr std::size_t kLogCapacity = 64;  // the ring is the service's; nothing here reads it
+
   sovereign::service::GoCore core_;
+  sovereign::service::LogRing log_{kLogCapacity};
+  std::optional<std::string> lastConfig_;
+  sovereign::service::ControlHandler control_{&core_, log_, lastConfig_};
 };
 
 class BinaryDriver final : public Driver {
@@ -422,16 +529,22 @@ int Run(const Options& o) {
   const wil::unique_socket listener = Listen(capturePort);
   const std::uint16_t inboundPort = FreePort();
 
+  const fs::path cacheFile = fs::temp_directory_path() / std::format("sovereign-conformance-{}.db", GetCurrentProcessId());
   std::unique_ptr<Driver> driver;
+  std::string config;
   if (o.gocore) {
     driver = std::make_unique<GoCoreDriver>(*o.gocore);
+    config = SovereignConfig(c, capturePort, inboundPort, cacheFile);
   } else {
     driver = std::make_unique<BinaryDriver>(*o.binary);
+    config = Config(PlainOutbound(c, capturePort), inboundPort).dump();
   }
-  driver->Start(Config(c, capturePort, inboundPort).dump());
+  driver->Start(config);
   WaitForPort(inboundPort);
   const std::vector<Bytes> records = Capture(listener.get(), inboundPort, o.runs);
   driver->Stop();
+  std::error_code ignored;
+  fs::remove(cacheFile, ignored);
   std::cout << std::format("{} ({}): {} ClientHellos captured\n", c.name, driver->Name(), records.size());
 
   // The captures agree with each other first: otherwise the canonical form is

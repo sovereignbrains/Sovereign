@@ -2,6 +2,8 @@
 // against real captures of the pinned reference sing-box: argv[1] is the
 // fixtures directory (conformance-harness --record ... --save wrote it).
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -51,7 +53,42 @@ const std::vector<Bytes>& Tls() {
   return captures;
 }
 
+// Picked so that both of Firefox's GREASE ECH AEADs occur.
+const std::vector<Bytes>& Firefox() {
+  static const std::vector<Bytes> captures = Captures("vless-reality-firefox");
+  return captures;
+}
+
 constexpr CanonicalOptions kChrome{.extensionOrderRandomized = true};
+// As in harness.cpp: uTLS HelloFirefox_120's GREASE ECH candidates.
+constexpr std::array<std::size_t, 1> kFirefoxEchPayloads{239};
+constexpr std::array<std::uint16_t, 2> kFirefoxEchAeads{0x0001, 0x0003};
+constexpr CanonicalOptions kFirefox{.echPayloadLengths = kFirefoxEchPayloads, .echAeads = kFirefoxEchAeads};
+
+struct FixtureSet {
+  const std::vector<Bytes>* captures;
+  CanonicalOptions options;
+};
+
+std::array<FixtureSet, 3> AllSets() {
+  return {FixtureSet{&Reality(), kChrome}, FixtureSet{&Tls(), kChrome}, FixtureSet{&Firefox(), kFirefox}};
+}
+
+constexpr std::uint16_t kEch = 0xFE0D;
+
+// The ECH extension's AEAD id (after type, KDF).
+std::uint16_t EchAead(const Extension& e) {
+  return static_cast<std::uint16_t>((static_cast<unsigned>(e.data[3]) << 8U) | e.data[4]);
+}
+
+// The extension's data with its payload replaced by `length` bytes.
+void SetEchPayload(Extension& e, std::size_t length) {
+  const std::size_t encLength = (static_cast<std::size_t>(e.data[6]) << 8U) | e.data[7];
+  e.data.resize(8 + encLength);
+  e.data.push_back(static_cast<std::uint8_t>(length >> 8U));
+  e.data.push_back(static_cast<std::uint8_t>(length & 0xFFU));
+  e.data.resize(e.data.size() + length, 0xAB);
+}
 
 // Canonical form of a capture; a parse failure fails the check and yields an
 // empty hello (which then matches nothing real).
@@ -71,8 +108,8 @@ bool Mentions(const std::vector<std::string>& lines, std::string_view what) {
 }
 
 void TestRoundTrip() {
-  for (const auto* set : {&Reality(), &Tls()}) {
-    for (const Bytes& record : *set) {
+  for (const FixtureSet& set : AllSets()) {
+    for (const Bytes& record : *set.captures) {
       CHECK(!record.empty());
       const auto parsed = ParseClientHello(record);
       CHECK(parsed.has_value());
@@ -86,14 +123,15 @@ void TestRoundTrip() {
 // The self-test of the mask list: five connections of the same reference
 // client, every one of them different on the wire, are one canonical hello.
 void TestReferenceAgreesWithItself() {
-  for (const auto* set : {&Reality(), &Tls()}) {
-    const Canonical first = CanonicalOf((*set)[0]);
+  for (const FixtureSet& set : AllSets()) {
+    const std::vector<Bytes>& captures = *set.captures;
+    const Canonical first = CanonicalOf(captures[0], set.options);
     CHECK(first.violations.empty());
-    for (const Bytes& record : *set) {
-      if (&record != &(*set)[0]) {
-        CHECK(record != (*set)[0]);  // on the wire every connection differs
+    for (const Bytes& record : captures) {
+      if (&record != &captures[0]) {
+        CHECK(record != captures[0]);  // on the wire every connection differs
       }
-      const Canonical other = CanonicalOf(record);
+      const Canonical other = CanonicalOf(record, set.options);
       CHECK(other.violations.empty());
       CHECK(Diff(first.hello, other.hello).empty());
       CHECK(Serialize(first.hello) == Serialize(other.hello));
@@ -124,9 +162,10 @@ void TestRealityVersusTls() {
 
 // Flip every byte of a capture, one at a time. The flips that go unnoticed
 // must be exactly the masked bytes - no more (a stable field would be
-// unprotected), no fewer (a mask would be missing).
-void TestEveryUnmaskedByteIsCompared() {
-  const Bytes& record = Reality()[0];
+// unprotected), no fewer (a mask would be missing). A flipped ECH AEAD, even
+// where it's masked, leaves the fingerprint's candidates: noticed.
+void TestEveryUnmaskedByteIsCompared(const std::vector<Bytes>& captures, const CanonicalOptions& options) {
+  const Bytes& record = captures[0];
   const auto parsed = ParseClientHello(record);
   CHECK(parsed.has_value());
   if (!parsed) {
@@ -149,7 +188,7 @@ void TestEveryUnmaskedByteIsCompared() {
       masked += 1 + encLength + payloadLength;
     }
   }
-  const Canonical reference = CanonicalOf(Reality()[1]);
+  const Canonical reference = CanonicalOf(captures[1], options);
   std::size_t unnoticed = 0;
   for (std::size_t i = 0; i < record.size(); ++i) {
     Bytes mutated = record;
@@ -158,7 +197,7 @@ void TestEveryUnmaskedByteIsCompared() {
     if (!hello) {
       continue;  // rejected outright: noticed
     }
-    const Canonical canonical = Canonicalize(*hello, kChrome);
+    const Canonical canonical = Canonicalize(*hello, options);
     if (canonical.violations.empty() && Serialize(canonical.hello) == Serialize(reference.hello)) {
       ++unnoticed;
     }
@@ -185,17 +224,51 @@ void TestEchPayloadRule() {
     return;
   }
   for (Extension& e : parsed->extensions) {
-    if (e.type == 0xFE0D) {
-      // Rebuild with a 150-byte payload: not 32-byte padding plus a 16-byte tag.
-      const std::size_t encLength = (static_cast<std::size_t>(e.data[6]) << 8U) | e.data[7];
-      e.data.resize(8 + encLength);
-      e.data.push_back(0);
-      e.data.push_back(150);
-      e.data.resize(e.data.size() + 150, 0xAB);
+    if (e.type == kEch) {
+      SetEchPayload(e, 150);  // not 32-byte padding plus a 16-byte tag
     }
   }
   const Canonical canonical = Canonicalize(*parsed, kChrome);
   CHECK(Mentions(canonical.violations, "encrypted_client_hello"));
+}
+
+// Firefox's GREASE ECH: its fixed payload length and its two AEADs, both
+// seen in the fixtures and masked; anything else is a violation.
+void TestFirefoxEch() {
+  bool aes = false;
+  bool chacha = false;
+  for (const Bytes& record : Firefox()) {
+    const auto parsed = ParseClientHello(record);
+    CHECK(parsed.has_value());
+    for (const Extension& e : parsed ? parsed->extensions : std::vector<Extension>{}) {
+      if (e.type == kEch) {
+        aes = aes || EchAead(e) == 0x0001;
+        chacha = chacha || EchAead(e) == 0x0003;
+      }
+    }
+  }
+  CHECK(aes && chacha);
+
+  // Chrome's rule would reject Firefox's 239-byte payload: the options matter.
+  CHECK(Mentions(CanonicalOf(Firefox()[0], CanonicalOptions{}).violations, "encrypted_client_hello"));
+
+  const auto broken = [](auto&& change) {
+    auto parsed = ParseClientHello(Firefox()[0]);
+    CHECK(parsed.has_value());
+    if (!parsed) {
+      return std::vector<std::string>{};
+    }
+    for (Extension& e : parsed->extensions) {
+      if (e.type == kEch) {
+        change(e);
+      }
+    }
+    return Canonicalize(*parsed, kFirefox).violations;
+  };
+  // 272 = 256 + 16 would pass Chrome's padding rule, not Firefox's.
+  CHECK(Mentions(broken([](Extension& e) { SetEchPayload(e, 272); }), "payload of 272 bytes"));
+  CHECK(Mentions(broken([](Extension& e) { e.data[4] = 0x02; }), "AEAD 0x0002"));  // AES-256-GCM
+  CHECK(broken([](Extension&) {}).empty());
 }
 
 void TestGrease() {
@@ -222,9 +295,11 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestReferenceAgreesWithItself();
     TestOrderIsComparedUnlessRandomized();
     TestRealityVersusTls();
-    TestEveryUnmaskedByteIsCompared();
+    TestEveryUnmaskedByteIsCompared(Reality(), kChrome);
+    TestEveryUnmaskedByteIsCompared(Firefox(), kFirefox);
     TestTruncationIsRejected();
     TestEchPayloadRule();
+    TestFirefoxEch();
     TestGrease();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

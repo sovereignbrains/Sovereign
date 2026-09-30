@@ -165,10 +165,13 @@ std::optional<std::vector<std::uint8_t>> MaskKeyShares(std::span<const std::uint
 // type, cipher suite, config_id, enc, payload. Per connection: enc (a fresh
 // HPKE key), payload (ciphertext), config_id (random under GREASE ECH, and
 // GREASE is indistinguishable from real ECH on the wire), and the payload's
-// length (Chrome/uTLS GREASE picks a padded size at random). The cipher suite
-// and enc's length stay; the payload length is checked against the padding
-// rule instead of compared.
-std::optional<std::vector<std::uint8_t>> MaskEch(std::span<const std::uint8_t> data, std::vector<std::string>& violations) {
+// length (Chrome/uTLS GREASE picks a padded size at random). enc's length
+// stays; the payload length is checked against the padding rule instead of
+// compared. A fingerprint with its own candidates (CanonicalOptions) has the
+// length and the AEAD checked against those - Firefox's GREASE picks
+// AES-128-GCM or ChaCha20-Poly1305 per connection - and both masked.
+std::optional<std::vector<std::uint8_t>> MaskEch(std::span<const std::uint8_t> data, const CanonicalOptions& options,
+                                                 std::vector<std::string>& violations) {
   Reader r(data);
   const auto type = r.U8();
   const auto kdf = r.U16();
@@ -182,14 +185,23 @@ std::optional<std::vector<std::uint8_t>> MaskEch(std::span<const std::uint8_t> d
   if (*type != 0) {
     violations.push_back(std::format("encrypted_client_hello: type {} in the outer ClientHello (must be 0, outer)", *type));
   }
-  if (payload->size() < kEchTag || (payload->size() - kEchTag) % kEchPadding != 0) {
-    violations.push_back(std::format("encrypted_client_hello: payload of {} bytes is not a {}-byte-padded plaintext plus a {}-byte tag",
-                                     payload->size(), kEchPadding, kEchTag));
+  if (options.echPayloadLengths.empty()) {
+    if (payload->size() < kEchTag || (payload->size() - kEchTag) % kEchPadding != 0) {
+      violations.push_back(std::format("encrypted_client_hello: payload of {} bytes is not a {}-byte-padded plaintext plus a {}-byte tag",
+                                       payload->size(), kEchPadding, kEchTag));
+    }
+  } else if (!std::ranges::contains(options.echPayloadLengths, payload->size())) {
+    violations.push_back(std::format("encrypted_client_hello: payload of {} bytes, not one of the fingerprint's {}",
+                                     payload->size(), options.echPayloadLengths));
+  }
+  const bool aeadMasked = !options.echAeads.empty();
+  if (aeadMasked && !std::ranges::contains(options.echAeads, *aead)) {
+    violations.push_back(std::format("encrypted_client_hello: AEAD {:#06x}, not one of the fingerprint's", *aead));
   }
   Writer out;
   out.U8(*type);
   out.U16(*kdf);
-  out.U16(*aead);
+  out.U16(aeadMasked ? std::uint16_t{0} : *aead);
   out.U8(0);
   out.Vec16(std::vector<std::uint8_t>(enc->size(), 0));
   out.Vec16({});
@@ -418,7 +430,7 @@ Canonical Canonicalize(const ClientHello& hello, const CanonicalOptions& options
       case kSupportedGroups: masked = DegreaseList(e.data, /*shortPrefix=*/false); break;
       case kSupportedVersions: masked = DegreaseList(e.data, /*shortPrefix=*/true); break;
       case kKeyShare: masked = MaskKeyShares(e.data); break;
-      case kEncryptedClientHello: masked = MaskEch(e.data, canonical.violations); break;
+      case kEncryptedClientHello: masked = MaskEch(e.data, options, canonical.violations); break;
       // padding (RFC 7685) sizes the record to a length class: its length
       // follows every other field's, its bytes are zeroes by definition.
       case kPadding: masked = std::vector<std::uint8_t>{}; break;

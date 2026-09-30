@@ -11,6 +11,7 @@
 // the self-test that the list is complete (tests/conformance).
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <span>
@@ -52,6 +53,14 @@ struct CanonicalOptions {
   // uTLS follows); a client that doesn't must keep its order, so this is off
   // unless the fingerprint under test is known to shuffle.
   bool extensionOrderRandomized = false;
+  // GREASE ECH picks per connection what the fingerprint allows (uTLS's
+  // GREASEEncryptedClientHelloExtension, its Candidate* fields in
+  // u_parrots.go). Empty: BoringSSL's - Chrome's - rule, the payload a
+  // 32-byte-padded plaintext plus a 16-byte tag and one AEAD, compared as
+  // is. Otherwise the payload's length (tag included) must be one of
+  // echPayloadLengths and the AEAD one of echAeads; both are then masked.
+  std::span<const std::size_t> echPayloadLengths{};
+  std::span<const std::uint16_t> echAeads{};
 };
 
 struct Canonical {
