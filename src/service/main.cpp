@@ -4,6 +4,7 @@
 #include <wil/result.h>
 
 #include <array>
+#include <atomic>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -54,8 +55,17 @@ class ServiceState {
 
   // Set on the last successful box_start; PBT_APMRESUMEAUTOMATIC replays it.
   // Cleared on an explicit box_stop, so a resume after the user turned the
-  // box off on purpose does not silently turn it back on.
+  // box off on purpose does not silently turn it back on. Only `handler`
+  // touches it, under its lock.
   std::optional<std::string> lastConfig;
+
+  // The control protocol, shared by the pipe (main thread) and power events
+  // (the SCM's thread). Created before the service reports RUNNING - from
+  // then on the SCM may deliver power events - and published by handlerReady.
+  // Declared after what it points into, so it goes first.
+  std::optional<sovereign::service::WfpKillSwitch> killSwitch;  // the handler's; holds only a path
+  std::optional<sovereign::service::ControlHandler> handler;
+  std::atomic<bool> handlerReady{false};
 };
 
 // The core is optional at this stage; if the DLL is missing or fails to
@@ -107,25 +117,22 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
         case PBT_APMSUSPEND:
           trace::Power("suspend");
           break;
-        case PBT_APMRESUMEAUTOMATIC:
+        case PBT_APMRESUMEAUTOMATIC: {
           trace::Power("resume");
-          // Always restart rather than probe whether the box survived sleep —
-          // wintun's adapter and the route table are not guaranteed to survive
-          // a suspend/resume cycle, and checking liveness first only adds a
-          // second failure mode. Known gap: this runs on the SCM control
-          // thread while a pipe box_start/box_stop (main thread) could be
-          // in flight at the same instant — GoCore's Go-side mutex keeps that
-          // memory-safe, but the two requests could still interleave in a
-          // confusing order. Accepted for 1d-2: a client racing a sleep/wake
-          // in that exact window is not a realistic scenario to design around
-          // here.
-          if (state.core && state.lastConfig) {
-            trace::Power("restart_stop", state.core->Stop());
-            trace::Power("restart_start", state.core->Start(*state.lastConfig));
+          // Through the handler, under the lock its pipe requests take (see
+          // ControlHandler::ResumeAfterSleep): this is the SCM's thread, and
+          // a box_start/box_stop from the tray may be in flight right now.
+          const auto outcome = state.handlerReady.load(std::memory_order_acquire) && state.handler.has_value()
+                                   ? state.handler->ResumeAfterSleep()
+                                   : sovereign::service::ControlHandler::ResumeOutcome{};
+          if (outcome.replayed) {
+            trace::Power("restart_stop", outcome.stopError);
+            trace::Power("restart_start", outcome.startError);
           } else {
             trace::Power("restart_skipped");  // no core, or no remembered config
           }
           break;
+        }
         default:
           break;
       }
@@ -143,11 +150,16 @@ std::wstring OwnPath() {
   return n == 0 || n == MAX_PATH ? std::wstring() : std::wstring(path, n);
 }
 
-void RunPipeServer(const std::stop_token& stopToken, ServiceState& state) {
-  sovereign::service::WfpKillSwitch killSwitch(OwnPath());
-  sovereign::service::ControlHandler handler(
+sovereign::service::ControlHandler& CreateHandler(ServiceState& state) {
+  auto& killSwitch = state.killSwitch.emplace(OwnPath());
+  auto& handler = state.handler.emplace(
       state.core.get(), state.coreLog, state.lastConfig,
       [](const sovereign::service::CommandRecord& record) { trace::Command(record); }, &killSwitch);
+  state.handlerReady.store(true, std::memory_order_release);
+  return handler;
+}
+
+void RunPipeServer(const std::stop_token& stopToken, sovereign::service::ControlHandler& handler) {
   sovereign::service::PipeServer server(
       sovereign::ipc::kPipeName,
       [&handler](const std::string& request) { return handler.Handle(request); });
@@ -178,10 +190,11 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
   ReportStatus(state.statusHandle, SERVICE_START_PENDING, NO_ERROR, 3000);
   trace::ProcessState("service", "starting");
   TryLoadCore(state);
+  auto& handler = CreateHandler(state);
   ReportStatus(state.statusHandle, SERVICE_RUNNING);
   trace::ProcessState("service", "running");
 
-  RunPipeServer(state.stopSource.get_token(), state);
+  RunPipeServer(state.stopSource.get_token(), handler);
   trace::ProcessState("service", "stopping");
   StopCoreOnShutdown(state);
 
@@ -301,11 +314,12 @@ void RunInConsole() {
   auto& state = ServiceState::Instance();
   trace::ProcessState("console", "starting");
   TryLoadCore(state);
+  auto& handler = CreateHandler(state);
   std::wcout << L"sovereign core: pipe " << sovereign::ipc::kPipeName
              << L", core " << (state.core ? L"loaded" : L"NOT loaded")
              << L", Ctrl+C для остановки.\n";
   trace::ProcessState("console", "running");
-  RunPipeServer(state.stopSource.get_token(), state);
+  RunPipeServer(state.stopSource.get_token(), handler);
   trace::ProcessState("console", "stopping");
   StopCoreOnShutdown(state);
   trace::ProcessState("console", "stopped");

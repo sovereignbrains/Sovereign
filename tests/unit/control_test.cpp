@@ -471,6 +471,36 @@ void TestReaderAheadAfterRestart() {
   CHECK(response["entries"][0]["message"] == "first");
 }
 
+void TestResumeAfterSleep() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  ControlHandler handler(&core, log, lastConfig);
+
+  CHECK(!handler.ResumeAfterSleep().replayed);  // nothing started yet
+
+  CHECK(Send(handler, R"({"cmd":"box_start","config":{"a":1}})").value("cmd", "") == "box_started");
+  core.startedWith.clear();
+  const auto replay = handler.ResumeAfterSleep();
+  CHECK(replay.replayed && replay.stopError.empty() && replay.startError.empty());
+  CHECK(core.running && core.startedWith == R"({"a":1})");
+
+  // A start that fails after resume keeps the config for the next one.
+  core.startError = "no network yet";
+  const auto failed = handler.ResumeAfterSleep();
+  CHECK(failed.replayed && failed.startError == "no network yet" && lastConfig.has_value());
+  core.startError.clear();
+
+  // After an explicit stop the user wants it off: resume leaves it off.
+  CHECK(Send(handler, R"({"cmd":"box_stop"})").value("cmd", "") == "box_stopped");
+  CHECK(!handler.ResumeAfterSleep().replayed && !core.running);
+
+  // No core at all: nothing to replay.
+  std::optional<std::string> noCoreConfig = std::string("{}");
+  ControlHandler noCore(nullptr, log, noCoreConfig);
+  CHECK(!noCore.ResumeAfterSleep().replayed);
+}
+
 void TestLogsCarryTime() {
   LogRing log(10);
   const auto before = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -503,6 +533,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestUrlTest();
     TestExitIp();
     TestKillSwitch();
+    TestResumeAfterSleep();
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;

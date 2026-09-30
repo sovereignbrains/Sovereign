@@ -129,6 +129,21 @@ std::string ControlHandler::ApplyKillSwitch(const KillSwitchSettings& settings) 
   return error;
 }
 
+ControlHandler::ResumeOutcome ControlHandler::ResumeAfterSleep() {
+  const std::scoped_lock lock(stateMutex_);
+  ResumeOutcome outcome;
+  if (core_ == nullptr || !lastConfig_) {
+    return outcome;
+  }
+  outcome.replayed = true;
+  outcome.stopError = core_->Stop();
+  // A failed start keeps lastConfig_: the next resume tries again, and only
+  // an explicit box_stop means "stay off". The kill switch's filters stay as
+  // they are: they follow the config's tunnel addresses, and it's the same config.
+  outcome.startError = core_->Start(*lastConfig_);
+  return outcome;
+}
+
 std::string ControlHandler::Handle(const std::string& request) {
   const auto started = std::chrono::steady_clock::now();
   Outcome outcome;
@@ -198,6 +213,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
 
   if (cmd == "box_start") {
+    const std::scoped_lock lock(stateMutex_);
     if (!parsed.contains("config")) {
       return fail("missing config field");
     }
@@ -224,6 +240,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
 
   if (cmd == "box_stop") {
+    const std::scoped_lock lock(stateMutex_);
     const std::string error = core_->Stop();
     if (!error.empty()) {
       return fail(error);
@@ -235,6 +252,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
 
   if (cmd == "box_stats") {
+    const std::scoped_lock lock(stateMutex_);
     Json response = StatsResponse(core_->Stats());
     // Which config the box runs, without the config itself (it holds keys):
     // the tray compares it with its own config.json and restarts the box on a
@@ -248,6 +266,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   }
 
   if (cmd == "kill_switch") {
+    const std::scoped_lock lock(stateMutex_);
     if (killSwitch_ == nullptr) {
       return fail("kill switch unavailable");
     }

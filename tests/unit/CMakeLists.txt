@@ -16,6 +16,15 @@ target_link_libraries(unit-control PRIVATE sovereign_service_lib)
 sovereign_copy_asan_runtime(unit-control)
 add_test(NAME unit-control COMMAND unit-control)
 
+# The control plane's threads racing each other (tests/tsan/stress_test.cpp):
+# here its invariants under MSVC and ASan; the race detection itself is the
+# tsan job's, on Linux.
+add_executable(unit-control-concurrency "${CMAKE_SOURCE_DIR}/tests/tsan/stress_test.cpp" check.h)
+target_include_directories(unit-control-concurrency PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(unit-control-concurrency PRIVATE sovereign_service_lib)
+sovereign_copy_asan_runtime(unit-control-concurrency)
+add_test(NAME unit-control-concurrency COMMAND unit-control-concurrency)
+
 add_executable(unit-tray-model tray_model_test.cpp check.h)
 target_link_libraries(unit-tray-model PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-tray-model)
