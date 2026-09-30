@@ -1,0 +1,20 @@
+mixed-port: 7890
+x-anchors: &common {udp: true, skip-cert-verify: true}
+proxies:
+  - name: "NL"
+    type: vless
+    server: nl.example.com
+    port: 443
+    uuid: 11111111-2222-3333-4444-555555555555
+    tls: true
+    flow: xtls-rprx-vision
+    servername: www.microsoft.com
+    reality-opts: {public-key: AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE, short-id: 6ba8}
+    client-fingerprint: chrome
+  - {name: DE, type: vmess, server: de.example.com, port: 443, uuid: 11111111-2222-3333-4444-555555555555, alterId: 0, cipher: auto, tls: true, network: ws, ws-opts: {path: /ray, headers: {Host: cdn.example.com}}}
+  - {name: SS, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-256-gcm, password: pw, plugin: obfs, plugin-opts: {mode: http, host: bing.com}}
+  - {<<: *common, name: HY2, type: hysteria2, server: hy.example.com, port: 443, ports: 20000-30000, password: pw}
+  - {name: WG, type: wireguard, server: 1.1.1.1, port: 2408, ip: 172.16.0.2, private-key: YWFh, public-key: YmJi, reserved: [1, 2, 3]}
+  - {name: T, type: tuic, server: t.example.com, port: 443, uuid: 11111111-2222-3333-4444-555555555555, password: pw}
+proxy-providers:
+  p: {type: http, url: "https://sub.example.com/clash"}

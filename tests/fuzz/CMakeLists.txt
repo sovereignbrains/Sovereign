@@ -16,7 +16,7 @@ if (NOT SOVEREIGN_ENABLE_FUZZ)
   add_library(fuzz-targets-compile-check OBJECT
     client_hello_fuzz.cpp config_fuzz.cpp tray_input_fuzz.cpp control_fuzz.cpp)
   target_include_directories(fuzz-targets-compile-check PRIVATE ${fuzzIncludes})
-  target_link_libraries(fuzz-targets-compile-check PRIVATE sovereign_common)
+  target_link_libraries(fuzz-targets-compile-check PRIVATE sovereign_common yaml-cpp::yaml-cpp)
   return()
 endif()
 if (NOT MSVC)
@@ -51,8 +51,10 @@ sovereign_fuzz_target(fuzz-tray-input tray_input_fuzz.cpp
   "${CMAKE_SOURCE_DIR}/src/tray/config_sync.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/exit_ip.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/log_level.cpp"
-  "${CMAKE_SOURCE_DIR}/src/tray/share_links.cpp")
+  "${CMAKE_SOURCE_DIR}/src/tray/share_links.cpp"
+  "${CMAKE_SOURCE_DIR}/src/tray/import_formats.cpp")
 target_include_directories(fuzz-tray-input PRIVATE "${CMAKE_SOURCE_DIR}/src/tray")
+target_link_libraries(fuzz-tray-input PRIVATE yaml-cpp::yaml-cpp)
 
 # The service's control protocol: what any local user can send a SYSTEM service.
 sovereign_fuzz_target(fuzz-control control_fuzz.cpp

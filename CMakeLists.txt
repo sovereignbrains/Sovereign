@@ -69,6 +69,10 @@ endif()
 
 find_package(wil CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+# The tray's import: QR codes (from the clipboard, a file, the screen) and
+# Clash/Mihomo YAML subscriptions.
+find_package(ZXing CONFIG REQUIRED)
+find_package(yaml-cpp CONFIG REQUIRED)
 
 add_library(sovereign_common INTERFACE)
 target_include_directories(sovereign_common INTERFACE

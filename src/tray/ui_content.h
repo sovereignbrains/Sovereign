@@ -85,7 +85,8 @@ enum class UiCommand : std::uint8_t {
   KeepConfig,        // the edited config stays
   CarryOverEdits,    // the edits, merged into the waiting subscription
   RevertConfig,      // the config back to the subscription as it arrived
-  ImportFile,        // a config of the user's own from a .json file
+  ImportFile,        // a config, keys or a QR code's picture from a file
+  ScanScreen,        // QR codes on the screen
   CopySubscription,  // the subscription link onto the clipboard
   RemoveSubscription,  // no more refreshes; the config stays
   ToggleExitIp,        // show or hide the exit's address

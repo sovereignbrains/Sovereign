@@ -80,6 +80,30 @@ target_link_libraries(unit-share-links PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-share-links)
 add_test(NAME unit-share-links COMMAND unit-share-links)
 
+add_executable(unit-import-formats import_formats_test.cpp check.h)
+target_link_libraries(unit-import-formats PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-import-formats)
+add_test(NAME unit-import-formats COMMAND unit-import-formats)
+# The configs the import builds, through the pinned sing-box's own `check`
+# (SOVEREIGN_REFERENCE_SINGBOX, from tests/conformance; the build job has it).
+if (SOVEREIGN_REFERENCE_SINGBOX)
+  add_test(NAME import-configs-singbox-check
+           COMMAND unit-import-formats --check "${SOVEREIGN_REFERENCE_SINGBOX}")
+endif()
+
+# ZXing's writer draws the codes the reader gets back.
+add_executable(unit-qr-codes qr_codes_test.cpp check.h)
+target_link_libraries(unit-qr-codes PRIVATE sovereign_tray_lib ZXing::ZXing)
+sovereign_copy_asan_runtime(unit-qr-codes)
+add_test(NAME unit-qr-codes COMMAND unit-qr-codes)
+
+# The pictures QR codes are read from: a file always; the clipboard and the screen
+# with a desktop (CI, or SOVEREIGN_DESKTOP_TESTS=1 - see the test).
+add_executable(unit-capture capture_test.cpp check.h)
+target_link_libraries(unit-capture PRIVATE sovereign_tray_capture ZXing::ZXing)
+sovereign_copy_asan_runtime(unit-capture)
+add_test(NAME unit-capture COMMAND unit-capture)
+
 add_executable(unit-effective-config effective_config_test.cpp check.h)
 target_link_libraries(unit-effective-config PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-effective-config)

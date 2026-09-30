@@ -52,6 +52,7 @@
 
 #include "app_rules.h"
 #include "autostart.h"
+#include "capture.h"
 #include "config_sync.h"
 #include "delays.h"
 #include "effective_config.h"
@@ -610,16 +611,13 @@ class Worker {
     if (!fetched) {
       error = fetched.error();
     } else {
-      check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
-      // A server that answers with keys (a base64 list, as for V2Ray
-      // clients) instead of a sing-box config: the config is made from them.
-      if (!check.ok) {
-        if (auto built = sovereign::tray::BuildConfigFromLinks(sovereign::tray::RecognizeImport(fetched->body).links);
-            built.config) {
-          fetched->body = std::move(*built.config);
-          check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
-        }
+      // Whatever the server answers with - a sing-box config, keys (a base64
+      // list, as for V2Ray clients), Clash YAML, Xray JSON: when it isn't a
+      // sing-box config itself, the config is made from its servers.
+      if (auto made = sovereign::tray::ConfigFromSubscription(fetched->body); made.config) {
+        fetched->body = std::move(*made.config);
       }
+      check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
       error = check.error;
     }
     if (!error.empty()) {
@@ -1203,34 +1201,43 @@ void RequestLocalConfig(std::string text) {
   Wake();
 }
 
-// What was pasted or read from a file, whatever it is (share_links.h): a
-// subscription link, a whole config, or proxy keys - made into a config.
-void ImportText(const std::string& text) {
-  const auto balloon = [](const std::wstring& message) {
-    if (g_trayIcon != nullptr) {
-      g_trayIcon->Balloon(L"Sovereign", message);
-    }
-  };
+void ImportBalloon(const std::wstring& message) {
+  if (g_trayIcon != nullptr) {
+    g_trayIcon->Balloon(L"Sovereign", message);
+  }
+}
+
+constexpr const wchar_t* kNothingToImport =
+    L"Не нашёл ни ссылки на подписку, ни конфига, ни ключей (vless://, vmess://, trojan://, ss://, hy2://, tuic://, "
+    L"anytls://, wireguard://...), ни Clash/Xray-конфига.";
+
+// What was pasted, read from a file or from QR codes, whatever it is
+// (share_links.h): a subscription link, a whole config, servers in any of
+// the shapes and formats it knows - made into a config. False when nothing
+// in it was recognized; `quiet` leaves saying so to the caller, who may
+// look elsewhere (a picture next to the text on the clipboard).
+bool ImportText(const std::string& text, bool quiet = false) {
   if (text.size() > sovereign::tray::kMaxSubscriptionBytes) {
-    balloon(L"Слишком большой текст: больше 4 МБ.");
-    return;
+    ImportBalloon(L"Слишком большой текст: больше 4 МБ.");
+    return true;
   }
   const auto items = sovereign::tray::RecognizeImport(text);
   if (items.json) {
     RequestLocalConfig(*items.json);  // the worker checks it, and says why not
-    return;
+    return true;
   }
-  if (!items.links.empty()) {
-    const auto built = sovereign::tray::BuildConfigFromLinks(items.links);
+  if (items.Servers() || !items.skipped.empty()) {
+    const auto built = sovereign::tray::BuildConfig(items);
+    const std::wstring why = Widen(built.errors.empty() ? std::string() : built.errors.front());
     if (!built.config) {
-      balloon(L"Ни один ключ не подошёл: " + Widen(built.errors.empty() ? std::string() : built.errors.front()));
-      return;
+      ImportBalloon(L"Ни один сервер не подошёл: " + why);
+      return true;
     }
     if (!built.errors.empty()) {
-      balloon(std::format(L"Взято ключей: {} из {}. {}", built.servers, items.links.size(), Widen(built.errors.front())));
+      ImportBalloon(std::format(L"Взято серверов: {} из {}. {}", built.servers, built.found, why));
     }
     RequestLocalConfig(*built.config);
-    return;
+    return true;
   }
   for (const std::string& url : items.urls) {
     if (sovereign::tray::IsHttpsUrl(Widen(url))) {
@@ -1240,28 +1247,129 @@ void ImportText(const std::string& text) {
         shared.pendingImport = url;
       }
       Wake();
+      return true;
+    }
+  }
+  if (!items.urls.empty()) {
+    ImportBalloon(L"Подписка берётся только по https://, а тут " + Widen(items.urls.front()));
+    return true;
+  }
+  if (!items.jsonError.empty()) {
+    ImportBalloon(L"Конфиг с ошибкой: " + Widen(items.jsonError));
+    return true;
+  }
+  if (!quiet) {
+    ImportBalloon(kNothingToImport);
+  }
+  return false;
+}
+
+// What QR codes hold, together: several on one screen may be several keys.
+bool ImportQrCodes(const std::vector<std::string>& codes, bool quiet) {
+  std::string text;
+  for (const std::string& code : codes) {
+    text += (text.empty() ? "" : "\n") + code;
+  }
+  if (ImportText(text, /*quiet=*/true)) {
+    return true;
+  }
+  if (!quiet) {
+    std::wstring shown = Widen(codes.front());
+    if (shown.size() > 60) {
+      shown = shown.substr(0, 60) + L"...";
+    }
+    ImportBalloon(L"QR-код прочитан, но в нём не ключ и не ссылка: " + shown);
+  }
+  return false;
+}
+
+// A file: a picture's QR codes, or a text (a config, keys, YAML, a link).
+bool ImportPath(const std::wstring& path, bool quiet) {
+  if (sovereign::tray::IsImageFile(path)) {
+    const auto codes = sovereign::tray::ImageFileQrCodes(path);
+    if (codes.empty()) {
+      if (!quiet) {
+        ImportBalloon(L"В картинке не нашёл QR-кода.");
+      }
+      return false;
+    }
+    return ImportQrCodes(codes, quiet);
+  }
+  std::ifstream in(std::filesystem::path(path), std::ios::binary);
+  std::string text;
+  if (in) {
+    text.resize(sovereign::tray::kMaxSubscriptionBytes + 1);
+    in.read(text.data(), static_cast<std::streamsize>(text.size()));
+    text.resize(static_cast<std::size_t>(in.gcount()));
+  }
+  if (!in.eof() && !in) {
+    if (!quiet) {
+      ImportBalloon(L"Не удалось прочитать файл.");
+    }
+    return false;
+  }
+  return ImportText(text, quiet);
+}
+
+// "Paste": whatever the clipboard holds - text, a picture with QR codes
+// (a screenshot, an image copied from a browser or a messenger), files
+// copied in Explorer.
+void RequestImport(HWND window) {
+  const std::wstring text = ClipboardText(window);
+  // A path copied as text (Explorer's "Copy as path"): the file it names.
+  if (!text.empty() && text.find_first_of(L"\r\n") == std::wstring::npos) {
+    std::wstring path = text;
+    if (path.size() >= 2 && path.front() == L'"' && path.back() == L'"') {
+      path = path.substr(1, path.size() - 2);
+    }
+    std::error_code error;
+    if (std::filesystem::is_regular_file(std::filesystem::path(path), error)) {
+      ImportPath(path, /*quiet=*/false);
       return;
     }
   }
-  if (!items.jsonError.empty()) {
-    balloon(L"Конфиг с ошибкой: " + Widen(items.jsonError));
+  if (!text.empty() && ImportText(Narrow(text), /*quiet=*/true)) {
     return;
   }
-  balloon(L"Не нашёл ни https-ссылки на подписку, ни конфига sing-box, ни ключей (vless://, vmess://, trojan://, "
-          L"ss://, hysteria2://, tuic://).");
+  const bool picture = IsClipboardFormatAvailable(CF_BITMAP) != FALSE;
+  if (const auto codes = sovereign::tray::ClipboardQrCodes(window); !codes.empty()) {
+    ImportQrCodes(codes, /*quiet=*/false);
+    return;
+  }
+  for (const std::wstring& path : sovereign::tray::ClipboardFiles(window)) {
+    if (ImportPath(path, /*quiet=*/true)) {
+      return;
+    }
+  }
+  ImportBalloon(picture && text.empty() ? L"В картинке из буфера не нашёл QR-кода."
+                : text.empty() && !picture ? L"Буфер пуст: скопируйте ссылку, ключи, конфиг или картинку с QR-кодом."
+                                          : kNothingToImport);
 }
 
-// "Paste": whatever the clipboard holds.
-void RequestImport(HWND window) { ImportText(Narrow(ClipboardText(window))); }
+// "QR from the screen": every monitor as it is now - a code in a browser, a
+// messenger, a video.
+void ScanScreen() {
+  const HCURSOR before = SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32514)));  // IDC_WAIT
+  const auto codes = sovereign::tray::ScreenQrCodes();
+  SetCursor(before);
+  if (codes.empty()) {
+    ImportBalloon(L"На экране не нашёл QR-кода: откройте его так, чтобы он был виден целиком.");
+    return;
+  }
+  ImportQrCodes(codes, /*quiet=*/false);
+}
 
-// "File...": a config, or a text with keys or a link, from disk.
+// "File...": a config, keys, a link, YAML, or a picture with a QR code, from disk.
 void ImportFile(HWND window) {
   std::wstring path;
   try {
     const auto dialog = wil::CoCreateInstance<IFileOpenDialog>(CLSID_FileOpenDialog);
-    const std::array<COMDLG_FILTERSPEC, 2> filters{{{L"Конфиг или ключи", L"*.json;*.txt;*.conf"}, {L"Все файлы", L"*.*"}}};
+    const std::array<COMDLG_FILTERSPEC, 2> filters{
+        {{L"Конфиг, ключи или QR-код",
+          L"*.json;*.txt;*.conf;*.yaml;*.yml;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tif;*.tiff;*.heic"},
+         {L"Все файлы", L"*.*"}}};
     THROW_IF_FAILED(dialog->SetFileTypes(static_cast<UINT>(filters.size()), filters.data()));
-    THROW_IF_FAILED(dialog->SetTitle(L"Конфиг, ключи или ссылка для Sovereign"));
+    THROW_IF_FAILED(dialog->SetTitle(L"Конфиг, ключи, ссылка или картинка с QR-кодом для Sovereign"));
     const HRESULT shown = dialog->Show(window);
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
       return;
@@ -1276,20 +1384,7 @@ void ImportFile(HWND window) {
     LOG_CAUGHT_EXCEPTION_MSG("the file dialog failed");
     return;
   }
-  std::ifstream in(std::filesystem::path(path), std::ios::binary);
-  std::string text;
-  if (in) {
-    text.resize(sovereign::tray::kMaxSubscriptionBytes + 1);
-    in.read(text.data(), static_cast<std::streamsize>(text.size()));
-    text.resize(static_cast<std::size_t>(in.gcount()));
-  }
-  if (!in.eof() && !in) {
-    if (g_trayIcon != nullptr) {
-      g_trayIcon->Balloon(L"Sovereign", L"Не удалось прочитать файл.");
-    }
-    return;
-  }
-  ImportText(text);
+  ImportPath(path, /*quiet=*/false);
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
@@ -1703,6 +1798,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ImportFile:
       ImportFile(owner);
+      break;
+    case UiCommand::ScanScreen:
+      ScanScreen();
       break;
     case UiCommand::CopySubscription:
       if (!view.subscriptionUrl.empty() && CopyText(owner, Widen(view.subscriptionUrl)) && g_trayIcon != nullptr) {

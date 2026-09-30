@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "dependencies": [
     "wil",
-    "nlohmann-json"
+    "nlohmann-json",
+    "nu-book-zxing-cpp",
+    "yaml-cpp"
   ]
 }

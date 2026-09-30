@@ -102,6 +102,7 @@ constexpr const wchar_t* kGlyphSave = L"\xE74E";
 constexpr const wchar_t* kGlyphPause = L"\xE769";
 constexpr const wchar_t* kGlyphPlay = L"\xE768";
 constexpr const wchar_t* kGlyphFilter = L"\xE71C";
+constexpr const wchar_t* kGlyphQrCode = L"\xED14";
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -664,7 +665,7 @@ class Painter {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 108}));
       l.items.push_back(Make(Kind::Text, {x0 + 16, y + 12, x1 - 16, y + 36}, L"Нет подписки"));
       l.items.push_back(
-          Make(Kind::Muted, {x0 + 16, y + 36, x1 - 16, y + 56}, L"Скопируй ссылку на неё (https://…) или конфиг."));
+          Make(Kind::Muted, {x0 + 16, y + 36, x1 - 16, y + 56}, L"Скопируй ссылку, ключи, конфиг или QR-код."));
       l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, y + 64, x1 - 16, y + 64 + kButton},
                                     L"Вставить из буфера", kGlyphPaste, UiCommand::PasteSubscription));
       y += 108 + kGap;
@@ -849,29 +850,32 @@ class Painter {
                     x0, x1, y) + kGap;
     }
 
-    // Getting a config: the clipboard (a link or a config), a file.
+    // Getting a config: the clipboard (a link, keys, a config, a picture
+    // with a QR code, files), a file, QR codes on the screen.
     const float mid = (x0 + x1) / 2;
     l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Вставить из буфера", kGlyphPaste,
                                   UiCommand::PasteSubscription));
     y += kButton + 8;
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, c.hasSubscription ? mid - 4 : x1, y + kButton}, L"Файл .json…",
-                                  kGlyphFile, UiCommand::ImportFile));
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Файл…", kGlyphFile,
+                                  UiCommand::ImportFile));
+    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"QR с экрана", kGlyphQrCode,
+                                  UiCommand::ScanScreen));
     if (!c.hasSubscription) {
       return y + kButton;
     }
-    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
-                                  UiCommand::CopySubscription));
     y += kButton + 8;
 
     // The subscription itself.
-    const bool revert = c.configEdited || c.subscriptionWaiting;
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, revert ? mid - 4 : x1, y + kButton}, L"Обновить", kGlyphRefresh,
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Обновить", kGlyphRefresh,
                                   UiCommand::RefreshSubscription));
-    if (revert) {
-      l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
-                                    UiCommand::RevertConfig));
-    }
+    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
+                                  UiCommand::CopySubscription));
     y += kButton + 8;
+    if (c.configEdited || c.subscriptionWaiting) {
+      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
+                                    UiCommand::RevertConfig));
+      y += kButton + 8;
+    }
     l.items.push_back(CommandItem(Kind::DangerButton, {x0, y, x1, y + kButton}, L"Отключить подписку", kGlyphRemove,
                                   UiCommand::RemoveSubscription));
     return y + kButton;

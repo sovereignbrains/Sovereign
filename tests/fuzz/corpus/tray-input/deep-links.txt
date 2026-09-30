@@ -1,0 +1,10 @@
+sing-box://import-remote-profile?url=https%3A%2F%2Fsub.example.com%2Fs%3Ftoken%3Dabc#My%20Sub
+clash://install-config?url=https://c.example.com/a?b=1&c=2
+hiddify://import/https://h.example.com/sub#N
+sub://aHR0cHM6Ly9iNjQuZXhhbXBsZS5jb20vcw==#n
+v2rayng://install-config?url=trojan%3A%2F%2Fpw%40k.example.com%3A443%23K
+<a href="trojan://pw@a.example.com:443?type=ws&amp;path=%2Fx#A">A</a>
+vless%3A%2F%2Fid%40h.example.com%3A443%23N
+anytls://pw@any.example.com:443?sni=any.example.com#A socks://dTpw@1.2.3.4:1080#S naive+https://u:p@n.example.com#N
+hysteria://h.example.com:443?auth=s&upmbps=30&downmbps=100#H wireguard://YWFh@1.1.1.1:2408?publickey=YmJi&address=10.0.0.2&reserved=1,2,3#W
+ssh://root:pw@s.example.com#SSH snell://key@sn.example.com:443?version=4&obfs=http#Sn

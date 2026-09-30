@@ -76,12 +76,18 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   (void)IsHttpsUrl(std::wstring(text.begin(), text.end()));
   (void)UrlHost(std::wstring(text.begin(), text.end()));
 
-  // What the user pastes, or a QR code holds: the keys found must make a
-  // config the tray takes, and base64 must come back as it went.
+  // What the user pastes, or a QR code holds - keys, Clash YAML, Xray JSON,
+  // deep links: the servers found must make a config the tray takes, and
+  // base64 must come back as it went.
   const ImportItems items = RecognizeImport(text);
   (void)ParseShareLink(text);
-  if (const LinksConfig built = BuildConfigFromLinks(items.links); built.config) {
-    if (!CheckSubscriptionConfig(*built.config).ok || built.servers == 0) {
+  if (const LinksConfig built = BuildConfig(items); built.config) {
+    if (!CheckSubscriptionConfig(*built.config).ok || built.servers == 0 || built.servers > built.found) {
+      std::abort();
+    }
+  }
+  if (const LinksConfig subscription = ConfigFromSubscription(text); subscription.config) {
+    if (!nlohmann::json::parse(*subscription.config, nullptr, /*allow_exceptions=*/false).is_object()) {
       std::abort();
     }
   }

@@ -9,7 +9,9 @@
       "architecture": { "value": "x64", "strategy": "set" },
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "sovereign-x64",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/tools/vcpkg-triplets"
       }
     },
     {
@@ -28,6 +30,8 @@
       "binaryDir": "${sourceDir}/build/ci",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "sovereign-x64",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/tools/vcpkg-triplets",
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -39,14 +43,18 @@
       "binaryDir": "${sourceDir}/build/dist",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static"
       }
     },
     {
       "name": "ci-asan",
       "inherits": "ci",
       "binaryDir": "${sourceDir}/build/ci-asan",
-      "cacheVariables": { "SOVEREIGN_ENABLE_ASAN": "ON" }
+      "cacheVariables": {
+        "SOVEREIGN_ENABLE_ASAN": "ON",
+        "VCPKG_TARGET_TRIPLET": "sovereign-x64-asan"
+      }
     },
     {
       "name": "ci-analyze",
