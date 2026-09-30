@@ -26,6 +26,7 @@ add_link_options(-fsanitize=thread)
 
 add_library(control_plane STATIC
   "${root}/src/service/control.cpp"
+  "${root}/src/service/kill_switch.cpp"
   "${root}/src/service/log_ring.cpp")
 target_include_directories(control_plane PUBLIC
   "${root}/src/service" "${root}/src/common" "${root}/tests/unit")
