@@ -84,7 +84,9 @@ std::string Join(const std::vector<std::string>& items) {
   return out;
 }
 
-const Json& First(const Json& value) {
+// A member that's a list: its first item; not a list: the member itself.
+const Json& FirstOf(const Json& object, const char* key) {
+  const Json& value = Member(object, key);
   return value.is_array() && !value.empty() ? value.front() : value;
 }
 
@@ -465,8 +467,8 @@ std::string XrayOutbound(const Json& outbound, const std::string& remarks, LinkP
   const std::string tag = Str(outbound, "tag");
   link.name = !remarks.empty() ? remarks : tag;
   if (protocol == "vless" || protocol == "vmess") {
-    const Json& server = settings.contains("vnext") ? First(Member(settings, "vnext")) : settings;
-    const Json& user = server.contains("users") ? First(Member(server, "users")) : server;
+    const Json& server = settings.contains("vnext") ? FirstOf(settings, "vnext") : settings;
+    const Json& user = server.contains("users") ? FirstOf(server, "users") : server;
     link.scheme = protocol;
     link.host = Str(server, "address");
     link.port = Str(server, "port");
@@ -480,7 +482,7 @@ std::string XrayOutbound(const Json& outbound, const std::string& remarks, LinkP
     XrayStream(outbound, link);
     return {};
   }
-  const Json& server = settings.contains("servers") ? First(Member(settings, "servers")) : settings;
+  const Json& server = settings.contains("servers") ? FirstOf(settings, "servers") : settings;
   link.host = Str(server, "address");
   link.port = Str(server, "port");
   if (protocol == "trojan") {
@@ -495,7 +497,7 @@ std::string XrayOutbound(const Json& outbound, const std::string& remarks, LinkP
     return {};
   }
   if (protocol == "socks" || protocol == "http") {
-    const Json& user = First(Member(server, "users"));
+    const Json& user = FirstOf(server, "users");
     const std::string name = Str(user, "user");
     const std::string pass = Str(user, "pass");
     link.scheme = protocol == "socks" ? "socks5" : "http";
@@ -503,7 +505,7 @@ std::string XrayOutbound(const Json& outbound, const std::string& remarks, LinkP
     return {};
   }
   if (protocol == "wireguard") {
-    const Json& peer = First(Member(settings, "peers"));
+    const Json& peer = FirstOf(settings, "peers");
     const std::string endpoint = Str(peer, "endpoint");
     const std::size_t colon = endpoint.rfind(':');
     link.scheme = "wireguard";

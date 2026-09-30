@@ -50,9 +50,9 @@ struct Picture {
 };
 
 // `text`'s code, `scale` pixels a module: black modules on white, or on nothing.
-Picture Qr(const std::string& text, int scale, bool transparent) {
+Picture Qr(std::string_view text, int scale, bool transparent) {
   const ZXing::BitMatrix code =
-      ZXing::MultiFormatWriter(ZXing::BarcodeFormat::QRCode).setEncoding(ZXing::CharacterSet::UTF8).setMargin(4).encode(text, 0, 0);
+      ZXing::MultiFormatWriter(ZXing::BarcodeFormat::QRCode).setEncoding(ZXing::CharacterSet::UTF8).setMargin(4).encode(std::string(text), 0, 0);
   Picture picture;
   picture.width = code.width() * scale;
   picture.height = code.height() * scale;
@@ -104,10 +104,10 @@ bool EncodePng(const Picture& picture, IStream* stream) {
          SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
 }
 
-const std::string kFileCode = "trojan://pw@file.example.com:443#From a file";
-const std::string kBitmapCode = "vless://11111111-2222-3333-4444-555555555555@clip.example.com:443?security=tls#Clip";
-const std::string kPngCode = "https://sub.example.com/png-on-the-clipboard";
-const std::string kScreenCode = "hy2://pw@screen.example.com:443#On the screen";
+constexpr std::string_view kFileCode = "trojan://pw@file.example.com:443#From a file";
+constexpr std::string_view kBitmapCode = "vless://11111111-2222-3333-4444-555555555555@clip.example.com:443?security=tls#Clip";
+constexpr std::string_view kPngCode = "https://sub.example.com/png-on-the-clipboard";
+constexpr std::string_view kScreenCode = "hy2://pw@screen.example.com:443#On the screen";
 
 std::filesystem::path TempFile(const wchar_t* name) {
   return std::filesystem::temp_directory_path() / name;
@@ -124,7 +124,7 @@ void TestImageFile() {
   CHECK(IsImageFile(path.wstring()));
   CHECK(IsImageFile(L"C:\\x\\QR.JPG"));
   CHECK(!IsImageFile(L"C:\\x\\config.json"));
-  CHECK(ImageFileQrCodes(path.wstring()) == std::vector<std::string>({kFileCode}));
+  CHECK(ImageFileQrCodes(path.wstring()) == std::vector<std::string>({std::string(kFileCode)}));
   CHECK(ImageFileQrCodes(TempFile(L"sovereign-no-such-file.png").wstring()).empty());
   std::filesystem::remove(path);
 }
@@ -181,7 +181,7 @@ void TestClipboard(HWND owner) {
   if (Put(owner, CF_BITMAP, bitmap.get())) {
     bitmap.release();  // the clipboard's now
   }
-  CHECK(ClipboardQrCodes(owner) == std::vector<std::string>({kBitmapCode}));
+  CHECK(ClipboardQrCodes(owner) == std::vector<std::string>({std::string(kBitmapCode)}));
 
   // Only the "PNG" format, the code on a transparent background.
   wil::com_ptr<IStream> stream;
@@ -200,7 +200,7 @@ void TestClipboard(HWND owner) {
   if (Put(owner, RegisterClipboardFormatW(L"PNG"), png.get())) {
     png.release();
   }
-  CHECK(ClipboardQrCodes(owner) == std::vector<std::string>({kPngCode}));
+  CHECK(ClipboardQrCodes(owner) == std::vector<std::string>({std::string(kPngCode)}));
 
   // Files copied in Explorer.
   const std::wstring path = TempFile(L"sovereign-keys.txt").wstring();

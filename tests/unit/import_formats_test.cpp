@@ -7,10 +7,14 @@
 // the pinned sing-box's `check` - the configs must be ones sing-box takes,
 // not just JSON that looks right (ctest: import-configs-singbox-check).
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -514,11 +518,19 @@ int CheckWithSingBox(const std::string& singBox) {
   for (const auto& [name, config] : Built()) {
     const auto path = dir / (name + ".json");
     std::ofstream(path, std::ios::binary) << config;
-    // cmd /c takes the outer quotes off.
-    const std::string command = "\"\"" + singBox + "\" check -c \"" + path.string() + "\"\"";
-    const int result = std::system(command.c_str());  // NOLINT(concurrency-mt-unsafe) - one thread
-    std::cout << (result == 0 ? "ok     " : "FAILED ") << name << "\n";
-    if (result != 0) {
+    std::wstring command = L"\"" + std::filesystem::path(singBox).wstring() + L"\" check -c \"" + path.wstring() + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    DWORD code = 1;
+    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
+      WaitForSingleObject(process.hProcess, INFINITE);
+      GetExitCodeProcess(process.hProcess, &code);
+      CloseHandle(process.hThread);
+      CloseHandle(process.hProcess);
+    }
+    std::cout << (code == 0 ? "ok     " : "FAILED ") << name << "\n";
+    if (code != 0) {
       ++failed;
     }
   }

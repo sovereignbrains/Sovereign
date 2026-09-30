@@ -47,9 +47,9 @@ struct Canvas {
   }
 
   // The code for `text` at (left, top), `scale` pixels a module, with its quiet zone.
-  void Draw(const std::string& text, int left, int top, int scale, bool inverted = false) {
+  void Draw(std::string_view text, int left, int top, int scale, bool inverted = false) {
     const ZXing::BitMatrix code =
-        ZXing::MultiFormatWriter(ZXing::BarcodeFormat::QRCode).setEncoding(ZXing::CharacterSet::UTF8).setMargin(4).encode(text, 0, 0);
+        ZXing::MultiFormatWriter(ZXing::BarcodeFormat::QRCode).setEncoding(ZXing::CharacterSet::UTF8).setMargin(4).encode(std::string(text), 0, 0);
     const std::uint8_t dark = inverted ? 240 : 10;
     const std::uint8_t light = inverted ? 20 : 250;
     for (int y = 0; y < code.height() * scale; ++y) {
@@ -69,17 +69,17 @@ std::vector<std::string> Sorted(std::vector<std::string> texts) {
   return texts;
 }
 
-const std::string kVless =
+constexpr std::string_view kVless =
     "vless://11111111-2222-3333-4444-555555555555@nl.example.com:443?security=reality&sni=www.microsoft.com"
     "&fp=chrome&pbk=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE&sid=6ba85179e30d4fc2&flow=xtls-rprx-vision"
     "#\xF0\x9F\x87\xB3\xF0\x9F\x87\xB1 Нидерланды";
-const std::string kSub = "https://sub.example.com/api/v1/client/subscribe?token=0123456789abcdef";
+constexpr std::string_view kSub = "https://sub.example.com/api/v1/client/subscribe?token=0123456789abcdef";
 
 void TestOne() {
   Canvas canvas(800, 600, 0);
   canvas.Draw(kVless, 300, 150, 3);
   const auto texts = ReadQrCodes(canvas.Image());
-  CHECK(texts == std::vector<std::string>({kVless}));
+  CHECK(texts == std::vector<std::string>({std::string(kVless)}));
   // What it holds is a key the import takes.
   const auto items = sovereign::tray::RecognizeImport(texts.empty() ? std::string() : texts.front());
   CHECK(items.links.size() == 1);
@@ -92,13 +92,13 @@ void TestSeveral() {
   Canvas canvas(1920, 1080, 12);
   canvas.Draw(kVless, 100, 200, 4);
   canvas.Draw(kSub, 1300, 500, 5);
-  CHECK(Sorted(ReadQrCodes(canvas.Image())) == Sorted({kVless, kSub}));
+  CHECK(Sorted(ReadQrCodes(canvas.Image())) == Sorted({std::string(kVless), std::string(kSub)}));
 }
 
 void TestInverted() {
   Canvas canvas(600, 600, 0);
   canvas.Draw(kSub, 100, 100, 5, /*inverted=*/true);  // a dark theme's code
-  CHECK(ReadQrCodes(canvas.Image()) == std::vector<std::string>({kSub}));
+  CHECK(ReadQrCodes(canvas.Image()) == std::vector<std::string>({std::string(kSub)}));
 }
 
 void TestNothing() {
