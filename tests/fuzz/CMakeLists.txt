@@ -52,7 +52,8 @@ sovereign_fuzz_target(fuzz-tray-input tray_input_fuzz.cpp
   "${CMAKE_SOURCE_DIR}/src/tray/exit_ip.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/log_level.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/share_links.cpp"
-  "${CMAKE_SOURCE_DIR}/src/tray/import_formats.cpp")
+  "${CMAKE_SOURCE_DIR}/src/tray/import_formats.cpp"
+  "${CMAKE_SOURCE_DIR}/src/tray/combine.cpp")
 target_include_directories(fuzz-tray-input PRIVATE "${CMAKE_SOURCE_DIR}/src/tray")
 target_link_libraries(fuzz-tray-input PRIVATE yaml-cpp::yaml-cpp)
 

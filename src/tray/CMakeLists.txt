@@ -35,6 +35,8 @@ add_library(sovereign_tray_lib STATIC
   share_links.h
   profiles.cpp
   profiles.h
+  combine.cpp
+  combine.h
   import_formats.cpp
   import_formats.h
   qr_codes.cpp

@@ -54,6 +54,7 @@ constexpr float kPad = 16;         // the page's margins
 constexpr float kMaxPage = 560;    // wider windows keep the page at this, centered
 constexpr float kRow = 44;         // a list row
 constexpr float kProfileRow = 54;  // a configuration's row: its name and its state
+constexpr float kServerRow = 60;   // a server on a configuration's page: its name, protocol and switch
 constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
@@ -105,6 +106,8 @@ constexpr const wchar_t* kGlyphPlay = L"\xE768";
 constexpr const wchar_t* kGlyphFilter = L"\xE71C";
 constexpr const wchar_t* kGlyphQrCode = L"\xED14";
 constexpr const wchar_t* kGlyphDelete = L"\xE74D";
+constexpr const wchar_t* kGlyphRename = L"\xE8AC";
+constexpr const wchar_t* kGlyphClock = L"\xE917";
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -129,14 +132,15 @@ enum class Kind : std::uint8_t {
   IconButton,    // a square button with a glyph; `checked`: a dot on it (something new there)
   Switch,        // a row with a toggle switch
   Choice,        // a pickable row with a radio mark
-  ProfileRow,    // a configuration: radio mark, name, and its state under it (`warn`: in red)
+  ProfileRow,    // a configuration: name, its state under it (`warn`: in red), dimmed when off (!`checked`)
+  Toggle,        // just a switch, no text (`checked`: on)
   Segment,       // half of a two-way switch
   Chip,          // an on/off filter: tinted when on
   AppRow,        // a program in the per-app list
   LogBox,        // the log's lines
 };
 
-enum class ItemAction : std::uint8_t { None, Command, Page, ToggleLevel, PauseLogs, SaveLogs };
+enum class ItemAction : std::uint8_t { None, Command, Page, OpenProfile, ToggleLevel, PauseLogs, SaveLogs };
 
 struct Item {
   Kind kind = Kind::Text;
@@ -147,6 +151,7 @@ struct Item {
   ItemAction action = ItemAction::None;
   UiCommand command = UiCommand::Toggle;
   int index = 0;
+  int sub = 0;  // a second index for the command: a server within a configuration
   bool checked = false;
   bool enabled = true;
   bool warn = false;    // something's wrong with it (a ProfileRow's refresh failed)
@@ -302,8 +307,10 @@ std::wstring StateDetailBase(const UiContent& c) {
     case Display::ServiceDown:
       return L"sovereign-core не отвечает. Установи службу от администратора: sovereign-core.exe --install";
     case Display::Off:
-      return c.hasSubscription || !c.protocols.empty() ? L"Кнопка внизу — подключиться."
-                                                       : L"Сначала добавь подписку.";
+      if (c.hasConfig) {
+        return L"Кнопка внизу — подключиться.";
+      }
+      return c.profiles.empty() ? L"Сначала добавь подписку." : L"Включи конфигурацию: " + c.combineError;
     case Display::Starting: return L"Запускается ядро sing-box…";
     case Display::On:
       return std::format(L"↓ {}   ↑ {}   ·   соединений: {}", FormatRate(c.down), FormatRate(c.up), c.connections);
@@ -312,28 +319,33 @@ std::wstring StateDetailBase(const UiContent& c) {
   return {};
 }
 
-// The subscription's line on the overview.
-std::wstring SubscriptionLine(const UiContent& c) {
-  const bool known = c.activeProfile >= 0 && static_cast<std::size_t>(c.activeProfile) < c.profiles.size();
-  if (!known) {
-    return L"нет — добавь ссылку или ключи";
-  }
-  std::wstring line = c.profiles[static_cast<std::size_t>(c.activeProfile)].name;
-  if (c.profiles.size() > 1) {
-    line += std::format(L" (из {})", c.profiles.size());
-  }
-  if (!c.hasSubscription) {
-    return line + L" · свой конфиг";
-  }
-  if (c.subscriptionWaiting) {
-    return line + L" · новая версия ждёт";
-  }
-  if (!c.subscriptionError.empty()) {
-    return line + L" · ошибка обновления";
-  }
-  return line + L" · " + c.subscription;
+bool AnyWaiting(const UiContent& c) {
+  return std::any_of(c.profiles.begin(), c.profiles.end(), [](const UiProfile& p) { return p.waiting; });
 }
 
+// The configurations' line on the overview: which are on.
+std::wstring SubscriptionLine(const UiContent& c) {
+  if (c.profiles.empty()) {
+    return L"нет — добавь ссылку или ключи";
+  }
+  std::vector<const UiProfile*> on;
+  for (const UiProfile& p : c.profiles) {
+    if (p.enabled) {
+      on.push_back(&p);
+    }
+  }
+  if (on.empty()) {
+    return L"все выключены";
+  }
+  std::wstring line = on.size() == 1 ? on.front()->name : std::format(L"включено {} из {}", on.size(), c.profiles.size());
+  if (AnyWaiting(c)) {
+    return line + L" · новая версия ждёт";
+  }
+  if (std::any_of(on.begin(), on.end(), [](const UiProfile* p) { return p->failed; })) {
+    return line + L" · ошибка обновления";
+  }
+  return on.size() == 1 && on.front()->subscription ? line + L" · " + on.front()->updated : line;
+}
 std::wstring AppsLine(const UiContent& c) {
   if (c.apps.empty()) {
     return c.appsInclude ? L"только список — он пуст" : L"всё через прокси";
@@ -392,7 +404,7 @@ class Painter {
 
   // The layout of `page` in a client area of `width` x `height` DIPs, the
   // page scrolled by `scroll` (clamped here).
-  Layout Build(const UiContent& c, UiPage page, float width, float height, float& scroll,
+  Layout Build(const UiContent& c, UiPage page, const std::string& profile, float width, float height, float& scroll,
                const LogState& logState) const {
     Layout l;
     const float pageWidth = std::min(kMaxPage, std::max(280.0f, width - 2 * kPad));
@@ -414,6 +426,7 @@ class Painter {
       case UiPage::Apps: y = Apps(l, c, x0, x1, y); break;
       case UiPage::Logs: y = Logs(l, c, logState, x0, x1, y, height); break;
       case UiPage::Settings: y = Settings(l, c, x0, x1, y); break;
+      case UiPage::Profile: y = ProfilePage(l, c, profile, x0, x1, y); break;
     }
     l.contentHeight = y + kPad;
 
@@ -611,10 +624,11 @@ class Painter {
   /* ---- layout ---- */
 
   // A page's top: back to the overview, the title, and a wrapped subtitle.
-  float PageTitle(Layout& l, const wchar_t* title, const wchar_t* subtitle, float x0, float x1, float y) const {
+  float PageTitle(Layout& l, const wchar_t* title, const wchar_t* subtitle, float x0, float x1, float y,
+                  UiPage backTo = UiPage::Overview) const {
     Item back = Make(Kind::IconButton, {x0 - 6, y, x0 + 30, y + 36}, L"Назад", kGlyphBack);
     back.action = ItemAction::Page;
-    back.index = static_cast<int>(UiPage::Overview);
+    back.index = static_cast<int>(backTo);
     l.items.push_back(std::move(back));
     l.items.push_back(Make(Kind::Title, {x0 + 38, y, x1, y + 36}, title));
     y += 36 + 8;
@@ -663,7 +677,7 @@ class Painter {
       l.items.push_back(std::move(update));
       y += 40 + 8;
     }
-    if (c.subscriptionWaiting) {
+    if (AnyWaiting(c)) {
       Item waiting = Make(Kind::Banner, {x0, y, x1, y + 40}, L"Новая версия подписки — выбрать", kGlyphSync);
       waiting.action = ItemAction::Page;
       waiting.index = static_cast<int>(UiPage::Subscription);
@@ -672,7 +686,7 @@ class Painter {
     }
 
     // Nothing to connect with yet: the way to fix that comes first.
-    if (!c.hasSubscription && !c.hasConfig) {
+    if (c.profiles.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 108}));
       l.items.push_back(Make(Kind::Text, {x0 + 16, y + 12, x1 - 16, y + 36}, L"Нет конфигурации"));
       l.items.push_back(
@@ -696,7 +710,7 @@ class Painter {
       t.checked = dot;
       l.items.push_back(std::move(t));
     };
-    tile(0, kGlyphSync, L"Конфигурации", SubscriptionLine(c), UiPage::Subscription, c.subscriptionWaiting);
+    tile(0, kGlyphSync, L"Конфигурации", SubscriptionLine(c), UiPage::Subscription, AnyWaiting(c));
     tile(1, kGlyphProgram, L"Приложения", AppsLine(c), UiPage::Apps, false);
     tile(2, kGlyphLog, L"Журнал", c.display == Display::Error ? L"есть ошибка" : L"ядро и трей", UiPage::Logs,
          c.display == Display::Error);
@@ -796,7 +810,7 @@ class Painter {
     if (c.protocols.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
       l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56},
-                             c.hasSubscription || c.hasConfig ? L"В конфиге нет выбора сервера." : L"Нет подписки."));
+                             c.hasConfig ? L"В конфиге нет выбора сервера." : L"Ни одна конфигурация не включена."));
       return y + 56;
     }
     const float h = static_cast<float>(c.protocols.size()) * kRow;
@@ -816,11 +830,12 @@ class Painter {
 
   float Subscription(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Конфигурации",
-                  L"Подписки, ключи и свои конфиги. Работает отмеченная — нажми на другую, чтобы переключиться. "
-                  L"Новая добавляется рядом и ничего не заменяет.",
+                  L"Подписки, ключи и свои конфиги. Включённые работают вместе: их серверы — в общем списке "
+                  L"«Серверы», маршруты и DNS — от первой включённой. Нажми на конфигурацию, чтобы "
+                  L"переименовать её, настроить обновление или выключить отдельные серверы.",
                   x0, x1, y);
 
-    // Every configuration: a click uses it, the bin removes it.
+    // Every configuration: the switch turns it on and off, a click opens it.
     if (c.profiles.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
       l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56},
@@ -830,23 +845,33 @@ class Painter {
       const float h = static_cast<float>(c.profiles.size()) * kProfileRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
       for (std::size_t i = 0; i < c.profiles.size(); ++i) {
+        const UiProfile& p = c.profiles[i];
         const float top = y + static_cast<float>(i) * kProfileRow;
         if (i > 0) {
           l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
         }
-        Item row = CommandItem(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 16 - kButton, top + kProfileRow - 3},
-                               c.profiles[i].name, nullptr, UiCommand::ActivateProfile, static_cast<int>(i));
-        row.detail = c.profiles[i].detail;
-        row.checked = static_cast<int>(i) == c.activeProfile;
-        row.warn = c.profiles[i].failed;
+        Item row = Make(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 72, top + kProfileRow - 3}, p.name, kGlyphChevron);
+        row.action = ItemAction::OpenProfile;
+        row.index = static_cast<int>(i);
+        row.detail = p.detail;
+        row.checked = p.enabled;
+        row.warn = p.failed;
         l.items.push_back(std::move(row));
-        const float bt = top + (kProfileRow - kButton) / 2;
-        l.items.push_back(CommandItem(Kind::IconButton, {x1 - 12 - kButton, bt, x1 - 12, bt + kButton}, L"Удалить",
-                                      kGlyphDelete, UiCommand::RemoveProfile, static_cast<int>(i)));
+        Item toggle = CommandItem(Kind::Toggle, {x1 - 68, top + 3, x1 - 4, top + kProfileRow - 3},
+                                  p.enabled ? L"Выключить" : L"Включить", nullptr, UiCommand::ToggleProfile,
+                                  static_cast<int>(i));
+        toggle.checked = p.enabled;
+        l.items.push_back(std::move(toggle));
       }
       y += h;
     }
     y += kGap;
+    if (!c.profiles.empty() && !c.hasConfig && !c.combineError.empty()) {
+      y = Paragraph(l, Kind::ErrorText, L"Нечего запускать: " + c.combineError, x0, x1, y) + kGap;
+    }
+    for (const std::wstring& note : c.combineNotes) {
+      y = Paragraph(l, Kind::Caption, L"Не вошло: " + note, x0, x1, y) + 6;
+    }
 
     // Adding one: the clipboard (a link, keys, a config, a picture with a QR
     // code, files), a file, QR codes on the screen.
@@ -858,79 +883,130 @@ class Painter {
                                   UiCommand::ImportFile));
     l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"QR с экрана", kGlyphQrCode,
                                   UiCommand::ScanScreen));
-    y += kButton;
-    if (c.activeProfile < 0 || static_cast<std::size_t>(c.activeProfile) >= c.profiles.size()) {
-      return y;
-    }
+    return y + kButton;
+  }
 
-    // The one in use.
-    y += kGap + 8;
-    l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28},
-                           L"В работе: " + c.profiles[static_cast<std::size_t>(c.activeProfile)].name));
-    y += 28 + 8;
-    std::vector<std::pair<const wchar_t*, std::wstring>> fields;
-    if (c.hasSubscription) {
-      fields = {
-          {L"Обновлена", c.subscriptionError.empty() ? c.subscription : std::wstring(L"не удалась")},
-          {L"Сервер", c.subscriptionHost.empty() ? std::wstring(L"—") : c.subscriptionHost},
-          {L"Интервал", c.updateHours > 0 ? std::format(L"каждые {} ч", c.updateHours) : std::wstring(L"—")},
-          {L"Конфиг", c.configEdited ? L"изменён тобой" : L"как в подписке"},
+  // One configuration: its name, on/off, its subscription's refreshing, a
+  // waiting version, and its servers - each can be switched off.
+  float ProfilePage(Layout& l, const UiContent& c, const std::string& id, float x0, float x1, float y) const {
+    const auto found = std::find_if(c.profiles.begin(), c.profiles.end(), [&](const UiProfile& p) { return p.id == id; });
+    if (found == c.profiles.end()) {
+      y = PageTitle(l, L"Конфигурация", nullptr, x0, x1, y, UiPage::Subscription);
+      l.items.push_back(Make(Kind::Muted, {x0, y, x1, y + 24}, L"Её больше нет."));
+      return y + 24;
+    }
+    const UiProfile& p = *found;
+    const int index = static_cast<int>(found - c.profiles.begin());
+    y = PageTitle(l, p.name.c_str(), nullptr, x0, x1, y, UiPage::Subscription);
+    const float mid = (x0 + x1) / 2;
+
+    const float cardHeight = p.subscription ? 128.0f : 64.0f;
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + cardHeight}));
+    Item on = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 60}, L"Включена", nullptr, UiCommand::ToggleProfile,
+                          index);
+    on.detail = p.enabled ? L"её серверы — в общем списке" : L"не участвует в подключении";
+    on.checked = p.enabled;
+    l.items.push_back(std::move(on));
+    if (p.subscription) {
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + 64, x1 - 16, y + 65}));
+      Item autoUpdate = CommandItem(Kind::Switch, {x0 + 4, y + 68, x1 - 4, y + 124}, L"Автообновление", nullptr,
+                                    UiCommand::ToggleAutoUpdate, index);
+      autoUpdate.detail = p.autoUpdate ? p.period : L"только кнопкой «Обновить»";
+      autoUpdate.checked = p.autoUpdate;
+      l.items.push_back(std::move(autoUpdate));
+    }
+    y += cardHeight + 8;    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Переименовать", kGlyphRename,
+                                  UiCommand::RenameProfile, index));
+    if (p.subscription) {
+      l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Период…", kGlyphClock,
+                                    UiCommand::ChooseRefreshPeriod, index));
+    }
+    y += kButton + kGap;
+
+    if (p.subscription) {
+      const std::vector<std::pair<const wchar_t*, std::wstring>> fields = {
+          {L"Обновлена", p.failed ? std::wstring(L"не удалась") : p.updated},
+          {L"Сервер", p.host.empty() ? std::wstring(L"—") : p.host},
+          {L"Конфиг", p.edited ? L"изменён тобой" : L"как в подписке"},
       };
-    } else {
-      fields = {{L"Конфиг", c.hasConfig ? L"свой, без подписки" : L"нет"}};
-    }
-    const float h = static_cast<float>(fields.size()) * kRow;
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-    for (std::size_t i = 0; i < fields.size(); ++i) {
-      const float top = y + static_cast<float>(i) * kRow;
-      if (i > 0) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      const float h = static_cast<float>(fields.size()) * kRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      for (std::size_t i = 0; i < fields.size(); ++i) {
+        const float top = y + static_cast<float>(i) * kRow;
+        if (i > 0) {
+          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        }
+        Item field = Make(Kind::Field, {x0 + 16, top, x1 - 16, top + kRow}, fields[i].first);
+        field.detail = fields[i].second;
+        l.items.push_back(std::move(field));
       }
-      Item field = Make(Kind::Field, {x0 + 16, top, x1 - 16, top + kRow}, fields[i].first);
-      field.detail = fields[i].second;
-      l.items.push_back(std::move(field));
-    }
-    y += h + kGap;
-
-    if (!c.subscriptionError.empty()) {
-      y = Paragraph(l, Kind::ErrorText, c.subscriptionError, x0, x1, y) + kGap;
-    }
-    if (c.subscriptionWaiting) {
-      y = Waiting(l, c, x0, x1, y) + kGap;
-    }
-    if (!c.mergeNotes.empty()) {
-      std::wstring where;
-      for (std::size_t i = 0; i < c.mergeNotes.size() && i < 5; ++i) {
-        where += (i > 0 ? L", " : L"") + c.mergeNotes[i];
+      y += h + kGap;
+      if (!p.error.empty()) {
+        y = Paragraph(l, Kind::ErrorText, p.error, x0, x1, y) + kGap;
       }
-      if (c.mergeNotes.size() > 5) {
-        where += std::format(L" и ещё {}", c.mergeNotes.size() - 5);
+      if (p.waiting) {
+        y = Waiting(l, p, index, x0, x1, y) + kGap;
       }
-      y = Paragraph(l, Kind::Wrap, L"Правки перенесены. Там, где вы с подпиской изменили одно и то же, осталось твоё — проверь: " + where,
-                    x0, x1, y) + kGap;
-    }
-    if (!c.hasSubscription) {
-      return y - kGap;
-    }
-
-    // Its subscription.
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Обновить", kGlyphRefresh,
-                                  UiCommand::RefreshSubscription));
-    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
-                                  UiCommand::CopySubscription));
-    y += kButton + 8;
-    if (c.configEdited || c.subscriptionWaiting) {
-      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
-                                    UiCommand::RevertConfig));
+      if (!p.mergeNotes.empty()) {
+        std::wstring where;
+        for (std::size_t i = 0; i < p.mergeNotes.size() && i < 5; ++i) {
+          where += (i > 0 ? L", " : L"") + p.mergeNotes[i];
+        }
+        if (p.mergeNotes.size() > 5) {
+          where += std::format(L" и ещё {}", p.mergeNotes.size() - 5);
+        }
+        y = Paragraph(l, Kind::Wrap,
+                      L"Правки перенесены. Там, где вы с подпиской изменили одно и то же, осталось твоё — проверь: " + where,
+                      x0, x1, y) + kGap;
+      }
+      l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Обновить", kGlyphRefresh,
+                                    UiCommand::RefreshProfile, index));
+      l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
+                                    UiCommand::CopyProfileLink, index));
       y += kButton + 8;
+      if (p.edited || p.waiting) {
+        l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
+                                      UiCommand::RevertConfig, index));
+        y += kButton + 8;
+      }
+      y += kGap - 8;
     }
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Больше не обновлять", kGlyphPause,
-                                  UiCommand::RemoveSubscription));
+
+    // Its servers: a switch each.
+    const auto off = std::count_if(p.servers.begin(), p.servers.end(), [](const UiServer& s) { return !s.enabled; });
+    l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28},
+                           off > 0 ? std::format(L"Серверы: {}, выключено {}", p.servers.size(), off)
+                                   : std::format(L"Серверы: {}", p.servers.size())));
+    y += 28 + 8;
+    if (p.servers.empty()) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
+      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56}, L"В конфиге нет серверов."));
+      y += 56;
+    } else {
+      const float h = static_cast<float>(p.servers.size()) * kServerRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      for (std::size_t i = 0; i < p.servers.size(); ++i) {
+        const float top = y + static_cast<float>(i) * kServerRow;
+        if (i > 0) {
+          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        }
+        Item server = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kServerRow - 2}, p.servers[i].name,
+                                  nullptr, UiCommand::ToggleServer, index);
+        server.sub = static_cast<int>(i);
+        server.detail = p.servers[i].label;
+        server.checked = p.servers[i].enabled;
+        l.items.push_back(std::move(server));
+      }
+      y += h;
+    }
+    y += kGap;
+    l.items.push_back(CommandItem(Kind::DangerButton, {x0, y, x1, y + kButton}, L"Удалить конфигурацию", kGlyphDelete,
+                                  UiCommand::RemoveProfile, index));
     return y + kButton;
   }
 
   // A newer subscription met the user's edits: the three ways on.
-  float Waiting(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+  float Waiting(Layout& l, const UiProfile& p, int index, float x0, float x1, float y) const {
     const float left = x0 + 16;
     const float right = x1 - 16;
     const wchar_t* explain = L"В конфиге есть твои правки, поэтому он не заменён сам — пока работает прежний. "
@@ -939,7 +1015,7 @@ class Painter {
     const float textHeight = TextHeight(explain, wrap_.get(), right - left);
     const bool inRow = right - left >= 3 * 150 + 2 * 12;
     const float buttons = inRow ? kButton : 3 * kButton + 2 * 8;
-    const std::wstring& error = c.choiceError;
+    const std::wstring& error = p.choiceError;
     const float errorHeight = error.empty() ? 0 : TextHeight(error, wrap_.get(), right - left - 28) + 12;
     const float h = 16 + 28 + 6 + textHeight + 16 + errorHeight + buttons + 20;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
@@ -961,7 +1037,7 @@ class Painter {
       const auto& [kind, label, glyph, command] = choices[i];
       const float bx = inRow ? left + static_cast<float>(i) * (width + 12) : left;
       const float by = inRow ? top : top + static_cast<float>(i) * (kButton + 8);
-      l.items.push_back(CommandItem(kind, {bx, by, bx + width, by + kButton}, label, glyph, command));
+      l.items.push_back(CommandItem(kind, {bx, by, bx + width, by + kButton}, label, glyph, command, index));
     }
     return y + h;
   }
@@ -1289,17 +1365,20 @@ class Painter {
         if (hoverAlpha > 0) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
         }
-        const D2D1_POINT_2F dot{r.left + 22, (r.top + r.bottom) / 2};
-        if (it.checked) {
-          k.t->FillEllipse(D2D1::Ellipse(dot, 9, 9), k.Color(accent));
-          k.t->FillEllipse(D2D1::Ellipse(dot, 4, 4), k.Color(Rgb(12, 20, 36)));
-        } else {
-          k.t->DrawEllipse(D2D1::Ellipse(dot, 8.5f, 8.5f), k.Color(secondary), 1.2f);
-        }
         const float mid = (r.top + r.bottom) / 2;
-        k.Text(it.text, body_.get(), {r.left + 42, r.top + 2, r.right - 8, mid + 1}, primary);
-        k.Text(it.detail, caption_.get(), {r.left + 42, mid + 1, r.right - 8, r.bottom - 2},
+        k.Text(it.text, body_.get(), {r.left + 14, r.top + 2, r.right - 28, mid + 1}, it.checked ? primary : secondary);
+        k.Text(it.detail, caption_.get(), {r.left + 14, mid + 1, r.right - 28, r.bottom - 2},
                it.warn ? FromColorRef(ui::kDanger) : secondary);
+        k.Text(it.glyph, glyph_.get(), {r.right - 26, r.top, r.right - 4, r.bottom}, secondary);
+        break;
+      }
+      case Kind::Toggle: {
+        if (hoverAlpha > 0) {
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+        }
+        const float cx = (r.left + r.right) / 2;
+        const float cy = (r.top + r.bottom) / 2;
+        DrawSwitch(k, {cx - 20, cy - 10, cx + 20, cy + 10}, it.checked);
         break;
       }
       case Kind::Segment: {
@@ -1532,6 +1611,7 @@ struct MainWindow::Impl {
 
   UiContent content;
   UiPage page = UiPage::Overview;
+  std::string openProfile;  // the id of the configuration UiPage::Profile shows
   float scroll = 0;
   Layout layout;
   Interaction in;
@@ -1661,7 +1741,7 @@ struct MainWindow::Impl {
     if (log.HasSelection()) {
       state.detail = log.Line(log.caret);
     }
-    layout = painter.Build(content, page, size.width, size.height, scroll, state);
+    layout = painter.Build(content, page, openProfile, size.width, size.height, scroll, state);
     ClampLog();
     in.hover = mouse ? HitAt(*mouse) : -1;
     if (in.focus >= static_cast<int>(layout.items.size()) ||
@@ -1685,6 +1765,12 @@ struct MainWindow::Impl {
     switch (item.action) {
       case ItemAction::None: return;
       case ItemAction::Page: Go(static_cast<UiPage>(item.index)); return;
+      case ItemAction::OpenProfile:
+        if (item.index >= 0 && static_cast<std::size_t>(item.index) < content.profiles.size()) {
+          openProfile = content.profiles[static_cast<std::size_t>(item.index)].id;
+          Go(UiPage::Profile);
+        }
+        return;
       case ItemAction::ToggleLevel:
         log.levels[static_cast<std::size_t>(item.index)] = !log.levels[static_cast<std::size_t>(item.index)];
         log.anchor = log.caret = -1;  // positions among the shown: they mean other lines now
@@ -1704,6 +1790,7 @@ struct MainWindow::Impl {
     }
     UiArgs args;
     args.index = item.index;
+    args.sub = item.sub;
     args.owner = hwnd;
     const float scale = static_cast<float>(Dpi()) / 96.0f;
     POINT anchor{static_cast<LONG>(item.rect.left * scale), static_cast<LONG>(item.rect.bottom * scale)};
@@ -2069,8 +2156,10 @@ struct MainWindow::Impl {
       return true;
     }
     if (key == VK_ESCAPE) {
-      // Back to the overview; from there, away.
-      if (page != UiPage::Overview) {
+      // Back: from a configuration to the list, from a page to the overview; from there, away.
+      if (page == UiPage::Profile) {
+        Go(UiPage::Subscription);
+      } else if (page != UiPage::Overview) {
         Go(UiPage::Overview);
       } else {
         ShowWindow(hwnd, SW_HIDE);
@@ -2222,7 +2311,8 @@ void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::
   }
   float scroll = 0;
   const float scale = 96.0f / dpi;
-  const Layout layout = painter.Build(content, page, static_cast<float>(width) * scale,
+  const std::string profile = content.profiles.empty() ? std::string() : content.profiles.front().id;
+  const Layout layout = painter.Build(content, page, profile, static_cast<float>(width) * scale,
                                       static_cast<float>(height) * scale, scroll, state);
   target->BeginDraw();
   painter.Draw(target.get(), layout, content, Interaction{}, log);

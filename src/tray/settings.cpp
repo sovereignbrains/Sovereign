@@ -100,9 +100,13 @@ void AdoptRootConfig(TraySettings& settings, const nlohmann::json& legacy) {
   if (field("updateHours").is_number_integer()) {
     profile.updateHours = std::clamp(field("updateHours").get<int>(), 1, 24 * 7);
   }
-  if (field("protocol").is_string()) {
-    profile.protocol = field("protocol").get<std::string>();
+  if (field("protocol").is_string() && settings.protocol.empty()) {
+    settings.protocol = field("protocol").get<std::string>();
   }
+  // Moved from before profiles: the one there was. Dropped in by hand: on
+  // only if nothing else is - it doesn't join a running set by surprise.
+  profile.enabled = legacy.is_object() || std::none_of(settings.profiles.begin(), settings.profiles.end(),
+                                                       [](const Profile& p) { return p.enabled; });
   try {
     const std::filesystem::path dir = ProfileDir(profile.id);
     for (const wchar_t* name : {L"config.json", L"subscription.json", L"subscription.new.json"}) {
@@ -122,9 +126,6 @@ void AdoptRootConfig(TraySettings& settings, const nlohmann::json& legacy) {
     return;  // tried again on the next start
   }
   settings.profiles.push_back(profile);
-  if (settings.activeProfile.empty() || legacy.is_object()) {
-    settings.activeProfile = profile.id;
-  }
   try {
     SaveSettings(settings);  // tray.json knows the profile now: nothing is moved twice
   } catch (...) {
@@ -146,15 +147,25 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("wantOn"); v != json.end() && v->is_boolean()) {
     settings.wantOn = v->get<bool>();
   }
+  // 0.4.3 had one configuration in use ("activeProfile") and the server
+  // pick in it; now all that are on run together, and the pick is one.
+  std::string legacyActive;
+  if (const auto v = json.find("activeProfile"); v != json.end() && v->is_string()) {
+    legacyActive = v->get<std::string>();
+  }
   const auto profiles = json.find("profiles");
   if (profiles != json.end()) {
-    settings.profiles = ProfilesFromJson(*profiles);
+    settings.profiles = ProfilesFromJson(*profiles, legacyActive);
   }
-  if (const auto v = json.find("activeProfile"); v != json.end() && v->is_string()) {
-    settings.activeProfile = v->get<std::string>();
-  }
-  if (FindProfile(settings.profiles, settings.activeProfile) == nullptr) {
-    settings.activeProfile = settings.profiles.empty() ? std::string() : settings.profiles.front().id;
+  if (const auto v = json.find("protocol"); v != json.end() && v->is_string()) {
+    settings.protocol = v->get<std::string>();
+  } else if (profiles != json.end() && profiles->is_array()) {
+    for (const auto& entry : *profiles) {
+      if (entry.is_object() && entry.value("id", nlohmann::json()) == legacyActive && entry.contains("protocol") &&
+          entry["protocol"].is_string()) {
+        settings.protocol = entry["protocol"].get<std::string>();
+      }
+    }
   }
   if (const auto v = json.find("appsMode"); v != json.end() && v->is_string()) {
     settings.appsMode = ParseAppsMode(v->get<std::string>());
@@ -194,7 +205,7 @@ void SaveSettings(const TraySettings& settings) {
   nlohmann::json json;
   json["wantOn"] = settings.wantOn;
   json["profiles"] = ProfilesToJson(settings.profiles);
-  json["activeProfile"] = settings.activeProfile;
+  json["protocol"] = settings.protocol;
   json["appsMode"] = std::string(AppsModeName(settings.appsMode));
   json["apps"] = settings.apps;
   json["appPaths"] = nlohmann::json::object();

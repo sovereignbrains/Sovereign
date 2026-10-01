@@ -18,7 +18,7 @@ namespace sovereign::tray {
 // Everything lives in %LOCALAPPDATA%\Sovereign, which only this user (and
 // SYSTEM/admins) can read - it holds configs with passwords and keys.
 //
-//   tray.json    {"wantOn", "profiles", "activeProfile", "appsMode", "apps",
+//   tray.json    {"wantOn", "profiles", "protocol", "appsMode", "apps",
 //                 "appPaths", "hideExitIp", "logLevel", "killSwitch",
 //                 "killSwitchLan"}
 //   profiles\<id>\         one configuration (profiles.h), each with:
@@ -47,7 +47,9 @@ void RemoveProfileDir(const std::string& id);
 struct TraySettings {
   bool wantOn = false;
   std::vector<Profile> profiles;  // in the order the window lists them
-  std::string activeProfile;      // the id of the one in use; empty = none
+  // The proxy selector's option to use in the config the box runs (all the
+  // configurations on, combine.h); empty = the config's default (protocol_choice.h).
+  std::string protocol;
   AppsMode appsMode = AppsMode::Exclude;  // per-app routing (app_rules.h)
   std::vector<std::string> apps;          // exe names, as sing-box's process_name
   // Where a listed app's exe was last seen, by its name in `apps`: only for

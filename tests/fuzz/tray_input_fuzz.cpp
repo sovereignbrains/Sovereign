@@ -17,6 +17,7 @@
 
 #include "app_rules.h"
 #include "cache_file.h"
+#include "combine.h"
 #include "config_sync.h"
 #include "delays.h"
 #include "exit_ip.h"
@@ -88,6 +89,18 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   }
   if (const LinksConfig subscription = ConfigFromSubscription(text); subscription.config) {
     if (!nlohmann::json::parse(*subscription.config, nullptr, /*allow_exceptions=*/false).is_object()) {
+      std::abort();
+    }
+  }
+  // A subscription's config among the configurations that are on, its
+  // servers switched off or not, first or after another: a JSON object out,
+  // or a reason.
+  (void)ListServers(text);
+  for (const auto& combined :
+       {CombineConfigs({{"a", std::string(text), {"nl"}}}), CombineConfigs({{"a", std::string(text), {}}, {"b", std::string(kSample), {}}}),
+        CombineConfigs({{"b", std::string(kSample), {"direct"}}, {"a", std::string(text), {"nl"}}})}) {
+    if (combined.config ? !nlohmann::json::parse(*combined.config, nullptr, /*allow_exceptions=*/false).is_object()
+                        : combined.error.empty()) {
       std::abort();
     }
   }

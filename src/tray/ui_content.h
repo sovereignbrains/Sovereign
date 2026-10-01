@@ -25,13 +25,32 @@ struct UiDelay {
 // Where the updater is (updater.h), as the windows show it.
 enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Failed };
 
-// A configuration in the list (profiles.h).
-struct UiProfile {
-  std::wstring name;
-  std::wstring detail;  // "подписка · 30.09 14:20", "свой конфиг"
-  bool failed = false;  // its last refresh failed
+// A server of a configuration, as its page lists it.
+struct UiServer {
+  std::wstring name;   // its tag
+  std::wstring label;  // "VLESS · REALITY"
+  bool enabled = true;
 };
 
+// A configuration (profiles.h): its line in the list and its page.
+struct UiProfile {
+  std::string id;          // which one a page shows, across updates
+  std::wstring name;
+  std::wstring detail;     // the list's line: "подписка · 8 серверов · 30.09 14:20"
+  bool enabled = true;     // its servers are in the config the box runs
+  bool subscription = false;
+  bool failed = false;     // its last refresh failed
+  std::wstring host;       // the subscription server's name only - the URL's path is a secret
+  std::wstring updated;    // "30.09 14:20" / "ещё не загружена"
+  bool autoUpdate = true;
+  std::wstring period;     // "каждые 12 ч (как советует сервер)"
+  std::wstring error;      // why the last refresh failed
+  bool edited = false;     // config.json has edits of the user's own (config_sync.h)
+  bool waiting = false;    // a newer subscription waits for the user's choice
+  std::wstring choiceError;
+  std::vector<std::wstring> mergeNotes;  // where carrying the edits over met the subscription's changes
+  std::vector<UiServer> servers;
+};
 // What the tray's window shows; built by main.cpp from the worker's view.
 // Strings are ready to draw.
 struct UiContent {
@@ -42,20 +61,11 @@ struct UiContent {
   std::int64_t connections = 0;
   std::wstring error;            // why the box doesn't run; empty if it does or is off
 
-  std::wstring subscription;     // "26.09 19:20" / "нет" / "ошибка: ..."
-  bool hasSubscription = false;  // enables the refresh button
-  bool hasConfig = false;        // config.json is there (a subscription's or the user's own)
-  std::wstring subscriptionHost; // the server's name only - the URL's path is a secret
-  std::wstring subscriptionError;
-  int updateHours = 0;           // the refresh interval; 0 = unknown
-  bool configEdited = false;     // config.json has edits of the user's own (config_sync.h)
-  bool subscriptionWaiting = false;  // a newer subscription waits for the user's choice
-  std::wstring choiceError;          // why that choice didn't go through
-  std::vector<std::wstring> mergeNotes;  // where carrying the edits over met the subscription's changes
-  // Every configuration, and the one in use (-1: none); the subscription
-  // fields above are about that one.
+  // Every configuration; the ones on run together (combine.h).
   std::vector<UiProfile> profiles;
-  int activeProfile = -1;
+  bool hasConfig = false;        // the ones on make a config to run
+  std::wstring combineError;     // why they don't
+  std::vector<std::wstring> combineNotes;  // what was left out of it
 
   bool appsInclude = false;      // per-app mode: false = all except the list
   std::vector<std::wstring> apps;
@@ -85,23 +95,28 @@ struct UiContent {
 };
 
 // The window's pages: the overview, and the ones it opens (back with Esc).
-enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings };
-inline constexpr int kUiPageCount = 6;
+// Profile: one configuration's page, opened from the list on Subscription.
+enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings, Profile };
+inline constexpr int kUiPageCount = 6;  // the ones Ctrl+1..6 open: all but Profile
 
 enum class UiCommand : std::uint8_t {
   Toggle,
   PasteSubscription,
-  RefreshSubscription,
+  ImportFile,        // a config, keys or a QR code's picture from a file
+  ScanScreen,        // QR codes on the screen
+  // A configuration's, by index into profiles:
+  ToggleProfile,     // on or off
+  RenameProfile,
+  RefreshProfile,
+  ToggleAutoUpdate,
+  ChooseRefreshPeriod,  // anchor: where to open the menu of intervals
+  CopyProfileLink,   // the subscription link onto the clipboard
+  RemoveProfile,     // after asking
+  ToggleServer,      // sub: index into its servers
   TakeSubscription,  // the waiting subscription replaces the edited config
   KeepConfig,        // the edited config stays
   CarryOverEdits,    // the edits, merged into the waiting subscription
   RevertConfig,      // the config back to the subscription as it arrived
-  ImportFile,        // a config, keys or a QR code's picture from a file
-  ScanScreen,        // QR codes on the screen
-  ActivateProfile,   // index into profiles: use that configuration
-  RemoveProfile,     // index into profiles: remove it (after asking)
-  CopySubscription,  // the subscription link onto the clipboard
-  RemoveSubscription,  // no more refreshes; the config stays
   ToggleExitIp,        // show or hide the exit's address
   ChooseLogLevel,      // anchor: where to open the menu of levels
   ToggleKillSwitch,
@@ -123,6 +138,7 @@ enum class UiCommand : std::uint8_t {
 struct UiArgs {
   POINT anchor{};
   int index = 0;
+  int sub = 0;  // a second index: a server within a configuration
   HWND owner = nullptr;  // the window a menu or a dialog belongs to
 };
 

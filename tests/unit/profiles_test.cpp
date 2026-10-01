@@ -81,23 +81,36 @@ void TestFind() {
   CHECK(FindProfileByUrl(profiles, "") == nullptr);  // the user's own configs have no link to match
 }
 
-void TestRemoval() {
-  const auto profiles = Three();
-  CHECK(ActiveAfterRemoval(profiles, "p1", "p2") == "p1");  // another one: stays
-  CHECK(ActiveAfterRemoval(profiles, "p2", "p2") == "p3");  // the next
-  CHECK(ActiveAfterRemoval(profiles, "p3", "p3") == "p2");  // the last: the one before
-  CHECK(ActiveAfterRemoval({Make("p1")}, "p1", "p1").empty());
+void TestServers() {
+  Profile p = Make("p1");
+  CHECK(IsServerEnabled(p, "NL"));
+  SetServerEnabled(p, "NL", false);
+  SetServerEnabled(p, "NL", false);  // once
+  CHECK(!IsServerEnabled(p, "NL") && p.disabled.size() == 1);
+  SetServerEnabled(p, "NL", true);
+  CHECK(IsServerEnabled(p, "NL") && p.disabled.empty());
+  p.updateHours = 12;
+  CHECK(RefreshHours(p) == 12);
+  p.userHours = 3;
+  CHECK(RefreshHours(p) == 3);
 }
 
 void TestJson() {
   auto profiles = Three();
   profiles[0].lastRefresh = 1790770050;
   profiles[0].updateHours = 6;
-  profiles[0].protocol = "auto";
+  profiles[0].autoUpdate = false;
+  profiles[0].userHours = 48;
+  profiles[0].disabled = {"NL", "FI"};
+  profiles[1].enabled = false;
   const auto back = ProfilesFromJson(nlohmann::json::parse(ProfilesToJson(profiles).dump()));
   CHECK(back.size() == 3);
-  CHECK(!back.empty() && back[0].id == "p1" && back[0].url == "https://a.example.com/s" &&
-        back[0].lastRefresh == 1790770050 && back[0].updateHours == 6 && back[0].protocol == "auto");
+  if (back.size() == 3) {
+    CHECK(back[0].id == "p1" && back[0].url == "https://a.example.com/s" && back[0].lastRefresh == 1790770050);
+    CHECK(back[0].updateHours == 6 && !back[0].autoUpdate && back[0].userHours == 48);
+    CHECK(back[0].disabled == std::vector<std::string>({"NL", "FI"}));
+    CHECK(back[0].enabled && !back[1].enabled && back[2].enabled);
+  }
 
   // tray.json is a file: what's wrong in it is dropped, the rest kept.
   const auto read = ProfilesFromJson(nlohmann::json::parse(R"([
@@ -106,16 +119,23 @@ void TestJson() {
     {"id":"p1","name":"twice"},
     {"id":"p2","name":5},
     "not an object",
-    {"id":"p3","name":"","updateHours":100000},
-    {"id":"p4","name":"x","lastRefresh":"soon"}
+    {"id":"p3","name":"","updateHours":100000,"userHours":-5,"disabled":["a",1,"a"]},
+    {"id":"p4","name":"x","lastRefresh":"soon","enabled":"yes"}
   ])"));
   CHECK(read.size() == 3);
-  CHECK(read.size() == 3 && read[0].name == "ok" && read[1].id == "p3" && read[2].id == "p4");
-  CHECK(read.size() == 3 && !read[1].name.empty() && read[1].updateHours == 24 * 7);
-  CHECK(read.size() == 3 && read[2].lastRefresh == 0);
+  if (read.size() == 3) {
+    CHECK(read[0].name == "ok" && read[1].id == "p3" && read[2].id == "p4");
+    CHECK(!read[1].name.empty() && read[1].updateHours == 24 * 7 && read[1].userHours == 0);
+    CHECK(read[1].disabled == std::vector<std::string>({"a"}));
+    CHECK(read[2].lastRefresh == 0 && read[2].enabled);
+  }
   CHECK(ProfilesFromJson(nlohmann::json::parse(R"({"p1":{}})")).empty());
-}
 
+  // 0.4.3's list: one in use, the others weren't running.
+  const auto legacy = ProfilesFromJson(
+      nlohmann::json::parse(R"([{"id":"p1","name":"A","url":""},{"id":"p2","name":"B","url":""}])"), "p2");
+  CHECK(legacy.size() == 2 && !legacy[0].enabled && legacy[1].enabled);
+}
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
@@ -123,7 +143,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestIds();
     TestNames();
     TestFind();
-    TestRemoval();
+    TestServers();
     TestJson();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

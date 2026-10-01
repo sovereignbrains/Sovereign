@@ -1,0 +1,465 @@
+#include "combine.h"
+
+#include "config_sync.h"
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <format>
+#include <map>
+#include <set>
+#include <utility>
+
+namespace sovereign::tray {
+
+namespace {
+
+using Json = nlohmann::ordered_json;
+
+constexpr std::array<const char*, 2> kLists = {"outbounds", "endpoints"};
+
+std::string Str(const Json& object, const char* key) {
+  if (!object.is_object()) {
+    return {};
+  }
+  const auto it = object.find(key);
+  return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
+}
+
+std::string Tag(const Json& o) { return Str(o, "tag"); }
+
+bool IsGroup(const Json& o) {
+  const std::string type = Str(o, "type");
+  return type == "selector" || type == "urltest";
+}
+
+bool IsServer(const Json& o) {
+  const std::string type = Str(o, "type");
+  return !type.empty() && type != "selector" && type != "urltest" && type != "direct" && type != "block" &&
+         type != "dns";
+}
+
+Json* List(Json& config, const char* name) {
+  if (!config.is_object()) {
+    return nullptr;
+  }
+  const auto it = config.find(name);
+  return it != config.end() && it->is_array() ? &*it : nullptr;
+}
+
+std::vector<std::string> Members(const Json& group) {
+  std::vector<std::string> members;
+  if (const auto it = group.find("outbounds"); it != group.end() && it->is_array()) {
+    for (const Json& m : *it) {
+      if (m.is_string()) {
+        members.push_back(m.get<std::string>());
+      }
+    }
+  }
+  return members;
+}
+
+// Takes `removed`'s outbounds and endpoints out, and with them whatever can't
+// work without them: outbounds chained through one (detour) and groups left
+// empty. `removed` grows by those.
+void Remove(Json& config, std::set<std::string>& removed) {
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (const char* name : kLists) {
+      Json* list = List(config, name);
+      if (list == nullptr) {
+        continue;
+      }
+      for (Json& o : *list) {
+        const std::string tag = Tag(o);
+        if (tag.empty() || removed.contains(tag)) {
+          continue;
+        }
+        if (removed.contains(Str(o, "detour"))) {
+          removed.insert(tag);
+          changed = true;
+          continue;
+        }
+        if (IsGroup(o) && o.contains("outbounds") && o["outbounds"].is_array()) {
+          Json& members = o["outbounds"];
+          const std::size_t before = members.size();
+          Json kept = Json::array();
+          for (const Json& m : members) {
+            if (!m.is_string() || !removed.contains(m.get<std::string>())) {
+              kept.push_back(m);
+            }
+          }
+          if (kept.size() != before) {
+            members = std::move(kept);
+          }
+          if (members.empty()) {
+            removed.insert(tag);
+            changed = true;
+          } else if (removed.contains(Str(o, "default"))) {
+            o.erase("default");
+          }
+        }
+      }
+    }
+  }
+  for (const char* name : kLists) {
+    if (Json* list = List(config, name)) {
+      Json kept = Json::array();
+      for (Json& o : *list) {
+        if (!removed.contains(Tag(o))) {
+          kept.push_back(std::move(o));
+        }
+      }
+      *list = std::move(kept);
+    }
+  }
+}
+
+// References to removed outbounds outside the outbound lists - route.final,
+// route rules, DNS servers' detours, rule sets' download_detour, inbounds' -
+// to `replacement`; a route rule pointing at one is dropped if there's none.
+void Repoint(Json& node, const std::set<std::string>& removed, const std::string& replacement, int depth) {
+  if (depth > kMaxConfigDepth) {
+    return;
+  }
+  if (node.is_array()) {
+    Json kept = Json::array();
+    for (Json& item : node) {
+      if (replacement.empty() && item.is_object() && removed.contains(Str(item, "outbound"))) {
+        continue;  // a rule with nowhere to send its traffic
+      }
+      Repoint(item, removed, replacement, depth + 1);
+      kept.push_back(std::move(item));
+    }
+    node = std::move(kept);
+    return;
+  }
+  if (!node.is_object()) {
+    return;
+  }
+  for (const char* key : {"outbound", "detour", "download_detour", "final"}) {
+    if (const std::string target = Str(node, key); !target.empty() && removed.contains(target)) {
+      if (replacement.empty()) {
+        node.erase(key);
+      } else {
+        node[key] = replacement;
+      }
+    }
+  }
+  for (auto it = node.begin(); it != node.end(); ++it) {
+    if (depth == 0 && (it.key() == "outbounds" || it.key() == "endpoints")) {
+      continue;  // done by Remove
+    }
+    Repoint(it.value(), removed, replacement, depth + 1);
+  }
+}
+
+// The selector the traffic goes through: the one route.final names, else
+// the first; its index in outbounds, or npos.
+std::size_t MainSelector(Json& config) {
+  Json* outbounds = List(config, "outbounds");
+  if (outbounds == nullptr) {
+    return std::string::npos;
+  }
+  const std::string final = config.contains("route") ? Str(config["route"], "final") : std::string();
+  std::size_t first = std::string::npos;
+  for (std::size_t i = 0; i < outbounds->size(); ++i) {
+    const Json& o = (*outbounds)[i];
+    if (Str(o, "type") != "selector") {
+      continue;
+    }
+    if (!final.empty() && Tag(o) == final) {
+      return i;
+    }
+    if (first == std::string::npos) {
+      first = i;
+    }
+  }
+  return first;
+}
+
+std::set<std::string> AllTags(Json& config) {
+  std::set<std::string> tags;
+  for (const char* name : kLists) {
+    if (Json* list = List(config, name)) {
+      for (const Json& o : *list) {
+        if (const std::string tag = Tag(o); !tag.empty()) {
+          tags.insert(tag);
+        }
+      }
+    }
+  }
+  return tags;
+}
+
+std::vector<std::string> ServerTags(Json& config) {
+  std::vector<std::string> tags;
+  for (const char* name : kLists) {
+    if (Json* list = List(config, name)) {
+      for (const Json& o : *list) {
+        if (IsServer(o) && !Tag(o).empty()) {
+          tags.push_back(Tag(o));
+        }
+      }
+    }
+  }
+  return tags;
+}
+
+std::set<std::string> DnsServerTags(const Json& config) {
+  std::set<std::string> tags;
+  if (config.contains("dns") && config["dns"].is_object() && config["dns"].contains("servers") &&
+      config["dns"]["servers"].is_array()) {
+    for (const Json& s : config["dns"]["servers"]) {
+      if (const std::string tag = Tag(s); !tag.empty()) {
+        tags.insert(tag);
+      }
+    }
+  }
+  return tags;
+}
+
+std::optional<Json> Parse(const ProfileConfig& part, std::string& error) {
+  if (NestingDepth(part.config) > kMaxConfigDepth) {
+    error = part.name + ": конфиг слишком глубоко вложен";
+    return std::nullopt;
+  }
+  Json json = Json::parse(part.config, nullptr, /*allow_exceptions=*/false);
+  if (!json.is_object()) {
+    error = part.name + ": config.json - не JSON-объект";
+    return std::nullopt;
+  }
+  return json;
+}
+
+// A part's servers, ready to go into the frame: renamed where their tag is
+// taken, chains within the part kept, what the frame can't resolve dropped.
+struct Moved {
+  Json outbounds = Json::array();
+  Json endpoints = Json::array();
+  std::vector<std::string> tags;
+};
+
+Moved TakeServers(Json& part, const std::string& partName, std::set<std::string>& taken,
+                  const std::set<std::string>& frameDns) {
+  std::map<std::string, std::string> renamed;  // the part's tag -> its tag in the frame
+  std::vector<std::pair<const char*, Json>> servers;
+  for (const char* name : kLists) {
+    if (Json* list = List(part, name)) {
+      for (Json& o : *list) {
+        const std::string tag = Tag(o);
+        if (!IsServer(o) || tag.empty()) {
+          continue;
+        }
+        std::string fresh = tag;
+        if (taken.contains(fresh)) {
+          fresh = std::format("{} · {}", tag, partName);
+          for (int n = 2; taken.contains(fresh); ++n) {
+            fresh = std::format("{} · {} {}", tag, partName, n);
+          }
+        }
+        taken.insert(fresh);
+        renamed[tag] = fresh;
+        servers.emplace_back(name, std::move(o));
+      }
+    }
+  }
+  // Chains: through another server of the part (renamed with it), or dropped.
+  std::set<std::string> dropped;
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (auto& [list, o] : servers) {
+      const std::string tag = Tag(o);
+      const std::string detour = Str(o, "detour");
+      if (dropped.contains(tag) || detour.empty()) {
+        continue;
+      }
+      if (!renamed.contains(detour) || dropped.contains(detour)) {
+        dropped.insert(tag);
+        changed = true;
+      }
+    }
+  }
+  Moved moved;
+  for (auto& [list, o] : servers) {
+    const std::string tag = Tag(o);
+    if (dropped.contains(tag)) {
+      taken.erase(renamed[tag]);
+      continue;
+    }
+    o["tag"] = renamed[tag];
+    if (const std::string detour = Str(o, "detour"); !detour.empty()) {
+      o["detour"] = renamed[detour];
+    }
+    // Its DNS server names are the part's: the frame's own resolver serves it
+    // unless the frame has one by that name.
+    if (o.contains("domain_resolver")) {
+      const Json& resolver = o["domain_resolver"];
+      const std::string server = resolver.is_string() ? resolver.get<std::string>() : Str(resolver, "server");
+      if (!frameDns.contains(server)) {
+        o.erase("domain_resolver");
+      }
+    }
+    moved.tags.push_back(renamed[tag]);
+    (std::string_view(list) == "endpoints" ? moved.endpoints : moved.outbounds).push_back(std::move(o));
+  }
+  return moved;
+}
+
+std::string Label(const Json& o) {
+  static const std::map<std::string, std::string, std::less<>> kNames = {
+      {"vless", "VLESS"},         {"vmess", "VMess"},       {"trojan", "Trojan"},   {"shadowsocks", "Shadowsocks"},
+      {"hysteria2", "Hysteria2"}, {"hysteria", "Hysteria"}, {"tuic", "TUIC"},       {"anytls", "AnyTLS"},
+      {"wireguard", "WireGuard"}, {"naive", "Naive"},       {"socks", "SOCKS"},     {"http", "HTTP"},
+      {"ssh", "SSH"},             {"shadowtls", "ShadowTLS"}, {"snell", "Snell"}, {"tor", "Tor"},
+      {"tailscale", "Tailscale"}};
+  const std::string type = Str(o, "type");
+  const auto known = kNames.find(type);
+  std::string label = known != kNames.end() ? known->second : type;
+  if (o.contains("tls") && o["tls"].is_object()) {
+    const Json& tls = o["tls"];
+    if (tls.contains("reality") && tls["reality"].is_object() && tls["reality"].contains("enabled") &&
+        tls["reality"]["enabled"] == true) {
+      label += " · REALITY";
+    }
+  }
+  if (o.contains("transport") && o["transport"].is_object()) {
+    std::string transport = Str(o["transport"], "type");
+    std::transform(transport.begin(), transport.end(), transport.begin(),
+                   [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; });
+    if (!transport.empty()) {
+      label += " · " + transport;
+    }
+  }
+  if (!Str(o, "detour").empty()) {
+    label += " · через " + Str(o, "detour");
+  }
+  return label;
+}
+
+}  // namespace
+
+CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts) {
+  CombinedConfig result;
+  if (parts.empty()) {
+    result.error = "ни одна конфигурация не включена";
+    return result;
+  }
+  if (parts.size() == 1 && parts[0].disabled.empty()) {
+    result.config = parts[0].config;
+    return result;
+  }
+  auto frame = Parse(parts[0], result.error);
+  if (!frame) {
+    return result;
+  }
+  std::set<std::string> removed(parts[0].disabled.begin(), parts[0].disabled.end());
+  Remove(*frame, removed);
+
+  // Servers from the others go into a selector: the frame's, or one made for
+  // them around what the frame's route went to.
+  std::size_t selector = MainSelector(*frame);
+  const bool adding = parts.size() > 1;
+  if (selector == std::string::npos && adding) {
+    std::set<std::string> taken = AllTags(*frame);
+    std::string tag = "proxy";
+    for (int n = 2; taken.contains(tag); ++n) {
+      tag = std::format("proxy {}", n);
+    }
+    Json made = {{"type", "selector"}, {"tag", tag}, {"outbounds", ServerTags(*frame)}};
+    Json& route = (*frame)["route"];
+    if (!route.is_object()) {
+      route = Json::object();
+    }
+    if (const std::string final = Str(route, "final"); !final.empty() && !removed.contains(final)) {
+      made["default"] = final;
+    }
+    if (!frame->contains("outbounds") || !(*frame)["outbounds"].is_array()) {
+      (*frame)["outbounds"] = Json::array();
+    }
+    Json& outbounds = (*frame)["outbounds"];
+    outbounds.insert(outbounds.begin(), std::move(made));
+    route["final"] = tag;
+    selector = 0;
+  }
+  std::string replacement;
+  if (selector != std::string::npos) {
+    replacement = Tag((*frame)["outbounds"][selector]);
+  } else if (const auto servers = ServerTags(*frame); !servers.empty()) {
+    replacement = servers.front();
+  }
+  Repoint(*frame, removed, replacement, 0);
+
+  std::set<std::string> taken = AllTags(*frame);
+  const std::set<std::string> frameDns = DnsServerTags(*frame);
+  for (std::size_t i = 1; i < parts.size(); ++i) {
+    std::string error;
+    auto part = Parse(parts[i], error);
+    if (!part) {
+      result.notes.push_back(error);
+      continue;
+    }
+    std::set<std::string> off(parts[i].disabled.begin(), parts[i].disabled.end());
+    Remove(*part, off);
+    Moved moved = TakeServers(*part, parts[i].name, taken, frameDns);
+    Json& outbounds = (*frame)["outbounds"];
+    for (Json& o : moved.outbounds) {
+      outbounds.push_back(std::move(o));
+    }
+    if (!moved.endpoints.empty()) {
+      if (!frame->contains("endpoints") || !(*frame)["endpoints"].is_array()) {
+        (*frame)["endpoints"] = Json::array();
+      }
+      for (Json& e : moved.endpoints) {
+        (*frame)["endpoints"].push_back(std::move(e));
+      }
+    }
+    // Into the selector, and into the URL tests it offers ("auto").
+    Json& main = outbounds[selector];
+    const std::vector<std::string> offered = Members(main);
+    for (const std::string& tag : moved.tags) {
+      main["outbounds"].push_back(tag);
+    }
+    for (Json& o : outbounds) {
+      if (Str(o, "type") == "urltest" &&
+          std::find(offered.begin(), offered.end(), Tag(o)) != offered.end()) {
+        for (const std::string& tag : moved.tags) {
+          o["outbounds"].push_back(tag);
+        }
+      }
+    }
+  }
+
+  if (ServerTags(*frame).empty()) {
+    result.error = "все серверы выключены";
+    return result;
+  }
+  if (selector != std::string::npos && Members((*frame)["outbounds"][selector]).empty()) {
+    result.error = "в общем списке не осталось серверов";
+    return result;
+  }
+  result.config = frame->dump(2, ' ', false, Json::error_handler_t::replace);
+  return result;
+}
+
+std::vector<ServerInfo> ListServers(std::string_view config) {
+  std::vector<ServerInfo> servers;
+  if (NestingDepth(config) > kMaxConfigDepth) {
+    return servers;
+  }
+  Json json = Json::parse(config, nullptr, /*allow_exceptions=*/false);
+  for (const char* name : kLists) {
+    if (Json* list = List(json, name)) {
+      for (const Json& o : *list) {
+        if (IsServer(o) && !Tag(o).empty()) {
+          servers.push_back({Tag(o), Str(o, "type"), Label(o)});
+        }
+      }
+    }
+  }
+  return servers;
+}
+
+}  // namespace sovereign::tray

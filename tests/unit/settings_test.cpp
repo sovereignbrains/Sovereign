@@ -49,13 +49,13 @@ void TestMigration(const fs::path& data) {
   CHECK(settings.wantOn);
   CHECK(settings.apps.size() == 1);
   CHECK(settings.profiles.size() == 1);
-  CHECK(settings.activeProfile == "p1");
+  CHECK(settings.protocol == "NL");  // the pick is one for all now
   if (!settings.profiles.empty()) {
     const Profile& p = settings.profiles.front();
     CHECK(p.id == "p1");
     CHECK(p.url == "https://sub.example.com/s?token=x");
     CHECK(p.name == "sub.example.com");
-    CHECK(p.lastRefresh == 1790770050 && p.updateHours == 6 && p.protocol == "NL");
+    CHECK(p.lastRefresh == 1790770050 && p.updateHours == 6 && p.enabled);
   }
   const fs::path dir = data / "profiles" / "p1";
   CHECK(Read(dir / "config.json").find("mine") != std::string::npos);
@@ -69,16 +69,33 @@ void TestMigration(const fs::path& data) {
   CHECK(saved.contains("profiles") && !saved.contains("subscriptionUrl"));
   CHECK(LoadSettings().profiles.size() == 1);
 
-  // A config.json dropped in by hand: another configuration, not the one in use.
+  // A config.json dropped in by hand: another configuration, off - another is on.
   Write(data / "config.json", R"({"outbounds":[{"type":"direct","tag":"dropped"}]})");
   const TraySettings again = LoadSettings();
   CHECK(again.profiles.size() == 2);
-  CHECK(again.activeProfile == "p1");
   if (again.profiles.size() == 2) {
+    CHECK(again.profiles[0].enabled && !again.profiles[1].enabled);
     CHECK(again.profiles[1].url.empty() && again.profiles[1].name == "Мой конфиг");
     CHECK(Read(data / "profiles" / again.profiles[1].id / "config.json").find("dropped") != std::string::npos);
   }
   CHECK(!fs::exists(data / "config.json"));
+}
+
+// 0.4.3's tray.json: one configuration in use and the server pick in it.
+void TestFrom043(const fs::path& data) {
+  Write(data / "tray.json",
+        R"({"wantOn":true,"activeProfile":"p2","profiles":[)"
+        R"({"id":"p1","name":"A","url":"","protocol":"x"},{"id":"p2","name":"B","url":"","protocol":"NL"}]})");
+  const TraySettings settings = LoadSettings();
+  CHECK(settings.profiles.size() == 2);
+  if (settings.profiles.size() == 2) {
+    CHECK(!settings.profiles[0].enabled && settings.profiles[1].enabled);
+  }
+  CHECK(settings.protocol == "NL");
+  SaveSettings(settings);
+  const auto saved = nlohmann::json::parse(Read(data / "tray.json"));
+  CHECK(!saved.contains("activeProfile") && saved["protocol"] == "NL");
+  CHECK(saved["profiles"][0]["enabled"] == false);
 }
 
 void TestFiles(const fs::path& data) {
@@ -116,7 +133,7 @@ int Migrate(const fs::path& localAppData) {
   SetEnvironmentVariableW(L"LOCALAPPDATA", localAppData.c_str());
   const TraySettings settings = LoadSettings();
   for (const Profile& p : settings.profiles) {
-    std::cout << p.id << (p.id == settings.activeProfile ? " (active)" : "") << ": " << p.name
+    std::cout << p.id << (p.enabled ? " (on)" : " (off)") << ": " << p.name
               << (p.url.empty() ? ", own config" : ", subscription") << ", config.json "
               << (LoadConfig(ProfileDir(p.id)) ? "there" : "MISSING") << "\n";
   }
@@ -134,6 +151,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str());
     const fs::path data = root / "Sovereign";
     TestMigration(data);
+    TestFrom043(data);
     TestFiles(data);
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

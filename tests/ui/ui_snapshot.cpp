@@ -34,16 +34,33 @@ UiContent SampleContent() {
   c.down = 2.4 * 1024 * 1024;
   c.up = 310.2 * 1024;
   c.connections = 37;
-  c.subscription = L"27.09 19:20";
-  c.hasSubscription = true;
   c.hasConfig = true;
-  c.subscriptionHost = L"packetlab.tech";
-  c.updateHours = 12;
-  c.profiles = {{L"packetlab", L"подписка · 27.09 19:20", false},
-                {L"NL-1 и ещё 2", L"свой конфиг", false},
-                {L"sub.example.com", L"подписка · не обновилась", true}};
-  c.activeProfile = 0;
-  c.appsInclude = false;
+  using sovereign::tray::UiServer;
+  sovereign::tray::UiProfile packetlab;
+  packetlab.id = "p1";
+  packetlab.name = L"packetlab";
+  packetlab.detail = L"подписка · серверов: 3 (выкл. 1) · 27.09 19:20";
+  packetlab.subscription = true;
+  packetlab.host = L"packetlab.tech";
+  packetlab.updated = L"27.09 19:20";
+  packetlab.period = L"каждые 12 ч (как советует сервер)";
+  packetlab.servers = {UiServer{L"AnyTLS · Нидерланды", L"AnyTLS · REALITY", true},
+                       UiServer{L"AnyTLS · Финляндия", L"AnyTLS", true},
+                       UiServer{L"REALITY · Германия", L"VLESS · REALITY", false}};
+  sovereign::tray::UiProfile keys;
+  keys.id = "p2";
+  keys.name = L"NL-1 и ещё 2";
+  keys.detail = L"свой конфиг · серверов: 3";
+  keys.servers = {UiServer{L"NL-1", L"Trojan · WS", true}, UiServer{L"DE-2", L"Hysteria2", true},
+                  UiServer{L"WARP", L"WireGuard", true}};
+  sovereign::tray::UiProfile off;
+  off.id = "p3";
+  off.name = L"sub.example.com";
+  off.enabled = false;
+  off.subscription = true;
+  off.failed = true;
+  off.detail = L"выключена · подписка · серверов: 0";
+  c.profiles = {packetlab, keys, off};  c.appsInclude = false;
   c.apps = {L"steam.exe", L"Telegram.exe", L"qbittorrent.exe", L"notepad.exe"};
   // One exe that is there on any Windows: its real icon; the rest aren't known.
   c.appPaths = {L"", L"", L"", L"C:\\Windows\\System32\\notepad.exe"};
@@ -85,20 +102,22 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(content, static_cast<UiPage>(p), logs, 400, 620, 96, path);
   }
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\overview-150.png");
+  // A configuration's page: the first one's.
+  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Profile, logs, 400, 620, 96, dir + L"\\profile.png");
 
   // The states that look different: off with no subscription, and an error.
   UiContent empty;
   empty.display = sovereign::tray::Display::Off;
-  empty.subscription = L"нет";
   empty.version = content.version;
   sovereign::tray::RenderMainWindowSnapshot(empty, UiPage::Overview, {}, 400, 620, 96, dir + L"\\overview-empty.png");
   UiContent failed = content;
   failed.display = sovereign::tray::Display::Error;
   failed.error = L"уже работает другой клиент sing-box с TUN (адаптер sing-tun) - выключи его, Sovereign подключится сам";
-  failed.subscriptionError = L"сервер ответил 403";
+  failed.profiles[0].failed = true;
+  failed.profiles[0].error = L"сервер ответил 403";
   sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 400, 620, 96, dir + L"\\overview-error.png");
-  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Subscription, logs, 400, 620, 96,
-                                            dir + L"\\subscription-error.png");
+  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Profile, logs, 400, 620, 96,
+                                            dir + L"\\profile-error.png");
   // A drop with the kill switch on: the internet held closed, and the switch
   // saying so; in settings, both switches.
   UiContent held = content;
@@ -113,15 +132,15 @@ int Snapshots(const std::wstring& dir) {
   // A newer subscription over the user's edits: the choice; then, narrow,
   // the buttons stacked; and after a carry-over, where both sides met.
   UiContent waiting = content;
-  waiting.configEdited = true;
-  waiting.subscriptionWaiting = true;
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 400, 620, 96,
-                                            dir + L"\\subscription-waiting.png");
+  waiting.profiles[0].edited = true;
+  waiting.profiles[0].waiting = true;
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 400, 620, 96,
+                                            dir + L"\\profile-waiting.png");
   sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Overview, logs, 400, 620, 96,
                                             dir + L"\\overview-waiting.png");
-  waiting.choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Subscription, logs, 360, 640, 96,
-                                            dir + L"\\subscription-waiting-narrow.png");
+  waiting.profiles[0].choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
+  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 360, 640, 96,
+                                            dir + L"\\profile-waiting-narrow.png");
   // The exit's address hidden: the flag and the country.
   UiContent hidden = content;
   hidden.hideExitIp = true;
@@ -129,10 +148,10 @@ int Snapshots(const std::wstring& dir) {
                                             dir + L"\\overview-ip-hidden.png");
 
   UiContent merged = content;
-  merged.configEdited = true;
-  merged.mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};
-  sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Subscription, logs, 400, 620, 96,
-                                            dir + L"\\subscription-merged.png");
+  merged.profiles[0].edited = true;
+  merged.profiles[0].mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};
+  sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Profile, logs, 400, 620, 96,
+                                            dir + L"\\profile-merged.png");
   return 0;
 }
 

@@ -124,19 +124,15 @@ const Profile* FindProfileByUrl(const std::vector<Profile>& profiles, std::strin
   return it == profiles.end() ? nullptr : &*it;
 }
 
-std::string ActiveAfterRemoval(const std::vector<Profile>& profiles, std::string_view active,
-                               std::string_view removed) {
-  if (active != removed && FindProfile(profiles, active) != nullptr) {
-    return std::string(active);
+void SetServerEnabled(Profile& profile, const std::string& tag, bool enabled) {
+  std::erase(profile.disabled, tag);
+  if (!enabled) {
+    profile.disabled.push_back(tag);
   }
-  const auto it = std::find_if(profiles.begin(), profiles.end(), [&](const Profile& p) { return p.id == removed; });
-  if (it == profiles.end()) {
-    return profiles.empty() ? std::string() : profiles.front().id;
-  }
-  if (it + 1 != profiles.end()) {
-    return (it + 1)->id;
-  }
-  return it != profiles.begin() ? (it - 1)->id : std::string();
+}
+
+bool IsServerEnabled(const Profile& profile, std::string_view tag) {
+  return std::find(profile.disabled.begin(), profile.disabled.end(), tag) == profile.disabled.end();
 }
 
 nlohmann::json ProfilesToJson(const std::vector<Profile>& profiles) {
@@ -144,15 +140,19 @@ nlohmann::json ProfilesToJson(const std::vector<Profile>& profiles) {
   for (const Profile& p : profiles) {
     list.push_back({{"id", p.id},
                     {"name", p.name},
+                    {"userNamed", p.userNamed},
                     {"url", p.url},
+                    {"enabled", p.enabled},
                     {"lastRefresh", p.lastRefresh},
                     {"updateHours", p.updateHours},
-                    {"protocol", p.protocol}});
+                    {"autoUpdate", p.autoUpdate},
+                    {"userHours", p.userHours},
+                    {"disabled", p.disabled}});
   }
   return list;
 }
 
-std::vector<Profile> ProfilesFromJson(const nlohmann::json& json) {
+std::vector<Profile> ProfilesFromJson(const nlohmann::json& json, std::string_view legacyActive) {
   std::vector<Profile> profiles;
   if (!json.is_array()) {
     return profiles;
@@ -164,6 +164,14 @@ std::vector<Profile> ProfilesFromJson(const nlohmann::json& json) {
     }
     return it->is_string() ? std::optional<std::string>(it->get<std::string>()) : std::nullopt;
   };
+  const auto flag = [](const nlohmann::json& entry, const char* key, bool fallback) {
+    const auto it = entry.find(key);
+    return it != entry.end() && it->is_boolean() ? it->get<bool>() : fallback;
+  };
+  const auto number = [](const nlohmann::json& entry, const char* key) -> std::optional<std::int64_t> {
+    const auto it = entry.find(key);
+    return it != entry.end() && it->is_number_integer() ? std::optional(it->get<std::int64_t>()) : std::nullopt;
+  };
   for (const auto& entry : json) {
     if (!entry.is_object()) {
       continue;
@@ -171,20 +179,29 @@ std::vector<Profile> ProfilesFromJson(const nlohmann::json& json) {
     const auto id = text(entry, "id");
     const auto name = text(entry, "name");
     const auto url = text(entry, "url");
-    const auto protocol = text(entry, "protocol");
-    if (!id || !name || !url || !protocol || !IsProfileId(*id) || FindProfile(profiles, *id) != nullptr) {
+    if (!id || !name || !url || !IsProfileId(*id) || FindProfile(profiles, *id) != nullptr) {
       continue;
     }
     Profile p;
     p.id = *id;
     p.name = CleanProfileName(*name);
     p.url = *url;
-    p.protocol = *protocol;
-    if (const auto it = entry.find("lastRefresh"); it != entry.end() && it->is_number_integer()) {
-      p.lastRefresh = it->get<std::int64_t>();
+    p.enabled = flag(entry, "enabled", legacyActive.empty() || *id == legacyActive);
+    p.userNamed = flag(entry, "userNamed", false);
+    p.lastRefresh = number(entry, "lastRefresh").value_or(0);
+    if (const auto hours = number(entry, "updateHours")) {
+      p.updateHours = static_cast<int>(std::clamp<std::int64_t>(*hours, 1, 24 * std::int64_t{7}));
     }
-    if (const auto it = entry.find("updateHours"); it != entry.end() && it->is_number_integer()) {
-      p.updateHours = static_cast<int>(std::clamp<std::int64_t>(it->get<std::int64_t>(), 1, std::int64_t{24} * 7));
+    p.autoUpdate = flag(entry, "autoUpdate", true);
+    if (const auto hours = number(entry, "userHours")) {
+      p.userHours = static_cast<int>(std::clamp<std::int64_t>(*hours, 0, kMaxRefreshHours));
+    }
+    if (const auto it = entry.find("disabled"); it != entry.end() && it->is_array()) {
+      for (const auto& tag : *it) {
+        if (tag.is_string() && IsServerEnabled(p, tag.get<std::string>())) {  // each once
+          p.disabled.push_back(tag.get<std::string>());
+        }
+      }
     }
     if (p.name.empty()) {
       p.name = UniqueProfileName(profiles, "Конфиг");
@@ -193,5 +210,4 @@ std::vector<Profile> ProfilesFromJson(const nlohmann::json& json) {
   }
   return profiles;
 }
-
 }  // namespace sovereign::tray
