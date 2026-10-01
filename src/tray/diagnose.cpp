@@ -1,5 +1,10 @@
 #include "diagnose.h"
 
+// windows.h's min/max macros break std::min/max (clang-tidy in CI doesn't see
+// the global NOMINMAX for every file).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
