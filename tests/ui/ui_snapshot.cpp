@@ -14,6 +14,7 @@
 #include <wil/resource.h>
 #include <wil/result.h>
 
+#include <array>
 #include <cstdio>
 #include <exception>
 #include <string>
@@ -168,6 +169,94 @@ int Window(HINSTANCE instance) {
   return 0;
 }
 
+// --edit-test: typing a configuration's name in place, in the real window,
+// driven by keys as a user would - Tab to the first configuration, Enter
+// opens it, Tab to its title, Enter starts the edit box over it; Enter keeps
+// what was typed, Esc drops it, clicking away keeps it. Needs a desktop:
+// ctest runs it in CI (CI is set) or with SOVEREIGN_DESKTOP_TESTS=1.
+int EditTest(HINSTANCE instance) {
+  std::array<wchar_t, 8> flag{};
+  if (GetEnvironmentVariableW(L"CI", flag.data(), static_cast<DWORD>(flag.size())) == 0 &&
+      GetEnvironmentVariableW(L"SOVEREIGN_DESKTOP_TESTS", flag.data(), static_cast<DWORD>(flag.size())) == 0) {
+    std::puts("edit in place: skipped (set SOVEREIGN_DESKTOP_TESTS=1; CI runs it)");
+    return 0;
+  }
+  sovereign::tray::UiCommand command{};
+  sovereign::tray::UiArgs got;
+  int commands = 0;
+  sovereign::tray::MainWindow window(instance, [&](sovereign::tray::UiCommand c, const sovereign::tray::UiArgs& a) {
+    command = c;
+    got = a;
+    ++commands;
+  });
+  window.Update(SampleContent());
+  window.Show(UiPage::Subscription);
+  HWND hwnd = FindWindowW(L"SovereignMainWindow", nullptr);
+  const auto pump = [] {
+    for (int i = 0; i < 20; ++i) {
+      MSG msg;
+      while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+      }
+      Sleep(10);
+    }
+  };
+  const auto key = [&](WPARAM vk) {
+    SendMessageW(hwnd, WM_KEYDOWN, vk, 0);
+    pump();
+  };
+  const auto startEdit = [&] {
+    key(VK_ESCAPE);  // to the list, if on the configuration's page
+    window.Show(UiPage::Subscription);
+    key(VK_TAB);  // back
+    key(VK_TAB);  // the first configuration
+    key(VK_RETURN);
+    key(VK_TAB);  // back
+    key(VK_TAB);  // the title
+    key(VK_RETURN);
+    return FindWindowExW(hwnd, nullptr, L"EDIT", nullptr);
+  };
+  int failures = 0;
+  const auto check = [&](bool ok, const char* what) {
+    if (!ok) {
+      std::fprintf(stderr, "edit in place: %s\n", what);
+      ++failures;
+    }
+  };
+
+  HWND box = startEdit();
+  check(box != nullptr, "no edit box over the title");
+  if (box != nullptr) {
+    std::array<wchar_t, 64> text{};
+    GetWindowTextW(box, text.data(), static_cast<int>(text.size()));
+    check(std::wstring(text.data()) == L"packetlab", "the box doesn't hold the name");
+    SetWindowTextW(box, L"  Мой NL  ");
+    SendMessageW(box, WM_KEYDOWN, VK_RETURN, 0);
+    pump();
+    check(commands == 1 && command == sovereign::tray::UiCommand::RenameProfile && got.index == 0 &&
+              got.text == L"Мой NL",
+          "Enter didn't send the name, trimmed");
+    check(FindWindowExW(hwnd, nullptr, L"EDIT", nullptr) == nullptr, "the box stayed after Enter");
+  }
+  box = startEdit();
+  if (box != nullptr) {
+    SetWindowTextW(box, L"dropped");
+    SendMessageW(box, WM_KEYDOWN, VK_ESCAPE, 0);
+    pump();
+    check(commands == 1, "Esc sent something");
+  }
+  box = startEdit();
+  if (box != nullptr) {
+    SetWindowTextW(box, L"kept");
+    SetFocus(hwnd);  // a click elsewhere in the window
+    pump();
+    check(commands == 2 && got.text == L"kept", "leaving the box didn't keep the name");
+  }
+  window.Hide();
+  return failures == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - see the catch below
@@ -179,7 +268,9 @@ int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - se
   int result = 2;
   try {
     const std::wstring arg = argc > 1 ? argv[1] : L"ui-snapshots";
-    result = arg == L"--window" ? Window(GetModuleHandleW(nullptr)) : Snapshots(arg);
+    result = arg == L"--window"      ? Window(GetModuleHandleW(nullptr))
+             : arg == L"--edit-test" ? EditTest(GetModuleHandleW(nullptr))
+                                     : Snapshots(arg);
   } catch (const wil::ResultException& e) {
     std::fprintf(stderr, "ui-snapshot: 0x%08lx\n", static_cast<unsigned long>(e.GetErrorCode()));
   } catch (const std::exception& e) {

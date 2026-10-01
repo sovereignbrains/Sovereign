@@ -106,10 +106,11 @@ enum class UiCommand : std::uint8_t {
   ScanScreen,        // QR codes on the screen
   // A configuration's, by index into profiles:
   ToggleProfile,     // on or off
-  RenameProfile,
+  RenameProfile,     // text: the name typed in place
   RefreshProfile,
   ToggleAutoUpdate,
   ChooseRefreshPeriod,  // anchor: where to open the menu of intervals
+  SetRefreshHours,   // text: the hours typed in place
   CopyProfileLink,   // the subscription link onto the clipboard
   RemoveProfile,     // after asking
   ToggleServer,      // sub: index into its servers
@@ -139,6 +140,7 @@ struct UiArgs {
   POINT anchor{};
   int index = 0;
   int sub = 0;  // a second index: a server within a configuration
+  std::wstring text;  // what was typed in place (MainWindow::EditInPlace)
   HWND owner = nullptr;  // the window a menu or a dialog belongs to
 };
 

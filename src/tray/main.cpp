@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <ctime>
@@ -1894,98 +1895,14 @@ void RequestChoice(std::string id, ConfigChoice choice) {
   Wake();
 }
 
-// A line of text from the user: a small modal dialog over `owner` - an
-// edit box, OK and Cancel. nullopt when cancelled.
-std::optional<std::wstring> AskText(HWND owner, const std::wstring& title, const std::wstring& prompt,
-                                    const std::wstring& initial) {
-  // The dialog template, built in memory: DLGTEMPLATE, then per control a
-  // DLGITEMTEMPLATE - each on a DWORD boundary, strings as WORD arrays.
-  std::vector<WORD> t;
-  const auto align = [&t] {
-    if (t.size() % 2 != 0) {
-      t.push_back(0);
-    }
-  };
-  const auto dword = [&t](DWORD v) {
-    t.push_back(LOWORD(v));
-    t.push_back(HIWORD(v));
-  };
-  const auto text = [&t](std::wstring_view s) {
-    t.insert(t.end(), s.begin(), s.end());
-    t.push_back(0);
-  };
-  dword(DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU);
-  dword(0);        // extended style
-  t.push_back(4);  // controls
-  t.push_back(0);  // x, y, cx, cy in dialog units
-  t.push_back(0);
-  t.push_back(240);
-  t.push_back(78);
-  t.push_back(0);  // no menu
-  t.push_back(0);  // the default class
-  text(title);
-  t.push_back(9);  // the font's size
-  text(L"Segoe UI");
-  const auto control = [&](DWORD style, short x, short y, short cx, short cy, WORD id, WORD atom,
-                           std::wstring_view caption) {
-    align();
-    dword(style | WS_CHILD | WS_VISIBLE);
-    dword(0);
-    t.push_back(static_cast<WORD>(x));
-    t.push_back(static_cast<WORD>(y));
-    t.push_back(static_cast<WORD>(cx));
-    t.push_back(static_cast<WORD>(cy));
-    t.push_back(id);
-    t.push_back(0xFFFF);  // a predefined class by atom
-    t.push_back(atom);
-    text(caption);
-    t.push_back(0);  // no creation data
-  };
-  constexpr WORD kEdit = 100;
-  control(SS_LEFT, 8, 8, 224, 10, static_cast<WORD>(-1), 0x0082, prompt);
-  control(ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 8, 22, 224, 14, kEdit, 0x0081, L"");
-  control(BS_DEFPUSHBUTTON | WS_TABSTOP, 128, 56, 50, 14, IDOK, 0x0080, L"OK");
-  control(BS_PUSHBUTTON | WS_TABSTOP, 182, 56, 50, 14, IDCANCEL, 0x0080, L"Отмена");
-
-  struct Exchange {
-    std::wstring value;
-  } exchange{initial};
-  const DLGPROC proc = [](HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) -> INT_PTR {
-    // The dialog API carries the pointer as an integer: there's no other way.
-    auto* data = reinterpret_cast<Exchange*>(GetWindowLongPtrW(dialog, DWLP_USER));  // NOLINT(performance-no-int-to-ptr)
-    if (message == WM_INITDIALOG) {
-      SetWindowLongPtrW(dialog, DWLP_USER, lparam);
-      data = reinterpret_cast<Exchange*>(lparam);  // NOLINT(performance-no-int-to-ptr)
-      SetDlgItemTextW(dialog, kEdit, data->value.c_str());
-      SendDlgItemMessageW(dialog, kEdit, EM_SETSEL, 0, -1);
-      SetFocus(GetDlgItem(dialog, kEdit));
-      return FALSE;  // the focus is set
-    }
-    if (message == WM_COMMAND && (LOWORD(wparam) == IDOK || LOWORD(wparam) == IDCANCEL)) {
-      if (LOWORD(wparam) == IDOK && data != nullptr) {
-        std::wstring value(static_cast<std::size_t>(GetWindowTextLengthW(GetDlgItem(dialog, kEdit))) + 1, L'\0');
-        value.resize(static_cast<std::size_t>(GetDlgItemTextW(dialog, kEdit, value.data(), static_cast<int>(value.size()))));
-        data->value = std::move(value);
-      }
-      EndDialog(dialog, LOWORD(wparam));
-      return TRUE;
-    }
-    return FALSE;
-  };
-  const INT_PTR result = DialogBoxIndirectParamW(GetModuleHandleW(nullptr), reinterpret_cast<LPCDLGTEMPLATEW>(t.data()),
-                                                 owner, proc, reinterpret_cast<LPARAM>(&exchange));
-  if (result != IDOK) {
-    return std::nullopt;
-  }
-  return exchange.value;
-}
-
-// The refresh interval of a configuration: the server's, a few usual ones,
-// or any number of hours.
-void ChooseRefreshPeriod(HWND window, POINT at, const View::ProfileView& profile) {
+// The refresh interval of a configuration from a menu: the server's, a few
+// usual ones - the hours picked (0 = the server's) - or kCustomPeriod, for a
+// number typed in place; nullopt when the menu was dismissed.
+constexpr int kCustomPeriod = -1;
+std::optional<int> ChooseRefreshPeriod(HWND window, POINT at, const View::ProfileView& profile) {
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
-    return;
+    return std::nullopt;
   }
   static constexpr std::array<int, 8> kHours = {0, 1, 3, 6, 12, 24, 48, 168};
   const auto name = [](int hours) {
@@ -2000,36 +1917,20 @@ void ChooseRefreshPeriod(HWND window, POINT at, const View::ProfileView& profile
   }
   const bool custom = std::find(kHours.begin(), kHours.end(), profile.userHours) == kHours.end();
   constexpr UINT kOther = 100;
-  AppendMenuW(menu.get(), MF_STRING | (custom ? MF_CHECKED : MF_UNCHECKED), kOther,
-              custom ? (L"Свой: каждые " + name(profile.userHours) + L"…").c_str() : L"Свой период…");
+  const std::wstring other = custom ? L"Свой: каждые " + name(profile.userHours) + L"…" : std::wstring(L"Свой период…");
+  AppendMenuW(menu.get(), MF_STRING | (custom ? MF_CHECKED : MF_UNCHECKED), kOther, other.c_str());
   SetForegroundWindow(window);
   const auto command = static_cast<UINT>(
       TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN, at.x, at.y, 0, window,
                      nullptr));
-  int hours = -1;
   if (command >= 1 && command <= kHours.size()) {
-    hours = kHours[command - 1];
-  } else if (command == kOther) {
-    const auto text = AskText(window, L"Sovereign", L"Обновлять каждые сколько часов (1–720):",
-                              std::to_wstring(profile.userHours > 0 ? profile.userHours : profile.serverHours));
-    if (!text) {
-      return;
-    }
-    try {
-      hours = std::stoi(*text);
-    } catch (const std::exception&) {
-      hours = -1;
-    }
-    if (hours < 1 || hours > sovereign::tray::kMaxRefreshHours) {
-      MessageBoxW(window, L"Нужно число часов от 1 до 720.", L"Sovereign", MB_OK | MB_ICONWARNING);
-      return;
-    }
+    return kHours[command - 1];
   }
-  if (hours >= 0) {
-    RequestProfileChange({.id = profile.id, .what = ProfileChange::What::Hours, .on = false, .text = {}, .hours = hours});
+  if (command == kOther) {
+    return kCustomPeriod;
   }
+  return std::nullopt;
 }
-
 // A country's name as the system says it ("Нидерланды" on a Russian
 // Windows); the code itself if it doesn't know it.
 std::wstring CountryName(const std::wstring& code) {
@@ -2264,10 +2165,9 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleProfile:
       change(ProfileChange::What::Enabled, !profile.enabled);
       break;
-    case UiCommand::RenameProfile:
-      if (const auto name = AskText(owner, L"Sovereign", L"Название конфигурации:", Widen(profile.name));
-          name && !name->empty()) {
-        change(ProfileChange::What::Name, false, Narrow(*name));
+    case UiCommand::RenameProfile:  // typed over the page's title
+      if (!args.text.empty()) {
+        change(ProfileChange::What::Name, false, Narrow(args.text));
       }
       break;
     case UiCommand::RefreshProfile:
@@ -2277,8 +2177,33 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       change(ProfileChange::What::AutoUpdate, !profile.autoUpdate);
       break;
     case UiCommand::ChooseRefreshPeriod:
-      ChooseRefreshPeriod(owner, args.anchor, profile);
+      if (const auto hours = ChooseRefreshPeriod(owner, args.anchor, profile); hours == kCustomPeriod) {
+        // Any number of hours, typed over the button.
+        if (g_mainWindow != nullptr) {
+          const int shown = profile.userHours > 0 ? profile.userHours : profile.serverHours;
+          g_mainWindow->EditInPlace(UiCommand::ChooseRefreshPeriod, args.index, UiCommand::SetRefreshHours,
+                                    std::to_wstring(shown), /*digitsOnly=*/true);
+        }
+      } else if (hours) {
+        RequestProfileChange({.id = profile.id, .what = ProfileChange::What::Hours, .on = false, .text = {},
+                              .hours = *hours});
+      }
       break;
+    case UiCommand::SetRefreshHours: {
+      int hours = 0;
+      const std::string text = Narrow(args.text);
+      const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), hours);
+      if (error != std::errc{} || end != text.data() + text.size() || hours < 1 ||
+          hours > sovereign::tray::kMaxRefreshHours) {
+        if (g_trayIcon != nullptr) {
+          g_trayIcon->Balloon(L"Sovereign", L"Период — число часов от 1 до 720.");
+        }
+        break;
+      }
+      RequestProfileChange({.id = profile.id, .what = ProfileChange::What::Hours, .on = false, .text = {},
+                            .hours = hours});
+      break;
+    }
     case UiCommand::CopyProfileLink:
       if (!profile.url.empty() && CopyText(owner, Widen(profile.url)) && g_trayIcon != nullptr) {
         g_trayIcon->Balloon(L"Sovereign: ссылка скопирована",
@@ -2343,6 +2268,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::RefreshProfile:
     case UiCommand::ToggleAutoUpdate:
     case UiCommand::ChooseRefreshPeriod:
+    case UiCommand::SetRefreshHours:
     case UiCommand::CopyProfileLink:
     case UiCommand::RemoveProfile:
     case UiCommand::ToggleServer:

@@ -47,6 +47,12 @@ class MainWindow {
   // New content; repaints if visible.
   void Update(const UiContent& content);
 
+  // Typing in place: an edit box over an item of the page shown - the one
+  // whose command is `anchor` with `index` (for RenameProfile: the page's
+  // title) - holding `initial`. Enter, or clicking elsewhere, sends `onEnter`
+  // with the text in UiArgs::text and the same index; Esc drops it.
+  void EditInPlace(UiCommand anchor, int index, UiCommand onEnter, const std::wstring& initial, bool digitsOnly);
+
   // The log page's lines: all of them, or new ones at the bottom.
   void SetLogs(const std::vector<std::wstring>& lines);
   void AppendLogs(const std::vector<std::wstring>& lines);

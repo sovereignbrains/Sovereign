@@ -7,3 +7,6 @@ add_executable(ui-snapshot ui_snapshot.cpp "${CMAKE_SOURCE_DIR}/src/tray/tray.rc
 target_link_libraries(ui-snapshot PRIVATE sovereign_tray_ui)
 sovereign_copy_asan_runtime(ui-snapshot)
 add_test(NAME ui-snapshot COMMAND ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/snapshots")
+# Typing a configuration's name in place, in the real window (a desktop: CI,
+# or SOVEREIGN_DESKTOP_TESTS=1 - else it says it's skipped).
+add_test(NAME ui-edit-in-place COMMAND ui-snapshot --edit-test)

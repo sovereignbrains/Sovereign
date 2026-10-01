@@ -1,6 +1,7 @@
 #include "main_window.h"
 
 #include <windowsx.h>
+#include <commctrl.h>
 #include <d2d1.h>
 #include <dwmapi.h>
 #include <dwrite.h>
@@ -73,6 +74,10 @@ constexpr float kLogLine = 20;
 constexpr std::size_t kLogKeep = 5000;
 
 // The log's right-click menu.
+// The edit box typed in lost the focus: keep what's in it (posted - the box
+// can't be destroyed inside its own message).
+constexpr UINT kEndEditMessage = WM_APP + 41;
+
 constexpr UINT kLogMenuCopy = 1;
 constexpr UINT kLogMenuCopyAll = 2;
 constexpr UINT kLogMenuSelectAll = 3;
@@ -140,7 +145,8 @@ enum class Kind : std::uint8_t {
   LogBox,        // the log's lines
 };
 
-enum class ItemAction : std::uint8_t { None, Command, Page, OpenProfile, ToggleLevel, PauseLogs, SaveLogs };
+// EditName: the configuration `index`'s name, typed over the page's title.
+enum class ItemAction : std::uint8_t { None, Command, Page, OpenProfile, EditName, ToggleLevel, PauseLogs, SaveLogs };
 
 struct Item {
   Kind kind = Kind::Text;
@@ -898,6 +904,13 @@ class Painter {
     const UiProfile& p = *found;
     const int index = static_cast<int>(found - c.profiles.begin());
     y = PageTitle(l, p.name.c_str(), nullptr, x0, x1, y, UiPage::Subscription);
+    for (auto it = l.items.rbegin(); it != l.items.rend(); ++it) {
+      if (it->kind == Kind::Title) {  // a click on the name renames it
+        it->action = ItemAction::EditName;
+        it->index = index;
+        break;
+      }
+    }
     const float mid = (x0 + x1) / 2;
 
     const float cardHeight = p.subscription ? 128.0f : 64.0f;
@@ -915,8 +928,10 @@ class Painter {
       autoUpdate.checked = p.autoUpdate;
       l.items.push_back(std::move(autoUpdate));
     }
-    y += cardHeight + 8;    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Переименовать", kGlyphRename,
-                                  UiCommand::RenameProfile, index));
+    y += cardHeight + 8;    Item rename = Make(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Переименовать", kGlyphRename);
+    rename.action = ItemAction::EditName;
+    rename.index = index;
+    l.items.push_back(std::move(rename));
     if (p.subscription) {
       l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Период…", kGlyphClock,
                                     UiCommand::ChooseRefreshPeriod, index));
@@ -1751,7 +1766,21 @@ struct MainWindow::Impl {
     InvalidateRect(hwnd, nullptr, FALSE);
   }
 
+  // An edit box over the item for `anchor` and `index` on the page shown
+  // (RenameProfile: over the title).
+  void EditOver(UiCommand anchor, int index, UiCommand onEnter, const std::wstring& initial, bool digitsOnly) {
+    for (const Item& it : layout.items) {
+      const bool title = anchor == UiCommand::RenameProfile && it.kind == Kind::Title;
+      const bool button = it.action == ItemAction::Command && it.command == anchor && it.index == index;
+      if (title || button) {
+        BeginEdit(it.rect, onEnter, index, initial, digitsOnly);
+        return;
+      }
+    }
+  }
+
   void Go(UiPage p) {
+    EndEdit(true);
     if (p != page) {
       page = p;
       scroll = 0;
@@ -1765,6 +1794,12 @@ struct MainWindow::Impl {
     switch (item.action) {
       case ItemAction::None: return;
       case ItemAction::Page: Go(static_cast<UiPage>(item.index)); return;
+      case ItemAction::EditName:
+        if (item.index >= 0 && static_cast<std::size_t>(item.index) < content.profiles.size()) {
+          EditOver(UiCommand::RenameProfile, item.index, UiCommand::RenameProfile,
+                   content.profiles[static_cast<std::size_t>(item.index)].name, false);
+        }
+        return;
       case ItemAction::OpenProfile:
         if (item.index >= 0 && static_cast<std::size_t>(item.index) < content.profiles.size()) {
           openProfile = content.profiles[static_cast<std::size_t>(item.index)].id;
@@ -1990,8 +2025,97 @@ struct MainWindow::Impl {
   }
 
   void ScrollBy(float dip) {
+    EndEdit(true);
     scroll += dip;
     Relayout();
+  }
+
+  /* ---- typing in place ---- */
+
+  struct InlineEdit {
+    wil::unique_hwnd box;
+    UiCommand onEnter = UiCommand::RenameProfile;
+    int index = 0;
+  };
+  InlineEdit edit;
+  wil::unique_hfont editFont;
+  wil::unique_hbrush editBrush;
+
+  void BeginEdit(D2D1_RECT_F rect, UiCommand onEnter, int index, const std::wstring& initial, bool digitsOnly) {
+    EndEdit(false);
+    const UINT dpi = Dpi();
+    const int fontHeight = Scale(17, dpi);
+    editFont.reset(CreateFontW(-fontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI"));
+    if (!editBrush) {
+      editBrush.reset(CreateSolidBrush(ui::kCardColor));
+    }
+    const int left = Scale(rect.left, dpi);
+    const int right = Scale(rect.right, dpi);
+    const int height = fontHeight + Scale(10, dpi);
+    const int top = Scale((rect.top + rect.bottom) / 2, dpi) - height / 2;
+    edit.box.reset(CreateWindowExW(0, L"EDIT", initial.c_str(),
+                                   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | (digitsOnly ? ES_NUMBER : 0), left, top,
+                                   right - left, height, hwnd, nullptr, instance, nullptr));
+    if (!edit.box) {
+      return;
+    }
+    edit.onEnter = onEnter;
+    edit.index = index;
+    SendMessageW(edit.box.get(), WM_SETFONT, reinterpret_cast<WPARAM>(editFont.get()), TRUE);
+    SendMessageW(edit.box.get(), EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(Scale(8, dpi), Scale(8, dpi)));
+    SendMessageW(edit.box.get(), EM_LIMITTEXT, 64, 0);
+    SendMessageW(edit.box.get(), EM_SETSEL, 0, -1);
+    SetWindowSubclass(edit.box.get(), EditProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    SetFocus(edit.box.get());
+  }
+
+  // The box gone; with keep, what was typed goes to the tray.
+  void EndEdit(bool keep) {
+    if (!edit.box) {
+      return;
+    }
+    std::wstring text(static_cast<std::size_t>(GetWindowTextLengthW(edit.box.get())) + 1, L'\0');
+    text.resize(static_cast<std::size_t>(GetWindowTextW(edit.box.get(), text.data(), static_cast<int>(text.size()))));
+    const UiCommand command = edit.onEnter;
+    const int index = edit.index;
+    edit.box.reset();  // its WM_KILLFOCUS finds no box: nothing twice
+    SetFocus(hwnd);
+    const auto first = text.find_first_not_of(L" \t");
+    if (!keep || first == std::wstring::npos) {
+      return;
+    }
+    UiArgs args;
+    args.index = index;
+    args.owner = hwnd;
+    args.text = text.substr(first, text.find_last_not_of(L" \t") - first + 1);
+    onCommand(command, args);
+  }
+
+  static LRESULT CALLBACK EditProc(HWND box, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR data) {
+    auto* self = reinterpret_cast<Impl*>(data);  // NOLINT(performance-no-int-to-ptr) - the subclass's reference data
+    switch (message) {
+      case WM_KEYDOWN:
+        if (wParam == VK_RETURN || wParam == VK_ESCAPE) {
+          self->EndEdit(wParam == VK_RETURN);
+          return 0;
+        }
+        break;
+      case WM_CHAR:
+        if (wParam == VK_RETURN || wParam == VK_ESCAPE) {
+          return 0;  // no beep
+        }
+        break;
+      case WM_KILLFOCUS:
+        PostMessageW(self->hwnd, kEndEditMessage, 0, 0);
+        break;
+      case WM_NCDESTROY:
+        RemoveWindowSubclass(box, EditProc, 1);
+        break;
+      default:
+        break;
+    }
+    return DefSubclassProc(box, message, wParam, lParam);
   }
 
   LRESULT Handle(HWND w, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -2005,6 +2129,7 @@ struct MainWindow::Impl {
       }
       case WM_ERASEBKGND: return 1;  // Direct2D paints everything
       case WM_SIZE:
+        EndEdit(true);
         if (target) {
           target->Resize(D2D1::SizeU(LOWORD(lParam), HIWORD(lParam)));
         }
@@ -2125,8 +2250,22 @@ struct MainWindow::Impl {
           deactivatedAt = GetTickCount64();
         }
         return DefWindowProcW(w, message, wParam, lParam);
+      case kEndEditMessage:
+        if (edit.box && GetFocus() != edit.box.get()) {
+          EndEdit(true);
+        }
+        return 0;
+      case WM_CTLCOLOREDIT:
+        if (edit.box && reinterpret_cast<HWND>(lParam) == edit.box.get()) {  // NOLINT(performance-no-int-to-ptr)
+          const auto dc = reinterpret_cast<HDC>(wParam);  // NOLINT(performance-no-int-to-ptr)
+          SetTextColor(dc, ui::kPrimaryText);
+          SetBkColor(dc, ui::kCardColor);
+          return reinterpret_cast<LRESULT>(editBrush.get());
+        }
+        return DefWindowProcW(w, message, wParam, lParam);
       case WM_CLOSE:
         // Only the view closes: the tray keeps running.
+        EndEdit(true);
         ShowWindow(w, SW_HIDE);
         return 0;
       default:
@@ -2274,6 +2413,11 @@ void MainWindow::Update(const UiContent& content) {
   if (IsVisible()) {
     impl_->Relayout();
   }
+}
+
+void MainWindow::EditInPlace(UiCommand anchor, int index, UiCommand onEnter, const std::wstring& initial,
+                             bool digitsOnly) {
+  impl_->EditOver(anchor, index, onEnter, initial, digitsOnly);
 }
 
 void MainWindow::SetLogs(const std::vector<std::wstring>& lines) { impl_->AddLogs(lines, true); }
