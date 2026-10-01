@@ -107,6 +107,11 @@ if (SOVEREIGN_REFERENCE_SINGBOX)
   add_test(NAME routing-configs-singbox-check COMMAND unit-routing --check "${SOVEREIGN_REFERENCE_SINGBOX}")
 endif()
 
+add_executable(unit-diagnostics diagnostics_test.cpp check.h)
+target_link_libraries(unit-diagnostics PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-diagnostics)
+add_test(NAME unit-diagnostics COMMAND unit-diagnostics)
+
 add_executable(unit-profiles profiles_test.cpp check.h)
 target_link_libraries(unit-profiles PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-profiles)
@@ -150,3 +155,8 @@ target_link_libraries(unit-go-core PRIVATE sovereign_gocore_host)
 add_dependencies(unit-go-core gocore-stub)
 sovereign_copy_asan_runtime(unit-go-core)
 add_test(NAME unit-go-core COMMAND unit-go-core)
+
+# The checks from a console, against the internet as this machine sees it: by hand, not a ctest.
+add_executable(diagnose-probe diagnose_probe.cpp)
+target_link_libraries(diagnose-probe PRIVATE sovereign_tray_net)
+sovereign_copy_asan_runtime(diagnose-probe)

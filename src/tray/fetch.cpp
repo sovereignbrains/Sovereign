@@ -38,7 +38,8 @@ struct Response {
 // Redirects are followed https to https only (WinHTTP's default policy).
 std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std::wstring& userAgent,
                                               std::size_t maxBytes, std::initializer_list<const wchar_t*> headerNames,
-                                              std::string_view what) {
+                                              std::string_view what, const wchar_t* method = L"GET",
+                                              std::string_view body = {}) {
   if (!IsHttpsUrl(url)) {
     return std::unexpected("ссылка должна быть https://");
   }
@@ -66,13 +67,16 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
   if (!connection) {
     return std::unexpected(Failure(std::format("не удалось подключиться: {}", what)));
   }
-  const wil::unique_winhttp_hinternet request(WinHttpOpenRequest(connection.get(), L"GET", path.c_str(), nullptr,
+  const wil::unique_winhttp_hinternet request(WinHttpOpenRequest(connection.get(), method, path.c_str(), nullptr,
                                                                  WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                                                  WINHTTP_FLAG_SECURE));
   if (!request) {
     return std::unexpected(Failure("запрос не создался"));
   }
-  if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+  // WinHTTP takes the body as non-const; it doesn't write to it.
+  auto* data = body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data());
+  if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, data, static_cast<DWORD>(body.size()),
+                          static_cast<DWORD>(body.size()), 0) ||
       !WinHttpReceiveResponse(request.get(), nullptr)) {
     return std::unexpected(Failure(std::format("{} не ответил", what)));
   }
@@ -161,6 +165,17 @@ std::expected<std::string, std::string> Download(const std::wstring& url, const 
     return std::unexpected(std::format("сервер ответил {}", response->status));
   }
   return std::move(response->body);
+}
+
+std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body) {
+  auto response = HttpsGet(url, userAgent, std::size_t{1024} * 1024, {}, "сервер", L"POST", body);
+  if (!response) {
+    return std::unexpected(response.error());
+  }
+  if (response->status != 200) {
+    return std::unexpected(std::format("сервер ответил {}", response->status));
+  }
+  return {};
 }
 
 }  // namespace sovereign::tray

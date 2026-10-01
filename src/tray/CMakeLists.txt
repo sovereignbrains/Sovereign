@@ -39,6 +39,8 @@ add_library(sovereign_tray_lib STATIC
   combine.h
   routing.cpp
   routing.h
+  diagnostics.cpp
+  diagnostics.h
   import_formats.cpp
   import_formats.h
   qr_codes.cpp
@@ -79,12 +81,21 @@ add_library(sovereign_tray_settings STATIC
 target_include_directories(sovereign_tray_settings PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_settings PUBLIC sovereign_tray_lib sovereign_common)
 
+# The tray's requests over the network: subscriptions, downloads, the checks -
+# linked by the tray and by tests/unit's diagnose-probe.
+add_library(sovereign_tray_net STATIC
+  fetch.cpp
+  fetch.h
+  diagnose.cpp
+  diagnose.h
+)
+target_include_directories(sovereign_tray_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(sovereign_tray_net PUBLIC sovereign_tray_lib sovereign_common winhttp iphlpapi ws2_32 dnsapi)
+
 add_executable(sovereign-tray WIN32
   main.cpp
   autostart.cpp
   autostart.h
-  fetch.cpp
-  fetch.h
   pipe_client.cpp
   pipe_client.h
   updater.cpp
@@ -101,5 +112,5 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_D
 target_compile_definitions(sovereign-tray PRIVATE "SOVEREIGN_SINGBOX_VERSION_W=L\"${SOVEREIGN_TRAY_SINGBOX_VERSION}\""
                                                   "SOVEREIGN_VERSION_W=L\"${SOVEREIGN_VERSION}\"")
 
-target_link_libraries(sovereign-tray PRIVATE sovereign_tray_ui sovereign_tray_capture sovereign_tray_settings sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid)
+target_link_libraries(sovereign-tray PRIVATE sovereign_tray_ui sovereign_tray_capture sovereign_tray_settings sovereign_tray_net sovereign_tray_lib sovereign_common shell32 user32 gdi32 winhttp iphlpapi ole32 uuid ws2_32 dnsapi)
 sovereign_copy_asan_runtime(sovereign-tray)

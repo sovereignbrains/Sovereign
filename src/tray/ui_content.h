@@ -71,6 +71,15 @@ struct UiRouting {
   bool listsFailed = false;
 };
 
+// The checks' page (diagnostics.h): one row each.
+struct UiCheck {
+  enum class Status : std::uint8_t { NotRun, Running, Ok, Warn, Fail };
+  std::wstring title;
+  std::wstring summary;
+  std::wstring detail;
+  Status status = Status::NotRun;
+};
+
 // What the tray's window shows; built by main.cpp from the worker's view.
 // Strings are ready to draw.
 struct UiContent {
@@ -87,6 +96,8 @@ struct UiContent {
   std::wstring combineError;     // why they don't
   std::vector<std::wstring> combineNotes;  // what was left out of it
   UiRouting routing;
+  std::vector<UiCheck> checks;  // the "Проверка" page, in diagnose.h's CheckId order
+  bool checksRunning = false;
 
   bool appsInclude = false;      // per-app mode: false = all except the list
   std::vector<std::wstring> apps;
@@ -118,7 +129,7 @@ struct UiContent {
 // The window's pages: the overview, and the ones it opens (back with Esc).
 // Profile: one configuration's page, opened from the list on Subscription.
 // Routing: where traffic goes and DNS, opened from its tile.
-enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings, Profile, Routing };
+enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings, Profile, Routing, Checks };
 inline constexpr int kUiPageCount = 6;  // the ones Ctrl+1..6 open: all but Profile and Routing
 
 enum class UiCommand : std::uint8_t {
@@ -150,6 +161,11 @@ enum class UiCommand : std::uint8_t {
   AddRuleText,        // text: what was typed
   RuleMenu,           // index into the rules; anchor
   ImportRules,        // anchor: the menu of configurations to take rules from
+  // The checks':
+  RunChecks,          // everything but speed and an address
+  RunSpeed,
+  CheckRoute,         // starts typing an address over the button
+  CheckRouteText,     // text: the address
   TakeSubscription,  // the waiting subscription replaces the edited config
   KeepConfig,        // the edited config stays
   CarryOverEdits,    // the edits, merged into the waiting subscription

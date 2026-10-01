@@ -55,6 +55,7 @@
 #include "autostart.h"
 #include "capture.h"
 #include "combine.h"
+#include "diagnose.h"
 #include "config_sync.h"
 #include "delays.h"
 #include "effective_config.h"
@@ -194,6 +195,9 @@ struct View {
   std::size_t listsNeeded = 0;
   std::int64_t listsUpdated = 0;          // unix seconds of the last one downloaded
   std::string listsError;
+  // The checks' page (diagnose.h): written by the checks' thread, not the worker.
+  std::array<sovereign::tray::CheckResult, sovereign::tray::kCheckCount> checks{};
+  bool checksRunning = false;
   // The configurations (profiles.h), in the settings' order.
   struct ServerView {
     std::string tag;
@@ -1901,6 +1905,68 @@ bool CopyText(HWND owner, const std::wstring& text) {
   return copied;
 }
 
+// A run of the checks (diagnose.h), on a thread of its own: they take
+// seconds, the speed test half a minute. One at a time.
+std::optional<std::jthread> g_checks;
+
+// The newest log lines (the core's and the tray's), UTF-8: where "where does
+// this go" reads the outbound.
+std::vector<std::string> RecentLogLines(std::size_t count) {
+  auto& shared = State();
+  const std::scoped_lock lock(shared.mutex);
+  std::vector<std::string> lines;
+  const std::size_t from = shared.logs.size() > count ? shared.logs.size() - count : 0;
+  for (std::size_t i = from; i < shared.logs.size(); ++i) {
+    lines.push_back(Narrow(shared.logs[i]));
+  }
+  return lines;
+}
+
+void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) {
+  auto& shared = State();
+  sovereign::tray::RoutingSettings routing;
+  {
+    const std::scoped_lock lock(shared.mutex);
+    if (shared.view.checksRunning) {
+      return;
+    }
+    shared.view.checksRunning = true;
+    for (const auto id : which) {
+      shared.view.checks[static_cast<std::size_t>(id)] = {};
+    }
+    routing = shared.view.routing;
+  }
+  g_checks.reset();  // the last run's thread, finished
+  g_checks.emplace([which = std::move(which), host = std::move(host), routing](const std::stop_token& stop) {
+    const auto post = [] {
+      auto& s = State();
+      HWND window = nullptr;
+      {
+        const std::scoped_lock lock(s.mutex);
+        window = s.window;
+      }
+      PostMessageW(window, kViewChangedMessage, 0, 0);
+    };
+    const sovereign::tray::DiagnoseInput input{
+        .routing = routing, .host = host, .userAgent = kUserAgent, .logs = [] { return RecentLogLines(400); }};
+    sovereign::tray::RunChecks(stop, which, input,
+                               [&](sovereign::tray::CheckId id, const sovereign::tray::CheckResult& result) {
+                                 {
+                                   auto& s = State();
+                                   const std::scoped_lock lock(s.mutex);
+                                   s.view.checks[static_cast<std::size_t>(id)] = result;
+                                 }
+                                 post();
+                               });
+    {
+      auto& s = State();
+      const std::scoped_lock lock(s.mutex);
+      s.view.checksRunning = false;
+    }
+    post();
+  });
+}
+
 void RequestRoutingChange(RoutingChange change) {
   {
     auto& shared = State();
@@ -2268,6 +2334,17 @@ UiContent ContentFrom(const View& v) {
     shown.detail = std::move(detail);
     c.profiles.push_back(std::move(shown));
   }
+  static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckTitles = {
+      L"Выход через прокси", L"Российское напрямую", L"Утечка DNS",        L"WebRTC / UDP", L"IPv6",
+      L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Куда пойдёт адрес"};
+  for (std::size_t i = 0; i < sovereign::tray::kCheckCount; ++i) {
+    const auto& result = v.checks[i];
+    c.checks.push_back({.title = kCheckTitles[i],
+                        .summary = Widen(result.summary),
+                        .detail = Widen(result.detail),
+                        .status = static_cast<sovereign::tray::UiCheck::Status>(result.status)});
+  }
+  c.checksRunning = v.checksRunning;
   using sovereign::tray::RoutingSettings;
   const RoutingSettings& r = v.routing;
   c.routing.own = r.source == RoutingSettings::Source::Own;
@@ -2583,6 +2660,24 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ScanScreen:
       ScanScreen();
+      break;
+    case UiCommand::RunChecks: {
+      using sovereign::tray::CheckId;
+      StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6, CheckId::Lan,
+                   CheckId::DnsLatency},
+                  {});
+      break;
+    }
+    case UiCommand::RunSpeed:
+      StartChecks({sovereign::tray::CheckId::Speed}, {});
+      break;
+    case UiCommand::CheckRoute:  // the address, typed over the button
+      if (g_mainWindow != nullptr) {
+        g_mainWindow->EditInPlace(UiCommand::CheckRoute, 0, UiCommand::CheckRouteText, L"", false);
+      }
+      break;
+    case UiCommand::CheckRouteText:
+      StartChecks({sovereign::tray::CheckId::Route}, Narrow(args.text));
       break;
     case UiCommand::SetRoutingSource:
     case UiCommand::SetRoutingProfile:
@@ -2901,6 +2996,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     }
     exitCode = static_cast<int>(msg.wParam);
     thread.request_stop();
+    g_checks.reset();  // stops and joins a check run, while its state is still here
   }  // joins the worker before its state goes away
   g_updater = nullptr;
   g_mainWindow = nullptr;

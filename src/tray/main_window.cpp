@@ -55,6 +55,7 @@ constexpr float kPad = 16;         // the page's margins
 constexpr float kMaxPage = 560;    // wider windows keep the page at this, centered
 constexpr float kRow = 44;         // a list row
 constexpr float kProfileRow = 54;  // a configuration's row: its name and its state
+constexpr float kCheckRow = 96;   // a check: its title, its result, what it means (two lines)
 constexpr float kServerRow = 60;   // a server on a configuration's page: its name, protocol and switch
 constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
@@ -115,6 +116,8 @@ constexpr const wchar_t* kGlyphRename = L"\xE8AC";
 constexpr const wchar_t* kGlyphClock = L"\xE917";
 constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
 constexpr const wchar_t* kGlyphGlobe = L"\xE774";
+constexpr const wchar_t* kGlyphShield = L"\xEA18";
+constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -141,6 +144,7 @@ enum class Kind : std::uint8_t {
   Choice,        // a pickable row with a radio mark
   ProfileRow,    // a configuration: name, its state under it (`warn`: in red), dimmed when off (!`checked`)
   Toggle,        // just a switch, no text (`checked`: on)
+  CheckRow,      // a check: a dot in its status' colour (index: UiCheck::Status), title, result, what it means
   Segment,       // half of a two-way switch
   Chip,          // an on/off filter: tinted when on
   AppRow,        // a program in the per-app list
@@ -156,6 +160,7 @@ struct Item {
   std::wstring_view glyph;  // empty: none (never a null pointer - /analyze)
   std::wstring text;
   std::wstring detail;
+  std::wstring text2;  // a third line where a kind has one (CheckRow: what the result means)
   ItemAction action = ItemAction::None;
   UiCommand command = UiCommand::Toggle;
   int index = 0;
@@ -354,6 +359,23 @@ std::wstring SubscriptionLine(const UiContent& c) {
   }
   return on.size() == 1 && on.front()->subscription ? line + L" · " + on.front()->updated : line;
 }
+// The checks' line on the overview.
+std::wstring ChecksLine(const UiContent& c) {
+  if (c.checksRunning) {
+    return L"проверяю…";
+  }
+  int run = 0;
+  int bad = 0;
+  for (const UiCheck& check : c.checks) {
+    run += check.status != UiCheck::Status::NotRun ? 1 : 0;
+    bad += check.status == UiCheck::Status::Fail || check.status == UiCheck::Status::Warn ? 1 : 0;
+  }
+  if (run == 0) {
+    return L"утечки, скорость, маршруты";
+  }
+  return bad == 0 ? L"всё в порядке" : std::format(L"замечаний: {}", bad);
+}
+
 // The routing's line on the overview.
 std::wstring RoutingLine(const UiContent& c) {
   std::wstring line = c.routing.own ? L"свои" : L"из подписки";
@@ -448,6 +470,7 @@ class Painter {
       case UiPage::Settings: y = Settings(l, c, x0, x1, y); break;
       case UiPage::Profile: y = ProfilePage(l, c, profile, x0, x1, y); break;
       case UiPage::Routing: y = Routing(l, c, x0, x1, y); break;
+      case UiPage::Checks: y = Checks(l, c, x0, x1, y); break;
     }
     l.contentHeight = y + kPad;
 
@@ -738,6 +761,7 @@ class Painter {
          c.display == Display::Error);
     tile(4, kGlyphSettings, L"Настройки", L"Sovereign " + c.version.substr(0, c.version.find(L' ')), UiPage::Settings,
          c.update == UiUpdate::Available);
+    tile(5, kGlyphShield, L"Проверка", ChecksLine(c), UiPage::Checks, false);
     y += 3 * kTile + 2 * 10 + kGap;
 
     // The kill switch: on the overview, it's what decides what a drop does.
@@ -1216,6 +1240,55 @@ class Painter {
     return y;
   }
 
+  // The checks: what the internet sees, leaks, the local network, DNS, and -
+  // on their own buttons - speed and where an address goes.
+  float Checks(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    y = PageTitle(l, L"Проверка",
+                  L"Запросы трея идут как у любой программы — через туннель и правила, поэтому видно то же, что "
+                  L"видят твои программы и сайты.",
+                  x0, x1, y);
+    Item all = CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton},
+                           c.checksRunning ? L"Проверяю…" : L"Проверить всё", kGlyphShield, UiCommand::RunChecks);
+    all.enabled = !c.checksRunning;
+    l.items.push_back(std::move(all));
+    y += kButton + kGap;
+    const auto rows = [&](std::size_t from, std::size_t to) {
+      const float h = static_cast<float>(to - from) * kCheckRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      for (std::size_t i = from; i < to && i < c.checks.size(); ++i) {
+        const float top = y + static_cast<float>(i - from) * kCheckRow;
+        if (i > from) {
+          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        }
+        const UiCheck& check = c.checks[i];
+        Item row = Make(Kind::CheckRow, {x0 + 4, top + 2, x1 - 4, top + kCheckRow - 2}, check.title);
+        row.detail = check.status == UiCheck::Status::NotRun ? std::wstring(L"—") : check.summary;
+        row.glyph = {};
+        row.index = static_cast<int>(check.status);
+        row.text2 = check.detail;
+        l.items.push_back(std::move(row));
+      }
+      y += h + kGap;
+    };
+    rows(0, std::min<std::size_t>(7, c.checks.size()));
+
+    // Speed and an address: traffic and an answer of their own.
+    const float mid = (x0 + x1) / 2;
+    Item speed = CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Замерить скорость", kGlyphSpeed,
+                             UiCommand::RunSpeed);
+    speed.enabled = !c.checksRunning;
+    Item route = CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Куда пойдёт адрес…", kGlyphRoute,
+                             UiCommand::CheckRoute);
+    route.enabled = !c.checksRunning;
+    l.items.push_back(std::move(speed));
+    l.items.push_back(std::move(route));
+    y += kButton + kGap;
+    if (c.checks.size() >= 9) {
+      rows(7, 9);
+    }
+    return y - kGap;
+  }
+
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Приложения", L"Какие программы идут через прокси. Имена — как у exe-файла, без пути.", x0, x1, y);
     const float mid = (x0 + x1) / 2;
@@ -1544,6 +1617,17 @@ class Painter {
         k.Text(it.detail, caption_.get(), {r.left + 14, mid + 1, r.right - 28, r.bottom - 2},
                it.warn ? FromColorRef(ui::kDanger) : secondary);
         k.Text(it.glyph, glyph_.get(), {r.right - 26, r.top, r.right - 4, r.bottom}, secondary);
+        break;
+      }
+      case Kind::CheckRow: {
+        const std::array<D2D1_COLOR_F, 5> colors = {secondary, accent, FromColorRef(ui::kUpload),
+                                                    FromColorRef(ui::kWarning), FromColorRef(ui::kDanger)};
+        const D2D1_COLOR_F status = colors[static_cast<std::size_t>(std::clamp(it.index, 0, 4))];
+        k.t->FillEllipse(D2D1::Ellipse({r.left + 16, r.top + 17}, 5, 5), k.Color(status));
+        k.Text(it.text, body_.get(), {r.left + 32, r.top + 4, r.right - 8, r.top + 28}, primary);
+        k.Text(it.detail, body_.get(), {r.left + 32, r.top + 28, r.right - 8, r.top + 52},
+               it.index >= 3 ? status : primary);
+        k.Text(it.text2, captionWrap_.get(), {r.left + 32, r.top + 54, r.right - 8, r.bottom - 2}, secondary);
         break;
       }
       case Kind::Toggle: {

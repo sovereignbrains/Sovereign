@@ -5,6 +5,7 @@
 #include <expected>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace sovereign::tray {
 
@@ -24,5 +25,9 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
 // error for anything but a 200. Blocking: call it off the UI thread.
 std::expected<std::string, std::string> Download(const std::wstring& url, const std::wstring& userAgent,
                                                  std::size_t maxBytes);
+
+// A POST of `body` over https, same client; an error for anything but a 200.
+// Blocking: call it off the UI thread.
+std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body);
 
 }  // namespace sovereign::tray

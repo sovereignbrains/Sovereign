@@ -20,6 +20,7 @@
 #include "combine.h"
 #include "config_sync.h"
 #include "delays.h"
+#include "diagnostics.h"
 #include "exit_ip.h"
 #include "log_lines.h"
 #include "log_level.h"
@@ -105,6 +106,15 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
       std::abort();
     }
   }
+  // What the checks read off the wire: a trace, an address, a STUN answer,
+  // a leak report, the core's log.
+  (void)ParseTrace(text);
+  (void)ParseQuotedIp(text);
+  (void)ParseStunResponse(text, StunId{});
+  (void)JudgeDnsLeak(ParseDnsLeak(text));
+  (void)OutboundInLogs({std::string(text)}, {"vk.com", std::string(text.substr(0, 16))});
+  (void)ClientRuleFor(text, RoutingSettings{});
+
   // The routing over a config from a subscription, its rules taken, a rule
   // typed, tray.json's routing: a JSON object stays one.
   (void)ImportRules(text);
