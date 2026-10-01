@@ -369,17 +369,20 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts) {
       tag = std::format("proxy {}", n);
     }
     Json made = {{"type", "selector"}, {"tag", tag}, {"outbounds", ServerTags(*frame)}};
-    Json& route = (*frame)["route"];
-    if (!route.is_object()) {
-      route = Json::object();
-    }
-    if (const std::string final = Str(route, "final"); !final.empty() && !removed.contains(final)) {
-      made["default"] = final;
+    // Every key the frame needs first: an ordered_json object keeps its
+    // values in a vector, so adding a key moves the others - references
+    // are taken only after the last one is added (found by fuzz-tray-input).
+    if (!frame->contains("route") || !(*frame)["route"].is_object()) {
+      (*frame)["route"] = Json::object();
     }
     if (!frame->contains("outbounds") || !(*frame)["outbounds"].is_array()) {
       (*frame)["outbounds"] = Json::array();
     }
+    Json& route = (*frame)["route"];
     Json& outbounds = (*frame)["outbounds"];
+    if (const std::string final = Str(route, "final"); !final.empty() && !removed.contains(final)) {
+      made["default"] = final;
+    }
     outbounds.insert(outbounds.begin(), std::move(made));
     route["final"] = tag;
     selector = 0;
@@ -404,17 +407,17 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts) {
     std::set<std::string> off(parts[i].disabled.begin(), parts[i].disabled.end());
     Remove(*part, off);
     Moved moved = TakeServers(*part, parts[i].name, taken, frameDns);
+    // A key added to the frame moves its other values: endpoints first, the
+    // reference to outbounds after.
+    if (!moved.endpoints.empty() && (!frame->contains("endpoints") || !(*frame)["endpoints"].is_array())) {
+      (*frame)["endpoints"] = Json::array();
+    }
+    for (Json& e : moved.endpoints) {
+      (*frame)["endpoints"].push_back(std::move(e));
+    }
     Json& outbounds = (*frame)["outbounds"];
     for (Json& o : moved.outbounds) {
       outbounds.push_back(std::move(o));
-    }
-    if (!moved.endpoints.empty()) {
-      if (!frame->contains("endpoints") || !(*frame)["endpoints"].is_array()) {
-        (*frame)["endpoints"] = Json::array();
-      }
-      for (Json& e : moved.endpoints) {
-        (*frame)["endpoints"].push_back(std::move(e));
-      }
     }
     // Into the selector, and into the URL tests it offers ("auto").
     Json& main = outbounds[selector];

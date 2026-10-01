@@ -206,6 +206,21 @@ void TestNoSelector() {
   Checked().emplace_back("resolver", reversed.config.value_or("{}"));
   CHECK(!Tagged(r, "mine").is_null() && !Tagged(r, "mine").contains("domain_resolver"));
 
+  // A frame with no outbounds or route at all, and the other part with an
+  // endpoint: keys added to the frame mustn't leave references dangling
+  // (fuzz-tray-input found {"cmd":1} reading freed memory).
+  const auto bare = CombineConfigs({{"x", R"({"cmd":1})", {}}, {"Ключи", Keys(), {}}});
+  const json b = Parsed(bare);
+  CHECK(b["route"]["final"] == "proxy");
+  CHECK(Members(b, "proxy") == std::vector<std::string>({"NL", "DE", "SS"}));
+  ordered_json withWg = ordered_json::parse(Keys());
+  withWg["endpoints"] = ordered_json::array({{{"type", "wireguard"}, {"tag", "wg"}, {"address", {"10.0.0.2/32"}},
+                                              {"private_key", "a"}, {"peers", ordered_json::array()}}});
+  const auto endpoint = CombineConfigs({{"x", R"({"cmd":1})", {}}, {"W", withWg.dump(), {}}});
+  const json e = Parsed(endpoint);
+  CHECK(!Tagged(e, "wg").is_null());
+  CHECK(Members(e, "proxy").size() == 4);
+
   // A part that isn't JSON is left out, and said so.
   const auto broken = CombineConfigs({{"A", Frame(), {}}, {"B", "{oops", {}}});
   CHECK(broken.config.has_value() && broken.notes.size() == 1);
