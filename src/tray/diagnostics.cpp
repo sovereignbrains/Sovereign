@@ -294,14 +294,14 @@ std::string ClientRuleFor(std::string_view host, const RoutingSettings& routing)
       if (text.size() > 40) {
         text = text.substr(0, 40) + "...";
       }
-      return std::format("твоё правило «{}» -> {}", text, action);
+      return std::format("твоё правило «{}» → {}", text, action);
     }
   }
   if (routing.russiaDirect) {
     for (const std::string_view zone : {"ru", "su", "xn--p1ai", "xn--p1acf", "xn--80adxhks", "moscow", "tatar",
                                         "xn--d1acj3b", "xn--80asehdb", "xn--80aswg", "xn--c1avg"}) {
       if (EndsWithLabel(name, zone)) {
-        return std::format("российская зона .{} -> напрямую", zone);
+        return std::format("российская зона .{} → напрямую", zone);
       }
     }
   }

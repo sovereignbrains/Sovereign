@@ -317,7 +317,11 @@ struct Run {
 
   static CheckResult DnsLatency() {
     CheckResult r;
+    // Names asked for the first time - the worst case: a name already asked
+    // comes from the core's cache at once. One first, not counted: it may
+    // reopen the connection to the DNS server through the proxy.
     const auto measure = [](const std::string& zone) -> std::optional<int> {
+      (void)Resolve(std::format("sov-{}.{}", RandomLabel(10), zone));
       std::vector<int> times;
       for (int i = 0; i < 3; ++i) {
         if (const auto took = Resolve(std::format("sov-{}.{}", RandomLabel(10), zone))) {
@@ -334,12 +338,13 @@ struct Run {
     const auto russian = measure("yandex.ru");
     const auto show = [](const std::optional<int>& ms) { return ms ? std::format("{} мс", *ms) : std::string("нет ответа"); };
     r.summary = std::format("зарубежные {} · российские {}", show(foreign), show(russian));
-    const int worst = std::max(foreign.value_or(10000), russian.value_or(10000));
-    r.status = !foreign || !russian ? Status::Fail : worst > 400 ? Status::Warn : Status::Ok;
+    // Through the proxy a name takes about two trips to the server; directly, one to the DNS.
+    const bool slow = foreign.value_or(0) > 600 || russian.value_or(0) > 300;
+    r.status = !foreign || !russian ? Status::Fail : slow ? Status::Warn : Status::Ok;
     r.detail = r.status == Status::Fail ? "DNS не отвечает - сайты не откроются."
                : r.status == Status::Warn
-                   ? "DNS медленный: попробуй другой сервер на странице «Маршруты и DNS»."
-                   : "Зарубежные имена - через прокси, российские - напрямую.";
+                   ? "Новые имена узнаются медленно (знакомые берутся из кэша сразу). Попробуй другой DNS или сервер."
+                   : "Новые имена: зарубежные - через прокси, российские - напрямую; знакомые - из кэша сразу.";
     return r;
   }
 
@@ -371,9 +376,14 @@ struct Run {
     const std::string ping = pings.empty() ? std::string("—") : std::format("{} мс", pings[pings.size() / 2]);
     const std::string downText = down ? std::format("{:.0f}", Mbps(down->size(), downSeconds)) : std::string("—");
     const std::string upText = up ? std::format("{:.0f}", Mbps(upBody.size(), upSeconds)) : std::string("—");
+    // Which server it went through: the core's log says.
+    std::vector<std::string> targets = Addresses("speed.cloudflare.com");
+    targets.emplace_back("speed.cloudflare.com");
+    const auto via = OutboundInLogs(input.logs ? input.logs() : std::vector<std::string>{}, targets);
     r.status = Status::Ok;
     r.summary = std::format("↓ {} · ↑ {} Мбит/с · {}", downText, upText, ping);
-    r.detail = "Через прокси, до ближайшего узла Cloudflare. Задержка - время запроса целиком.";
+    r.detail = (via ? (*via == "direct" ? std::string("Напрямую") : "Через " + *via) : std::string("Через прокси")) +
+               " до ближайшего узла Cloudflare. Зависит от сервера и времени - сравни на странице «Серверы».";
     return r;
   }
 
@@ -390,7 +400,7 @@ struct Run {
       r.status = Status::Warn;
       r.summary = host + ": имя не находится";
       r.detail = rule.empty() ? "Заблокировано DNS-правилом (реклама) или такого сайта нет."
-                              : "Подходит " + rule + ". Имя не находится - заблокировано или сайта нет.";
+                              : "Подходит: " + rule + ". Имя не находится - заблокировано или сайта нет.";
       return r;
     }
     targets.push_back(host);
@@ -405,13 +415,13 @@ struct Run {
       r.status = Status::Warn;
       r.summary = host + ": в журнале не видно";
       r.detail = "Соединение не попало в журнал ядра: уровень записи ниже info или сайт заблокирован." +
-                 (rule.empty() ? std::string() : " Подходит " + rule + ".");
+                 (rule.empty() ? std::string() : " Подходит: " + rule + ".");
       return r;
     }
     r.status = Status::Ok;
-    r.summary = *outbound == "direct" ? host + " -> напрямую" : host + " -> через " + *outbound;
+    r.summary = *outbound == "direct" ? host + " → напрямую" : host + " → через " + *outbound;
     r.detail = rule.empty() ? "Ни одно из твоих правил не подошло - решили списки или «остальное»."
-                            : "Подошло " + rule + ".";
+                            : "Сработало: " + rule + ".";
     return r;
   }
 };

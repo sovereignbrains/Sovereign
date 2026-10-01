@@ -107,7 +107,7 @@ void TestRules() {
   CHECK(ClientRuleFor("my-tracker.example", routing).find("qwen.ai") != std::string::npos);
   CHECK(ClientRuleFor("10.0.0.1", routing).find("qwen.ai") != std::string::npos);
   CHECK(ClientRuleFor("notqwen.ai", routing).empty());  // a whole label, not a tail of one
-  CHECK(ClientRuleFor("ya.ru", routing) == "российская зона .ru -> напрямую");
+  CHECK(ClientRuleFor("ya.ru", routing) == "российская зона .ru → напрямую");
   routing.russiaDirect = false;
   CHECK(ClientRuleFor("ya.ru", routing).empty());
   CHECK(Mbps(25'000'000, 2.0) == 100.0);
