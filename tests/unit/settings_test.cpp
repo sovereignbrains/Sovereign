@@ -137,6 +137,13 @@ int Migrate(const fs::path& localAppData) {
               << (p.url.empty() ? ", own config" : ", subscription") << ", config.json "
               << (LoadConfig(ProfileDir(p.id)) ? "there" : "MISSING") << "\n";
   }
+  const auto& r = settings.routing;
+  std::cout << "routing: " << (r.source == RoutingSettings::Source::Own ? "own" : "profile")
+            << (r.russiaDirect ? ", russia direct" : "") << (r.blockAds ? ", ads blocked" : "")
+            << (r.blockQuic ? ", quic blocked" : "") << ", rules: " << r.rules.size() << "\n";
+  for (const RouteRule& rule : r.rules) {
+    std::cout << "  " << RuleText(rule) << " -> " << static_cast<int>(rule.action) << "\n";
+  }
   return settings.profiles.empty() ? 1 : 0;
 }
 

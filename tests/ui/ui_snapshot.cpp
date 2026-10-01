@@ -103,6 +103,21 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(content, static_cast<UiPage>(p), logs, 400, 620, 96, path);
   }
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\overview-150.png");
+  // The routing: own, with rules; and a configuration's.
+  UiContent routed = content;
+  routed.routing.remoteDns = L"Cloudflare (DoH)";
+  routed.routing.localDns = L"Cloudflare (DoH)";
+  routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
+                          {L"10.9.0.0/16, steam.exe", L"через прокси"},
+                          {L"~tracker", L"блокировать"}};
+  routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
+  sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1400, 96, dir + L"\\routing.png");
+  routed.routing.own = false;
+  routed.routing.sourceProfile = "p1";
+  routed.routing.lists = L"Списки правил не скачались: сервер ответил 503. Пока работают зоны .ru/.рф/.su.";
+  routed.routing.listsFailed = true;
+  sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1100, 96,
+                                            dir + L"\\routing-subscription.png");
   // A configuration's page: the first one's.
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Profile, logs, 400, 620, 96, dir + L"\\profile.png");
 

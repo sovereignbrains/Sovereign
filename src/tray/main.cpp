@@ -189,6 +189,11 @@ struct View {
   bool hasConfig = false;          // the configurations that are on make a config
   std::string combineError;        // why they don't
   std::vector<std::string> combineNotes;  // what was left out of it
+  sovereign::tray::RoutingSettings routing;  // as set (routing.h)
+  std::size_t listsReady = 0;             // the routing's lists downloaded
+  std::size_t listsNeeded = 0;
+  std::int64_t listsUpdated = 0;          // unix seconds of the last one downloaded
+  std::string listsError;
   // The configurations (profiles.h), in the settings' order.
   struct ServerView {
     std::string tag;
@@ -260,6 +265,30 @@ struct ProfileChange {
   int hours = 0;
 };
 
+// A change to the routing from its page (routing.h).
+struct RoutingChange {
+  enum class What : std::uint8_t {
+    Source,         // on: a configuration's routing; off: the client's own
+    SourceProfile,  // text: that configuration's id
+    RussiaDirect,   // on
+    BlockAds,       // on
+    BlockQuic,      // on
+    FinalDirect,    // on
+    Ipv4Only,       // on
+    RemoteDns,      // value: RoutingSettings::RemoteDns
+    LocalDns,       // value: RoutingSettings::LocalDns
+    AddRule,        // text: what was typed; value: RouteRule::Action
+    SetRuleAction,  // index; value: RouteRule::Action
+    RemoveRule,     // index
+    ImportFrom,     // text: a configuration's id - its rules copied
+  };
+  What what = What::Source;
+  bool on = false;
+  int value = 0;
+  int index = 0;
+  std::string text;
+};
+
 // A config of the user's own to add as a configuration, and what to call it.
 struct LocalImport {
   std::string text;
@@ -299,6 +328,7 @@ struct Shared {
   std::optional<std::string> pendingImport;  // a subscription URL to add (UTF-8)
   std::optional<LocalImport> pendingLocalConfig;  // a config of the user's own to add (a file, the clipboard)
   std::vector<ProfileChange> pendingChanges;   // in the order they were made
+  std::vector<RoutingChange> pendingRouting;   // likewise
   std::optional<std::string> pendingRemove;    // a profile id to remove
   std::optional<std::string> pendingRefresh;   // a profile id to refresh now
   bool pendingUrlTest = false;
@@ -317,7 +347,8 @@ struct Shared {
   std::uint64_t logsAdded = 0;
 
   bool HasRequests() const {
-    return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || pendingRemove ||
+    return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
+           pendingRemove ||
            pendingRefresh ||
            pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingToggleKillSwitch ||
            pendingToggleKillSwitchLan || pendingApps || pendingProtocol ||
@@ -465,6 +496,7 @@ class Worker {
       std::optional<std::pair<std::string, ConfigChoice>> choice;
       std::optional<LocalImport> local;
       std::vector<ProfileChange> changes;
+      std::vector<RoutingChange> routing;
       std::optional<std::string> remove;
       std::optional<std::string> refresh;
       bool urlTest = false;
@@ -481,6 +513,7 @@ class Worker {
         import = std::exchange(shared.pendingImport, std::nullopt);
         local = std::exchange(shared.pendingLocalConfig, std::nullopt);
         changes = std::exchange(shared.pendingChanges, {});
+        routing = std::exchange(shared.pendingRouting, {});
         remove = std::exchange(shared.pendingRemove, std::nullopt);
         refresh = std::exchange(shared.pendingRefresh, std::nullopt);
         urlTest = std::exchange(shared.pendingUrlTest, false);
@@ -500,6 +533,10 @@ class Worker {
       for (const ProfileChange& change : changes) {
         Apply(change);
       }
+      for (const RoutingChange& change : routing) {
+        ChangeRouting(change);
+      }
+      UpdateRuleSets();
       if (remove) {
         RemoveProfile(*remove);
       }
@@ -608,8 +645,10 @@ class Worker {
   // The configurations that are on, together (combine.h): what the box runs
   // before the tray's own additions. combineError_ says why there's none.
   std::optional<std::string> Combined() {
+    using sovereign::tray::RoutingSettings;
     std::vector<sovereign::tray::ProfileConfig> parts;
     std::vector<std::string> notes;
+    std::size_t source = std::string::npos;  // the part whose routing stays, in profile mode
     for (const Profile& profile : settings_.profiles) {
       if (!profile.enabled) {
         continue;
@@ -620,14 +659,137 @@ class Worker {
         notes.push_back(profile.name + ": ещё нет конфига");
         continue;
       }
+      if (profile.id == settings_.routing.sourceProfile) {
+        source = parts.size();
+      }
       parts.push_back({.name = profile.name, .config = *config, .disabled = profile.disabled});
     }
-    auto combined = sovereign::tray::CombineConfigs(parts);
+    // The frame: the client's own, or the chosen configuration's (first) -
+    // the own one when that isn't on.
+    RoutingSettings routing = settings_.routing;
+    if (routing.source == RoutingSettings::Source::Profile) {
+      if (source == std::string::npos) {
+        routing.source = RoutingSettings::Source::Own;
+        notes.emplace_back("маршруты выбранной конфигурации недоступны (выключена или удалена) - работают свои");
+      } else {
+        std::rotate(parts.begin(), parts.begin() + static_cast<std::ptrdiff_t>(source),
+                    parts.begin() + static_cast<std::ptrdiff_t>(source) + 1);
+      }
+    }
+    const bool own = routing.source == RoutingSettings::Source::Own;
+    auto combined = sovereign::tray::CombineConfigs(
+        parts, own ? std::optional<std::string>(sovereign::tray::OwnFrame(routing)) : std::nullopt);
     combineError_ = combined.error;
     notes.insert(notes.end(), combined.notes.begin(), combined.notes.end());
     combineNotes_ = std::move(notes);
+    if (combined.config) {
+      // The client's rules first in whatever runs (routing.h).
+      combined.config = sovereign::tray::ApplyRouting(*combined.config, routing, ruleFiles_);
+    }
     combined_ = combined.config;
     return std::move(combined.config);
+  }
+
+  // The routing's lists: downloaded when missing or a day old, checked every
+  // ten minutes (at once after the routing changed), one download a poll so
+  // the window stays answered. The box gets them as local files: a list that
+  // can't be fetched never keeps it from starting.
+  void UpdateRuleSets() {
+    const auto now = TrayModel::Clock::now();
+    if (lastRuleCheck_ && now - *lastRuleCheck_ < std::chrono::minutes(10) && !rulesDirty_) {
+      return;
+    }
+    rulesDirty_ = false;
+    std::map<std::string, std::string> files;
+    bool downloaded = false;
+    bool pending = false;
+    for (const auto& source : sovereign::tray::NeededRuleSets(settings_.routing)) {
+      try {
+        const auto age = sovereign::tray::RuleSetAge(source.tag);
+        if ((!age || *age >= std::chrono::hours(24)) && !downloaded) {
+          downloaded = true;  // one a poll
+          auto got = sovereign::tray::Download(Widen(source.url), kUserAgent, std::size_t{16} * 1024 * 1024);
+          if (got && sovereign::tray::IsRuleSetFile(*got)) {
+            sovereign::tray::SaveRuleSet(source.tag, *got);
+            rulesError_.clear();
+            rulesUpdated_ = std::time(nullptr);
+          } else {
+            rulesError_ = got ? std::string("ответ - не список правил") : got.error();
+          }
+        } else if (!age || *age >= std::chrono::hours(24)) {
+          pending = true;
+        }
+        if (sovereign::tray::RuleSetAge(source.tag)) {
+          files[source.tag] = Narrow(sovereign::tray::RuleSetPath(source.tag).wstring());
+        }
+      } catch (...) {
+        LOG_CAUGHT_EXCEPTION_MSG("the routing's lists folder can't be used");
+      }
+    }
+    ruleFiles_ = std::move(files);
+    // More to fetch: the next poll goes on; all there: ten minutes' rest.
+    if (pending) {
+      rulesDirty_ = true;
+    } else {
+      lastRuleCheck_ = now;
+    }
+  }
+
+  // A change to the routing from its page.
+  void ChangeRouting(const RoutingChange& change) {
+    using sovereign::tray::RoutingSettings;
+    RoutingSettings& r = settings_.routing;
+    switch (change.what) {
+      case RoutingChange::What::Source:
+        r.source = change.on ? RoutingSettings::Source::Profile : RoutingSettings::Source::Own;
+        break;
+      case RoutingChange::What::SourceProfile:
+        r.source = RoutingSettings::Source::Profile;
+        r.sourceProfile = change.text;
+        break;
+      case RoutingChange::What::RussiaDirect: r.russiaDirect = change.on; break;
+      case RoutingChange::What::BlockAds: r.blockAds = change.on; break;
+      case RoutingChange::What::BlockQuic: r.blockQuic = change.on; break;
+      case RoutingChange::What::FinalDirect: r.finalDirect = change.on; break;
+      case RoutingChange::What::Ipv4Only: r.ipv4Only = change.on; break;
+      case RoutingChange::What::RemoteDns:
+        r.remoteDns = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 2));
+        break;
+      case RoutingChange::What::LocalDns:
+        r.localDns = static_cast<RoutingSettings::LocalDns>(std::clamp(change.value, 0, 2));
+        break;
+      case RoutingChange::What::AddRule:
+        if (auto rule = sovereign::tray::ParseRule(change.text, static_cast<sovereign::tray::RouteRule::Action>(
+                                                                     std::clamp(change.value, 0, 2)))) {
+          sovereign::tray::MergeRules(r.rules, {*rule});
+        }
+        break;
+      case RoutingChange::What::SetRuleAction:
+        if (change.index >= 0 && static_cast<std::size_t>(change.index) < r.rules.size()) {
+          r.rules[static_cast<std::size_t>(change.index)].action =
+              static_cast<sovereign::tray::RouteRule::Action>(std::clamp(change.value, 0, 2));
+        }
+        break;
+      case RoutingChange::What::RemoveRule:
+        if (change.index >= 0 && static_cast<std::size_t>(change.index) < r.rules.size()) {
+          r.rules.erase(r.rules.begin() + change.index);
+        }
+        break;
+      case RoutingChange::What::ImportFrom:
+        if (const auto dir = sovereign::tray::FindProfile(settings_.profiles, change.text) != nullptr
+                                 ? DirOf(change.text)
+                                 : std::nullopt) {
+          if (const auto config = sovereign::tray::LoadConfig(*dir)) {
+            const std::size_t before = r.rules.size();
+            sovereign::tray::MergeRules(r.rules, sovereign::tray::ImportRules(*config));
+            Notify(L"Sovereign: правила взяты", std::format(L"новых правил: {}", r.rules.size() - before), false,
+                   UiPage::Routing);
+          }
+        }
+        break;
+    }
+    rulesDirty_ = true;  // a list may be wanted now
+    Save();
   }
 
   // The combined config with the protocol pick, the per-app rules and the
@@ -1300,6 +1462,11 @@ class Worker {
       v.hasConfig = combined_.has_value();
       v.combineError = combineError_;
       v.combineNotes = combineNotes_;
+      v.routing = settings_.routing;
+      v.listsReady = ruleFiles_.size();
+      v.listsNeeded = sovereign::tray::NeededRuleSets(settings_.routing).size();
+      v.listsUpdated = rulesUpdated_;
+      v.listsError = rulesError_;
       v.profiles.clear();
       for (const Profile& profile : settings_.profiles) {
         const ProfileRuntime& state = runtime_[profile.id];
@@ -1365,7 +1532,12 @@ class Worker {
   bool noticeIsError_ = false;
   std::optional<UiPage> noticePage_;
   std::optional<TrayModel::Clock::time_point> lastPathLookup_;
-  std::optional<std::string> combined_;  // the configurations that are on, together (before the tray's additions)
+  std::optional<std::string> combined_;  // the configurations that are on, together, with the routing
+  std::map<std::string, std::string> ruleFiles_;  // the routing's lists there are: tag -> path (UTF-8)
+  std::optional<TrayModel::Clock::time_point> lastRuleCheck_;
+  bool rulesDirty_ = true;      // check the lists at the next poll
+  std::string rulesError_;      // the last download failed with this
+  std::int64_t rulesUpdated_ = 0;  // unix seconds of the last list downloaded
   std::string combineError_;             // why there's none
   std::vector<std::string> combineNotes_;
   std::uint64_t logSince_ = 0;  // box_logs cursor
@@ -1729,6 +1901,41 @@ bool CopyText(HWND owner, const std::wstring& text) {
   return copied;
 }
 
+void RequestRoutingChange(RoutingChange change) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingRouting.push_back(std::move(change));
+  }
+  Wake();
+}
+
+// A popup menu of `items` at `at`: the one picked (its index), or nullopt.
+std::optional<std::size_t> PickFromMenu(HWND window, POINT at, const std::vector<std::wstring>& items, int checked) {
+  wil::unique_hmenu menu(CreatePopupMenu());
+  if (!menu) {
+    return std::nullopt;
+  }
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    AppendMenuW(menu.get(), MF_STRING | (static_cast<int>(i) == checked ? MF_CHECKED : MF_UNCHECKED),
+                static_cast<UINT>(i + 1), items[i].c_str());
+  }
+  SetForegroundWindow(window);
+  const auto command = static_cast<UINT>(
+      TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN, at.x, at.y, 0, window,
+                     nullptr));
+  if (command == 0 || command > items.size()) {
+    return std::nullopt;
+  }
+  return command - 1;
+}
+
+// A rule's action, as the menus and the page say it (RouteRule::Action's order).
+const std::vector<std::wstring>& RuleActions() {
+  static const std::vector<std::wstring> actions = {L"напрямую", L"через прокси", L"блокировать"};
+  return actions;
+}
+
 void RequestRefresh(std::string id) {
   {
     auto& shared = State();
@@ -2060,6 +2267,35 @@ UiContent ContentFrom(const View& v) {
     }
     shown.detail = std::move(detail);
     c.profiles.push_back(std::move(shown));
+  }
+  using sovereign::tray::RoutingSettings;
+  const RoutingSettings& r = v.routing;
+  c.routing.own = r.source == RoutingSettings::Source::Own;
+  c.routing.sourceProfile = r.sourceProfile;
+  c.routing.russiaDirect = r.russiaDirect;
+  c.routing.blockAds = r.blockAds;
+  c.routing.blockQuic = r.blockQuic;
+  c.routing.finalDirect = r.finalDirect;
+  c.routing.ipv4Only = r.ipv4Only;
+  c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
+                        : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? L"Quad9 (DoH)"
+                                                                            : L"Cloudflare (DoH)";
+  c.routing.localDns = r.localDns == RoutingSettings::LocalDns::Google   ? L"Google (DoH)"
+                       : r.localDns == RoutingSettings::LocalDns::System ? L"системный"
+                                                                          : L"Cloudflare (DoH)";
+  for (const auto& rule : r.rules) {
+    c.routing.rules.push_back(
+        {.text = Widen(sovereign::tray::RuleText(rule)), .action = RuleActions()[static_cast<std::size_t>(rule.action)]});
+  }
+  if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
+    c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
+    c.routing.listsFailed = true;
+  } else if (v.listsReady < v.listsNeeded) {
+    c.routing.lists = std::format(L"Списки правил скачиваются: {} из {}.", v.listsReady, v.listsNeeded);
+  } else if (v.listsNeeded > 0) {
+    c.routing.lists = L"Списки правил на месте" +
+                      (v.listsUpdated ? L", обновлены " + LocalTime(v.listsUpdated) : std::wstring()) +
+                      L"; обновляются раз в сутки.";
   }  c.appsInclude = v.appsMode == AppsMode::Include;
   for (const std::string& app : v.apps) {
     c.apps.push_back(Widen(app));
@@ -2247,6 +2483,91 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   }
 }
 
+// A command from the routing's page.
+void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiArgs& args, const View& view) {
+  using What = RoutingChange::What;
+  const auto& r = view.routing;
+  const auto send = [](What what, bool on = false, int value = 0, int index = 0, std::string text = {}) {
+    RequestRoutingChange({.what = what, .on = on, .value = value, .index = index, .text = std::move(text)});
+  };
+  POINT cursor{};
+  GetCursorPos(&cursor);
+  switch (command) {
+    case UiCommand::SetRoutingSource:
+      send(What::Source, args.index == 1);
+      break;
+    case UiCommand::SetRoutingProfile:
+      if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.profiles.size()) {
+        send(What::SourceProfile, true, 0, 0, view.profiles[static_cast<std::size_t>(args.index)].id);
+      }
+      break;
+    case UiCommand::ToggleRussiaDirect: send(What::RussiaDirect, !r.russiaDirect); break;
+    case UiCommand::ToggleBlockAds: send(What::BlockAds, !r.blockAds); break;
+    case UiCommand::ToggleBlockQuic: send(What::BlockQuic, !r.blockQuic); break;
+    case UiCommand::ToggleFinalDirect: send(What::FinalDirect, !r.finalDirect); break;
+    case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
+    case UiCommand::ChooseRemoteDns:
+      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Cloudflare (DoH)", L"Google (DoH)", L"Quad9 (DoH)"},
+                                           static_cast<int>(r.remoteDns))) {
+        send(What::RemoteDns, false, static_cast<int>(*picked));
+      }
+      break;
+    case UiCommand::ChooseLocalDns:
+      if (const auto picked = PickFromMenu(owner, args.anchor,
+                                           {L"Cloudflare (DoH, зашифрованный)", L"Google (DoH, зашифрованный)",
+                                            L"Системный (провайдера)"},
+                                           static_cast<int>(r.localDns))) {
+        send(What::LocalDns, false, static_cast<int>(*picked));
+      }
+      break;
+    case UiCommand::AddRule:  // what to match, typed over the button; then where it goes
+      if (g_mainWindow != nullptr) {
+        g_mainWindow->EditInPlace(UiCommand::AddRule, 0, UiCommand::AddRuleText, L"", false);
+      }
+      break;
+    case UiCommand::AddRuleText:
+      if (!sovereign::tray::ParseRule(Narrow(args.text), sovereign::tray::RouteRule::Action::Direct)) {
+        if (g_trayIcon != nullptr) {
+          g_trayIcon->Balloon(L"Sovereign", L"Не понял правило: нужны сайты (example.com), IP-подсети или программы (.exe).");
+        }
+      } else if (const auto picked = PickFromMenu(owner, cursor, RuleActions(), -1)) {
+        send(What::AddRule, false, static_cast<int>(*picked), 0, Narrow(args.text));
+      }
+      break;
+    case UiCommand::RuleMenu: {
+      if (args.index < 0 || static_cast<std::size_t>(args.index) >= r.rules.size()) {
+        break;
+      }
+      std::vector<std::wstring> items = RuleActions();
+      items.emplace_back(L"Удалить");
+      const auto picked =
+          PickFromMenu(owner, cursor, items, static_cast<int>(r.rules[static_cast<std::size_t>(args.index)].action));
+      if (picked && *picked < RuleActions().size()) {
+        send(What::SetRuleAction, false, static_cast<int>(*picked), args.index);
+      } else if (picked) {
+        send(What::RemoveRule, false, 0, args.index);
+      }
+      break;
+    }
+    case UiCommand::ImportRules: {
+      std::vector<std::wstring> names;
+      names.reserve(view.profiles.size());
+      for (const auto& p : view.profiles) {
+        names.push_back(Widen(p.name));
+      }
+      if (names.empty()) {
+        break;
+      }
+      if (const auto picked = PickFromMenu(owner, args.anchor, names, -1)) {
+        send(What::ImportFrom, false, 0, 0, view.profiles[*picked].id);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiArgs& args) {
   const View view = CurrentView();
   HWND owner = args.owner != nullptr ? args.owner : trayWindow;
@@ -2262,6 +2583,21 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ScanScreen:
       ScanScreen();
+      break;
+    case UiCommand::SetRoutingSource:
+    case UiCommand::SetRoutingProfile:
+    case UiCommand::ToggleRussiaDirect:
+    case UiCommand::ToggleBlockAds:
+    case UiCommand::ToggleBlockQuic:
+    case UiCommand::ToggleFinalDirect:
+    case UiCommand::ToggleIpv4Only:
+    case UiCommand::ChooseRemoteDns:
+    case UiCommand::ChooseLocalDns:
+    case UiCommand::AddRule:
+    case UiCommand::AddRuleText:
+    case UiCommand::RuleMenu:
+    case UiCommand::ImportRules:
+      OnRoutingCommand(owner, command, args, view);
       break;
     case UiCommand::ToggleProfile:
     case UiCommand::RenameProfile:

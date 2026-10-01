@@ -341,27 +341,39 @@ std::string Label(const Json& o) {
 
 }  // namespace
 
-CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts) {
+CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std::optional<std::string>& ownFrame) {
   CombinedConfig result;
   if (parts.empty()) {
     result.error = "ни одна конфигурация не включена";
     return result;
   }
-  if (parts.size() == 1 && parts[0].disabled.empty()) {
+  if (!ownFrame && parts.size() == 1 && parts[0].disabled.empty()) {
     result.config = parts[0].config;
     return result;
   }
-  auto frame = Parse(parts[0], result.error);
+  // The frame: the client's own, every part giving servers - or the first
+  // part's, less its servers switched off.
+  std::size_t first = 0;
+  std::set<std::string> removed;
+  std::optional<Json> frame;
+  if (ownFrame) {
+    frame = Parse({.name = "Sovereign", .config = *ownFrame, .disabled = {}}, result.error);
+  } else {
+    frame = Parse(parts[0], result.error);
+    first = 1;
+    removed.insert(parts[0].disabled.begin(), parts[0].disabled.end());
+  }
   if (!frame) {
     return result;
   }
-  std::set<std::string> removed(parts[0].disabled.begin(), parts[0].disabled.end());
-  Remove(*frame, removed);
+  if (!ownFrame) {
+    Remove(*frame, removed);  // the own frame's groups are empty until the servers come
+  }
 
   // Servers from the others go into a selector: the frame's, or one made for
   // them around what the frame's route went to.
   std::size_t selector = MainSelector(*frame);
-  const bool adding = parts.size() > 1;
+  const bool adding = parts.size() > first;
   if (selector == std::string::npos && adding) {
     std::set<std::string> taken = AllTags(*frame);
     std::string tag = "proxy";
@@ -397,7 +409,7 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts) {
 
   std::set<std::string> taken = AllTags(*frame);
   const std::set<std::string> frameDns = DnsServerTags(*frame);
-  for (std::size_t i = 1; i < parts.size(); ++i) {
+  for (std::size_t i = first; i < parts.size(); ++i) {
     std::string error;
     auto part = Parse(parts[i], error);
     if (!part) {

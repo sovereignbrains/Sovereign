@@ -113,6 +113,8 @@ constexpr const wchar_t* kGlyphQrCode = L"\xED14";
 constexpr const wchar_t* kGlyphDelete = L"\xE74D";
 constexpr const wchar_t* kGlyphRename = L"\xE8AC";
 constexpr const wchar_t* kGlyphClock = L"\xE917";
+constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
+constexpr const wchar_t* kGlyphGlobe = L"\xE774";
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -352,6 +354,18 @@ std::wstring SubscriptionLine(const UiContent& c) {
   }
   return on.size() == 1 && on.front()->subscription ? line + L" · " + on.front()->updated : line;
 }
+// The routing's line on the overview.
+std::wstring RoutingLine(const UiContent& c) {
+  std::wstring line = c.routing.own ? L"свои" : L"из подписки";
+  if (c.routing.russiaDirect) {
+    line += L" · РФ напрямую";
+  }
+  if (!c.routing.rules.empty()) {
+    line += std::format(L" · правил: {}", c.routing.rules.size());
+  }
+  return line;
+}
+
 std::wstring AppsLine(const UiContent& c) {
   if (c.apps.empty()) {
     return c.appsInclude ? L"только список — он пуст" : L"всё через прокси";
@@ -433,6 +447,7 @@ class Painter {
       case UiPage::Logs: y = Logs(l, c, logState, x0, x1, y, height); break;
       case UiPage::Settings: y = Settings(l, c, x0, x1, y); break;
       case UiPage::Profile: y = ProfilePage(l, c, profile, x0, x1, y); break;
+      case UiPage::Routing: y = Routing(l, c, x0, x1, y); break;
     }
     l.contentHeight = y + kPad;
 
@@ -717,12 +732,13 @@ class Painter {
       l.items.push_back(std::move(t));
     };
     tile(0, kGlyphSync, L"Конфигурации", SubscriptionLine(c), UiPage::Subscription, AnyWaiting(c));
-    tile(1, kGlyphProgram, L"Приложения", AppsLine(c), UiPage::Apps, false);
-    tile(2, kGlyphLog, L"Журнал", c.display == Display::Error ? L"есть ошибка" : L"ядро и трей", UiPage::Logs,
+    tile(1, kGlyphRoute, L"Маршруты и DNS", RoutingLine(c), UiPage::Routing, c.routing.listsFailed);
+    tile(2, kGlyphProgram, L"Приложения", AppsLine(c), UiPage::Apps, false);
+    tile(3, kGlyphLog, L"Журнал", c.display == Display::Error ? L"есть ошибка" : L"ядро и трей", UiPage::Logs,
          c.display == Display::Error);
-    tile(3, kGlyphSettings, L"Настройки", L"Sovereign " + c.version.substr(0, c.version.find(L' ')), UiPage::Settings,
+    tile(4, kGlyphSettings, L"Настройки", L"Sovereign " + c.version.substr(0, c.version.find(L' ')), UiPage::Settings,
          c.update == UiUpdate::Available);
-    y += 2 * kTile + 10 + kGap;
+    y += 3 * kTile + 2 * 10 + kGap;
 
     // The kill switch: on the overview, it's what decides what a drop does.
     return KillSwitchCard(l, c, x0, x1, y);
@@ -1057,6 +1073,149 @@ class Painter {
     return y + h;
   }
 
+  // Where traffic goes and how names resolve (routing.h): whose routing,
+  // the switches, DNS, the user's rules - first, whatever the source.
+  float Routing(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    const UiRouting& r = c.routing;
+    y = PageTitle(l, L"Маршруты и DNS",
+                  L"Куда идёт трафик и через какой DNS узнаются адреса. Правила здесь работают первыми, что бы "
+                  L"ни было в подписках.",
+                  x0, x1, y);
+    const float mid = (x0 + x1) / 2;
+    Item own = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Свои", nullptr, UiCommand::SetRoutingSource, 0);
+    own.checked = r.own;
+    Item sub = CommandItem(Kind::Segment, {mid + 4, y, x1, y + 36}, L"Из подписки", nullptr,
+                           UiCommand::SetRoutingSource, 1);
+    sub.checked = !r.own;
+    l.items.push_back(std::move(own));
+    l.items.push_back(std::move(sub));
+    y += 36 + 12;
+    y = Paragraph(l, Kind::Wrap,
+                  r.own ? L"TUN, DNS и маршруты строит Sovereign; из конфигураций берутся только серверы."
+                        : L"DNS и маршруты — от выбранной конфигурации, правила ниже — перед её правилами.",
+                  x0, x1, y) +
+        kGap;
+
+    if (!r.own) {
+      std::vector<std::size_t> on;
+      for (std::size_t i = 0; i < c.profiles.size(); ++i) {
+        if (c.profiles[i].enabled) {
+          on.push_back(i);
+        }
+      }
+      if (on.empty()) {
+        y = Paragraph(l, Kind::Caption, L"Ни одна конфигурация не включена — работают свои маршруты.", x0, x1, y) + kGap;
+      } else {
+        const float h = static_cast<float>(on.size()) * kRow;
+        l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+        for (std::size_t n = 0; n < on.size(); ++n) {
+          const float top = y + static_cast<float>(n) * kRow;
+          if (n > 0) {
+            l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+          }
+          const UiProfile& p = c.profiles[on[n]];
+          Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kRow - 3}, p.name, nullptr,
+                                    UiCommand::SetRoutingProfile, static_cast<int>(on[n]));
+          choice.checked = p.id == r.sourceProfile;
+          l.items.push_back(std::move(choice));
+        }
+        y += h + kGap;
+      }
+    }
+
+    // The switches.
+    struct Toggle {
+      const wchar_t* title;
+      const wchar_t* detail;
+      bool on;
+      UiCommand command;
+    };
+    std::vector<Toggle> toggles = {
+        {L"Российское напрямую",
+         L"сайты .ru/.рф/.su, российские сервисы и IP — мимо прокси: они не увидят адрес сервера, их DNS — тоже напрямую",
+         r.russiaDirect, UiCommand::ToggleRussiaDirect},
+        {L"Блокировать рекламу", L"рекламные и следящие домены", r.blockAds, UiCommand::ToggleBlockAds},
+        {L"Блокировать QUIC", L"браузеры перейдут на TCP — через прокси так стабильнее", r.blockQuic,
+         UiCommand::ToggleBlockQuic},
+    };
+    if (r.own) {
+      toggles.push_back({L"Остальное напрямую", L"через прокси — только то, что в правилах", r.finalDirect,
+                         UiCommand::ToggleFinalDirect});
+    }
+    const float switchRow = 64;
+    const float th = static_cast<float>(toggles.size()) * switchRow;
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + th}));
+    for (std::size_t i = 0; i < toggles.size(); ++i) {
+      const float top = y + static_cast<float>(i) * switchRow;
+      if (i > 0) {
+        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      }
+      Item row = CommandItem(Kind::Switch, {x0 + 4, top + 4, x1 - 4, top + switchRow - 4}, toggles[i].title, nullptr,
+                             toggles[i].command);
+      row.detail = toggles[i].detail;
+      row.checked = toggles[i].on;
+      l.items.push_back(std::move(row));
+    }
+    y += th + kGap;
+
+    // DNS: the client's own, in own mode.
+    if (r.own) {
+      l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28}, L"DNS"));
+      y += 28 + 8;
+      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Через прокси: " + r.remoteDns,
+                                    kGlyphGlobe, UiCommand::ChooseRemoteDns));
+      y += kButton + 8;
+      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Напрямую: " + r.localDns, kGlyphGlobe,
+                                    UiCommand::ChooseLocalDns));
+      y += kButton + 8;
+      y = Paragraph(l, Kind::Caption,
+                    L"Напрямую — российские и твои прямые адреса и адреса самих серверов. Зашифрованный DNS прячет "
+                    L"их от провайдера; если перестанет подключаться — выбери системный.",
+                    x0, x1, y) +
+          8;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + switchRow}));
+      Item v4 = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + switchRow - 4}, L"Только IPv4", nullptr,
+                            UiCommand::ToggleIpv4Only);
+      v4.detail = L"адреса IPv6 не выдаются — не уйдут мимо туннеля";
+      v4.checked = r.ipv4Only;
+      l.items.push_back(std::move(v4));
+      y += switchRow + kGap;
+    }
+
+    // The user's rules.
+    l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28}, L"Свои правила"));
+    y += 28 + 8;
+    if (r.rules.empty()) {
+      y = Paragraph(l, Kind::Caption, L"Пока нет. Сайты, IP-подсети или программы (.exe) — напрямую, через прокси или в блок.",
+                    x0, x1, y) +
+          8;
+    } else {
+      const float h = static_cast<float>(r.rules.size()) * kProfileRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      for (std::size_t i = 0; i < r.rules.size(); ++i) {
+        const float top = y + static_cast<float>(i) * kProfileRow;
+        if (i > 0) {
+          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        }
+        Item rule = CommandItem(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 4, top + kProfileRow - 3}, r.rules[i].text,
+                                kGlyphChevron, UiCommand::RuleMenu, static_cast<int>(i));
+        rule.detail = r.rules[i].action;
+        rule.checked = true;
+        l.items.push_back(std::move(rule));
+      }
+      y += h + 8;
+    }
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Добавить", kGlyphAdd,
+                                  UiCommand::AddRule));
+    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Из подписки…", kGlyphDownload,
+                                  UiCommand::ImportRules));
+    y += kButton + kGap;
+    if (!r.lists.empty()) {
+      y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0, x1, y);
+    }
+    return y;
+  }
+
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Приложения", L"Какие программы идут через прокси. Имена — как у exe-файла, без пути.", x0, x1, y);
     const float mid = (x0 + x1) / 2;
@@ -1369,7 +1528,7 @@ class Painter {
           k.t->DrawEllipse(D2D1::Ellipse(dot, 8.5f, 8.5f), k.Color(secondary), 1.2f);
         }
         k.Text(it.text, body_.get(), {r.left + 42, r.top, r.right - 100, r.bottom}, primary);
-        if (it.index >= 0 && static_cast<std::size_t>(it.index) < c.delays.size()) {
+        if (it.command == UiCommand::SetProtocol && it.index >= 0 && static_cast<std::size_t>(it.index) < c.delays.size()) {
           const UiDelay& delay = c.delays[static_cast<std::size_t>(it.index)];
           k.Text(DelayLabel(delay), delay_.get(), {r.right - 100, r.top, r.right - 12, r.bottom},
                  FromColorRef(ui::DelayColor(delay)));

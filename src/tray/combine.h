@@ -32,9 +32,12 @@ struct CombinedConfig {
   std::vector<std::string> notes;  // what was left out on the way ("B: не JSON")
 };
 
-// `parts` in the order they're listed; the first is the frame. One part with
-// nothing switched off comes back as it is.
-CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts);
+// `parts` in the order they're listed; the first is the frame - unless
+// `ownFrame` is given (routing.h's OwnFrame: the client's own TUN, DNS and
+// routing), then every part only gives servers. One part with nothing
+// switched off and no own frame comes back as it is.
+CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts,
+                              const std::optional<std::string>& ownFrame = std::nullopt);
 
 // A server of a config, as the window lists it.
 struct ServerInfo {

@@ -24,6 +24,7 @@
 #include "log_lines.h"
 #include "log_level.h"
 #include "protocol_choice.h"
+#include "routing.h"
 #include "share_links.h"
 #include "subscription.h"
 #include "update.h"
@@ -101,6 +102,19 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         CombineConfigs({{"b", std::string(kSample), {"direct"}}, {"a", std::string(text), {"nl"}}})}) {
     if (combined.config ? !nlohmann::json::parse(*combined.config, nullptr, /*allow_exceptions=*/false).is_object()
                         : combined.error.empty()) {
+      std::abort();
+    }
+  }
+  // The routing over a config from a subscription, its rules taken, a rule
+  // typed, tray.json's routing: a JSON object stays one.
+  (void)ImportRules(text);
+  (void)ParseRule(text, RouteRule::Action::Direct);
+  const RoutingSettings fuzzedRouting =
+      RoutingFromJson(nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false));
+  for (const RoutingSettings& routing : {RoutingSettings{}, fuzzedRouting}) {
+    const std::string routed = ApplyRouting(text, routing, {{"sov-geoip-ru", "x.srs"}, {"sov-ads", "y.srs"}});
+    if (nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false).is_object() &&
+        !nlohmann::json::parse(routed, nullptr, /*allow_exceptions=*/false).is_object()) {
       std::abort();
     }
   }

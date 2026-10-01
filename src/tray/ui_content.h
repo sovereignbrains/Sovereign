@@ -51,6 +51,26 @@ struct UiProfile {
   std::vector<std::wstring> mergeNotes;  // where carrying the edits over met the subscription's changes
   std::vector<UiServer> servers;
 };
+// The routing's page (routing.h).
+struct UiRule {
+  std::wstring text;    // "qwen.ai, alicdn.com"
+  std::wstring action;  // "напрямую" / "через прокси" / "блокировать"
+};
+struct UiRouting {
+  bool own = true;            // the client's own routing; else a configuration's
+  std::string sourceProfile;  // that configuration's id
+  bool russiaDirect = true;
+  bool blockAds = true;
+  bool blockQuic = true;
+  bool finalDirect = false;
+  bool ipv4Only = true;
+  std::wstring remoteDns;  // "Cloudflare"
+  std::wstring localDns;   // "Cloudflare (DoH)"
+  std::vector<UiRule> rules;
+  std::wstring lists;      // "списки обновлены 01.10 14:00", "скачиваются: 2 из 4"
+  bool listsFailed = false;
+};
+
 // What the tray's window shows; built by main.cpp from the worker's view.
 // Strings are ready to draw.
 struct UiContent {
@@ -66,6 +86,7 @@ struct UiContent {
   bool hasConfig = false;        // the ones on make a config to run
   std::wstring combineError;     // why they don't
   std::vector<std::wstring> combineNotes;  // what was left out of it
+  UiRouting routing;
 
   bool appsInclude = false;      // per-app mode: false = all except the list
   std::vector<std::wstring> apps;
@@ -96,8 +117,9 @@ struct UiContent {
 
 // The window's pages: the overview, and the ones it opens (back with Esc).
 // Profile: one configuration's page, opened from the list on Subscription.
-enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings, Profile };
-inline constexpr int kUiPageCount = 6;  // the ones Ctrl+1..6 open: all but Profile
+// Routing: where traffic goes and DNS, opened from its tile.
+enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings, Profile, Routing };
+inline constexpr int kUiPageCount = 6;  // the ones Ctrl+1..6 open: all but Profile and Routing
 
 enum class UiCommand : std::uint8_t {
   Toggle,
@@ -114,6 +136,20 @@ enum class UiCommand : std::uint8_t {
   CopyProfileLink,   // the subscription link onto the clipboard
   RemoveProfile,     // after asking
   ToggleServer,      // sub: index into its servers
+  // The routing's:
+  SetRoutingSource,   // index: 0 the client's own, 1 a configuration's
+  SetRoutingProfile,  // index into profiles: its routing
+  ToggleRussiaDirect,
+  ToggleBlockAds,
+  ToggleBlockQuic,
+  ToggleFinalDirect,
+  ToggleIpv4Only,
+  ChooseRemoteDns,    // anchor: where to open the menu
+  ChooseLocalDns,     // anchor
+  AddRule,            // starts typing over the button
+  AddRuleText,        // text: what was typed
+  RuleMenu,           // index into the rules; anchor
+  ImportRules,        // anchor: the menu of configurations to take rules from
   TakeSubscription,  // the waiting subscription replaces the edited config
   KeepConfig,        // the edited config stays
   CarryOverEdits,    // the edits, merged into the waiting subscription

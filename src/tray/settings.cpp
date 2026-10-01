@@ -198,6 +198,21 @@ TraySettings LoadSettings() {
     settings.logLevel = v->get<std::string>();
   }
   AdoptRootConfig(settings, profiles == json.end() ? json : nlohmann::json());
+  if (const auto v = json.find("routing"); v != json.end()) {
+    settings.routing = RoutingFromJson(*v);
+  } else {
+    // Routing is the client's now: its defaults, and the rules the
+    // configurations had (a subscription's "these sites directly").
+    for (const Profile& profile : settings.profiles) {
+      try {
+        if (const auto config = LoadConfig(ProfileDir(profile.id))) {
+          MergeRules(settings.routing.rules, ImportRules(*config));
+        }
+      } catch (...) {
+        LOG_CAUGHT_EXCEPTION_MSG("reading a configuration's rules failed");
+      }
+    }
+  }
   return settings;
 }
 
@@ -206,6 +221,7 @@ void SaveSettings(const TraySettings& settings) {
   json["wantOn"] = settings.wantOn;
   json["profiles"] = ProfilesToJson(settings.profiles);
   json["protocol"] = settings.protocol;
+  json["routing"] = RoutingToJson(settings.routing);
   json["appsMode"] = std::string(AppsModeName(settings.appsMode));
   json["apps"] = settings.apps;
   json["appPaths"] = nlohmann::json::object();
@@ -219,6 +235,27 @@ void SaveSettings(const TraySettings& settings) {
   json["killSwitchLan"] = settings.killSwitchLan;
   // Names came from subscription servers: not UTF-8 must not throw.
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
+}
+
+std::filesystem::path RuleSetPath(const std::string& tag) {
+  THROW_HR_IF(E_INVALIDARG, !IsProfileId(tag));  // the same safe-name rule: [a-z0-9-]
+  const std::filesystem::path dir = DataDir() / L"rules";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
+  return dir / std::filesystem::path(tag + ".srs");
+}
+
+void SaveRuleSet(const std::string& tag, const std::string& bytes) { WriteTextAtomically(RuleSetPath(tag), bytes); }
+
+std::optional<std::chrono::hours> RuleSetAge(const std::string& tag) {
+  std::error_code ec;
+  const auto written = std::filesystem::last_write_time(RuleSetPath(tag), ec);
+  if (ec) {
+    return std::nullopt;
+  }
+  const auto age = std::filesystem::file_time_type::clock::now() - written;
+  return std::chrono::duration_cast<std::chrono::hours>(age);
 }
 
 std::filesystem::path ProfileDir(const std::string& id) {

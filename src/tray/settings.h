@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -10,6 +11,7 @@
 
 #include "app_rules.h"
 #include "profiles.h"
+#include "routing.h"
 
 namespace sovereign::tray {
 
@@ -18,7 +20,7 @@ namespace sovereign::tray {
 // Everything lives in %LOCALAPPDATA%\Sovereign, which only this user (and
 // SYSTEM/admins) can read - it holds configs with passwords and keys.
 //
-//   tray.json    {"wantOn", "profiles", "protocol", "appsMode", "apps",
+//   tray.json    {"wantOn", "profiles", "protocol", "routing", "appsMode", "apps",
 //                 "appPaths", "hideExitIp", "logLevel", "killSwitch",
 //                 "killSwitchLan"}
 //   profiles\<id>\         one configuration (profiles.h), each with:
@@ -33,6 +35,7 @@ namespace sovereign::tray {
 //     history\               config.json as it was before each replacement,
 //                            the newest kHistoryKeep, named by UTC time
 //   history\     the config.json of each configuration removed
+//   rules\       the lists the routing uses (routing.h), <tag>.srs, refreshed daily
 //
 // A tray from before profiles kept one configuration in the folder itself
 // (config.json... and "subscriptionUrl" in tray.json): LoadSettings moves it
@@ -50,6 +53,9 @@ struct TraySettings {
   // The proxy selector's option to use in the config the box runs (all the
   // configurations on, combine.h); empty = the config's default (protocol_choice.h).
   std::string protocol;
+  // Where traffic goes and how names resolve (routing.h). A tray from before
+  // it starts with the defaults and the rules its configurations had.
+  RoutingSettings routing;
   AppsMode appsMode = AppsMode::Exclude;  // per-app routing (app_rules.h)
   std::vector<std::string> apps;          // exe names, as sing-box's process_name
   // Where a listed app's exe was last seen, by its name in `apps`: only for
@@ -74,6 +80,12 @@ void SetAppPath(TraySettings& settings, const std::string& app, std::string path
 TraySettings LoadSettings();
 // Atomic (write + rename), so a crash mid-save leaves the old file.
 void SaveSettings(const TraySettings& settings);
+
+// The routing's lists (routing.h): rules\<tag>.srs - its path, written
+// atomically, and how old it is (nullopt: not there).
+std::filesystem::path RuleSetPath(const std::string& tag);
+void SaveRuleSet(const std::string& tag, const std::string& bytes);
+std::optional<std::chrono::hours> RuleSetAge(const std::string& tag);
 
 // A profile's files, in `dir` (ProfileDir). config.json's text, or nullopt
 // if there is none.
