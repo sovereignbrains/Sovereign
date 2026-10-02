@@ -63,6 +63,7 @@ GoCore::GoCore(const std::wstring& dllPath) {
   boxUrlTest_ = ResolveExport<BoxUrlTestFn>(module_.get(), "box_urltest");
   boxDelays_ = ResolveExport<BoxDelaysFn>(module_.get(), "box_delays");
   boxExitIp_ = ResolveExport<BoxExitIpFn>(module_.get(), "box_exitip");
+  boxSelect_ = ResolveExport<BoxSelectFn>(module_.get(), "box_select");
   boxSetLogCallback_ = ResolveExport<BoxSetLogCallbackFn>(module_.get(), "box_set_log_callback");
   boxFree_ = ResolveExport<BoxFreeFn>(module_.get(), "box_free");
 
@@ -137,11 +138,22 @@ std::vector<DelayResult> GoCore::Delays() {
     if (!item.is_object() || !item.contains("tag") || !item["tag"].is_string()) {
       continue;
     }
+    // An optional count, clamped to what the Go side can send.
+    const auto number = [&](const char* key, std::uint64_t most) {
+      const auto it = item.find(key);
+      return it != item.end() && it->is_number_unsigned()
+                 ? static_cast<int>(std::min<std::uint64_t>(it->get<std::uint64_t>(), most))
+                 : 0;
+    };
     DelayResult result;
     result.tag = item["tag"].get<std::string>();
+    result.connectMs = number("connect", 65535);
     if (item.contains("delay") && item["delay"].is_number_unsigned()) {
       result.state = DelayResult::State::Ok;
       result.delayMs = static_cast<int>(std::min<std::uint64_t>(item["delay"].get<std::uint64_t>(), 65535));
+      result.jitterMs = number("jitter", 65535);
+      result.lossPercent = number("loss", 100);
+      result.samples = number("samples", 255);
     } else if (item.contains("error") && item["error"].is_string()) {
       result.state = DelayResult::State::Failed;
       result.error = item["error"].get<std::string>();
@@ -149,6 +161,10 @@ std::vector<DelayResult> GoCore::Delays() {
     results.push_back(std::move(result));
   }
   return results;
+}
+
+std::string GoCore::Select(const std::string& selector, const std::string& outbound) {
+  return TakeOwnedString(boxSelect_(selector.c_str(), outbound.c_str()));
 }
 
 ExitIp GoCore::LookupExitIp(const std::string& tag, bool refresh) {

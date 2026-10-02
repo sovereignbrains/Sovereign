@@ -19,7 +19,12 @@ namespace sovereign::tray {
 struct UiDelay {
   enum class State : std::uint8_t { None, Pending, Ok, Failed };
   State state = State::None;  // None: not tested since the box started
-  int ms = 0;
+  int ms = 0;            // Ok: the median round trip
+  int jitter = 0;        // Ok: half the spread of the round trips
+  int loss = 0;          // Ok: percent of the requests lost
+  int samples = 0;       // Ok: round trips measured
+  int connect = 0;       // a connection with TLS and a first request; 0 if unknown
+  std::wstring error{};  // Failed
 };
 
 // Where the updater is (updater.h), as the windows show it.
@@ -108,6 +113,9 @@ struct UiContent {
   bool delaysTesting = false;           // a latency test is running
   bool canTestDelays = false;           // the box runs: its servers can be tested
   std::wstring delayError;              // why the last test didn't start
+  int autoOption = -1;                  // the protocol that is auto (a URL test), if any
+  std::wstring autoServer;              // the server auto runs on; empty until measured
+  std::wstring selectError;             // why the box couldn't be switched to the pick
   // The exit through the server in use (while on): address, country.
   std::wstring exitIp;                  // empty until known
   std::wstring exitCountry;             // "NL", or empty
@@ -196,15 +204,35 @@ struct UiArgs {
   HWND owner = nullptr;  // the window a menu or a dialog belongs to
 };
 
-// "48 мс", "нет ответа", "…" or nothing.
+// "48 ±3 мс", "нет ответа", "…" or nothing.
 inline std::wstring DelayLabel(const UiDelay& delay) {
   switch (delay.state) {
     case UiDelay::State::None: return {};
     case UiDelay::State::Pending: return L"…";
-    case UiDelay::State::Ok: return std::format(L"{} мс", delay.ms);
+    case UiDelay::State::Ok:
+      return delay.jitter > 0 ? std::format(L"{} ±{} мс", delay.ms, delay.jitter) : std::format(L"{} мс", delay.ms);
     case UiDelay::State::Failed: return L"нет ответа";
   }
   return {};
+}
+
+// What a measurement is made of: "замеров: 9 · соединение 412 мс · потери 10%",
+// or why there was no answer.
+inline std::wstring DelayDetail(const UiDelay& delay) {
+  if (delay.state == UiDelay::State::Failed) {
+    return delay.error;
+  }
+  if (delay.state != UiDelay::State::Ok) {
+    return {};
+  }
+  std::wstring text = std::format(L"замеров: {}", delay.samples);
+  if (delay.connect > 0) {
+    text += std::format(L" · соединение {} мс", delay.connect);
+  }
+  if (delay.loss > 0) {
+    text += std::format(L" · потери {}%", delay.loss);
+  }
+  return text;
 }
 
 inline std::wstring FormatRate(double bytesPerSecond) {

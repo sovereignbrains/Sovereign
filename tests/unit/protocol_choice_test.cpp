@@ -30,6 +30,20 @@ void TestFindsTheSelector() {
   CHECK(c.selector == "proxy");
   CHECK(c.options == std::vector<std::string>({"auto", "AnyTLS-REALITY", "TUIC"}));
   CHECK(c.configDefault == "auto");
+  CHECK(c.groups.size() == 1 && c.groups.contains("auto") &&
+        c.groups.at("auto") == std::vector<std::string>({"AnyTLS-REALITY", "TUIC"}));
+}
+
+// A URL test only counts as one of the selector's options, and only with the
+// servers the selector offers as well.
+void TestGroups() {
+  constexpr std::string_view config = R"({"outbounds":[
+    {"type":"selector","tag":"proxy","outbounds":["auto","a"]},
+    {"type":"urltest","tag":"auto","outbounds":["a","hidden",5]},
+    {"type":"urltest","tag":"other","outbounds":["a"]},
+    {"type":"urltest","tag":7}]})";
+  const ProtocolChoices c = FindProtocolChoices(config);
+  CHECK(c.groups.size() == 1 && c.groups.contains("auto") && c.groups.at("auto") == std::vector<std::string>({"a"}));
 }
 
 void TestPickSetsDefault() {
@@ -71,6 +85,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestFindsTheSelector();
     TestPickSetsDefault();
+    TestGroups();
     TestUnknownOrEmptyPickChangesNothing();
     TestSelectorByFinalAndFallbacks();
     TestHostileTypes();

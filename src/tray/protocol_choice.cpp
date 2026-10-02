@@ -58,6 +58,22 @@ ProtocolChoices FindProtocolChoices(std::string_view config) {
     }
   }
   choices.configDefault = Field<std::string>(*selector, "default", choices.options.empty() ? std::string{} : choices.options[0]);
+  const auto isOption = [&](const std::string& tag) {
+    return std::find(choices.options.begin(), choices.options.end(), tag) != choices.options.end();
+  };
+  for (const Json& o : json["outbounds"]) {
+    const std::string tag = Field<std::string>(o, "tag", {});
+    if (Field<std::string>(o, "type", {}) != "urltest" || !isOption(tag) || !o.contains("outbounds") ||
+        !o["outbounds"].is_array()) {
+      continue;
+    }
+    std::vector<std::string>& servers = choices.groups[tag];
+    for (const Json& server : o["outbounds"]) {
+      if (server.is_string() && isOption(server.get<std::string>())) {
+        servers.push_back(server.get<std::string>());
+      }
+    }
+  }
   return choices;
 }
 

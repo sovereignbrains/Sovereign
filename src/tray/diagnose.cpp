@@ -217,7 +217,7 @@ struct Run {
     if (!ip) {
       r.status = Status::Warn;
       r.summary = "нет ответа";
-      r.detail = "Российский сайт не ответил - проверить не вышло.";
+      r.detail = "Российский сайт не ответил — проверить не вышло.";
       return r;
     }
     directIp = *ip;
@@ -243,7 +243,7 @@ struct Run {
         !std::all_of(token.begin(), token.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); })) {
       r.status = Status::Warn;
       r.summary = "сервис проверки недоступен";
-      r.detail = "bash.ws не ответил - попробуй позже.";
+      r.detail = "bash.ws не ответил — попробуй позже.";
       return r;
     }
     for (int i = 1; i <= 8; ++i) {
@@ -270,10 +270,10 @@ struct Run {
       r.detail = "Утечка: через WebRTC сайты увидят твой настоящий адрес.";
     } else if (!exitIp.empty() && *mapped != exitIp) {
       r.status = Status::Warn;
-      r.detail = "WebRTC видит адрес, отличный от адреса прокси - у UDP другой выход.";
+      r.detail = "WebRTC видит адрес, отличный от адреса прокси — у UDP другой выход.";
     } else {
       r.status = Status::Ok;
-      r.detail = "WebRTC видит адрес прокси - утечки нет.";
+      r.detail = "WebRTC видит адрес прокси — утечки нет.";
     }
     return r;
   }
@@ -284,13 +284,13 @@ struct Run {
     if (!trace) {
       r.status = Status::Ok;
       r.summary = "не используется";
-      r.detail = "Трафик по IPv6 не уходит - мимо туннеля тоже.";
+      r.detail = "Трафик по IPv6 не уходит — мимо туннеля тоже.";
       return r;
     }
     r.summary = trace->loc.empty() ? trace->ip : std::format("{} · {}", trace->ip, trace->loc);
     const bool proxied = trace->ip == exitIp || (!trace->loc.empty() && trace->loc == exitLoc);
     r.status = proxied ? Status::Ok : Status::Fail;
-    r.detail = proxied ? "IPv6 идёт через прокси." : "IPv6 уходит мимо прокси - сайты могут увидеть твой адрес.";
+    r.detail = proxied ? "IPv6 идёт через прокси." : "IPv6 уходит мимо прокси — сайты могут увидеть твой адрес.";
     return r;
   }
 
@@ -300,13 +300,13 @@ struct Run {
     if (gateway.empty()) {
       r.status = Status::Warn;
       r.summary = "роутер не найден";
-      r.detail = "Нет адаптера со шлюзом - проверять нечего.";
+      r.detail = "Нет адаптера со шлюзом — проверять нечего.";
       return r;
     }
     if (!rtt) {
       r.status = Status::Fail;
       r.summary = std::format("{} не отвечает", gateway);
-      r.detail = "Локальная сеть недоступна. Если включён kill switch - включи в нём «Локальная сеть».";
+      r.detail = "Локальная сеть недоступна. Если включён kill switch — включи в нём «Локальная сеть».";
       return r;
     }
     r.status = Status::Ok;
@@ -341,10 +341,10 @@ struct Run {
     // Through the proxy a name takes about two trips to the server; directly, one to the DNS.
     const bool slow = foreign.value_or(0) > 600 || russian.value_or(0) > 300;
     r.status = !foreign || !russian ? Status::Fail : slow ? Status::Warn : Status::Ok;
-    r.detail = r.status == Status::Fail ? "DNS не отвечает - сайты не откроются."
+    r.detail = r.status == Status::Fail ? "DNS не отвечает — сайты не откроются."
                : r.status == Status::Warn
                    ? "Новые имена узнаются медленно (знакомые берутся из кэша сразу). Попробуй другой DNS или сервер."
-                   : "Новые имена: зарубежные - через прокси, российские - напрямую; знакомые - из кэша сразу.";
+                   : "Новые имена: зарубежные — через прокси, российские — напрямую; знакомые — из кэша сразу.";
     return r;
   }
 
@@ -383,7 +383,7 @@ struct Run {
     r.status = Status::Ok;
     r.summary = std::format("↓ {} · ↑ {} Мбит/с · {}", downText, upText, ping);
     r.detail = (via ? (*via == "direct" ? std::string("Напрямую") : "Через " + *via) : std::string("Через прокси")) +
-               " до ближайшего узла Cloudflare. Зависит от сервера и времени - сравни на странице «Серверы».";
+               " до ближайшего узла Cloudflare. Зависит от сервера и времени — сравни на странице «Серверы».";
     return r;
   }
 
@@ -400,7 +400,7 @@ struct Run {
       r.status = Status::Warn;
       r.summary = host + ": имя не находится";
       r.detail = rule.empty() ? "Заблокировано DNS-правилом (реклама) или такого сайта нет."
-                              : "Подходит: " + rule + ". Имя не находится - заблокировано или сайта нет.";
+                              : "Подходит: " + rule + ". Имя не находится — заблокировано или сайта нет.";
       return r;
     }
     targets.push_back(host);
@@ -420,7 +420,7 @@ struct Run {
     }
     r.status = Status::Ok;
     r.summary = *outbound == "direct" ? host + " → напрямую" : host + " → через " + *outbound;
-    r.detail = rule.empty() ? "Ни одно из твоих правил не подошло - решили списки или «остальное»."
+    r.detail = rule.empty() ? "Ни одно из твоих правил не подошло — решили списки или «остальное»."
                             : "Сработало: " + rule + ".";
     return r;
   }

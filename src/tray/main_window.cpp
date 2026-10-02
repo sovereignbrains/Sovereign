@@ -54,6 +54,7 @@ constexpr float kMinHeight = 440;
 constexpr float kPad = 16;         // the page's margins
 constexpr float kMaxPage = 560;    // wider windows keep the page at this, centered
 constexpr float kRow = 44;         // a list row
+constexpr float kLatencyRow = 56;  // a server to pick: its name and latency, what the measurement is made of
 constexpr float kProfileRow = 54;  // a configuration's row: its name and its state
 constexpr float kCheckRow = 96;   // a check: its title, its result, what it means (two lines)
 constexpr float kServerRow = 60;   // a server on a configuration's page: its name, protocol and switch
@@ -802,6 +803,9 @@ class Painter {
     power.scrolls = false;
     l.items.push_back(std::move(power));
     std::wstring server = CurrentProtocol(c);
+    if (c.protocol >= 0 && c.protocol == c.autoOption && !c.autoServer.empty()) {
+      server += L" → " + c.autoServer;
+    }
     if (!server.empty() && static_cast<std::size_t>(c.protocol) < c.delays.size()) {
       if (const std::wstring delay = DelayLabel(c.delays[static_cast<std::size_t>(c.protocol)]); !delay.empty()) {
         server += L" · " + delay;
@@ -840,8 +844,12 @@ class Painter {
   // The servers of the subscription's selector, with their latency.
   float Servers(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const float titleTop = y;
-    std::wstring note = L"Задержка — запрос через каждый сервер; меньше — лучше.";
-    if (c.delaysTesting) {
+    std::wstring note =
+        L"Задержка — медиана нескольких запросов через уже открытое соединение, ± — их разброс. "
+        L"Авто берёт лучший по замерам и меняет его, только когда другой заметно быстрее два замера подряд.";
+    if (!c.selectError.empty()) {
+      note = L"Не удалось переключить сервер: " + c.selectError;
+    } else if (c.delaysTesting) {
       note = L"Проверяю задержку…";
     } else if (!c.canTestDelays && !c.protocols.empty()) {
       note = L"Задержку можно проверить, когда подключение включено.";
@@ -859,16 +867,22 @@ class Painter {
                              c.hasConfig ? L"В конфиге нет выбора сервера." : L"Ни одна конфигурация не включена."));
       return y + 56;
     }
-    const float h = static_cast<float>(c.protocols.size()) * kRow;
+    const float h = static_cast<float>(c.protocols.size()) * kLatencyRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
     for (std::size_t i = 0; i < c.protocols.size(); ++i) {
-      const float top = y + static_cast<float>(i) * kRow;
+      const float top = y + static_cast<float>(i) * kLatencyRow;
       if (i > 0) {
         l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
       }
-      Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kRow - 3}, c.protocols[i], nullptr,
+      Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kLatencyRow - 3}, c.protocols[i], nullptr,
                                 UiCommand::SetProtocol, static_cast<int>(i));
       choice.checked = static_cast<int>(i) == c.protocol;
+      if (static_cast<int>(i) == c.autoOption) {
+        choice.detail = c.autoServer.empty() ? std::wstring(L"выберет лучший после первого замера")
+                                             : L"сейчас " + c.autoServer + L" — лучший по замерам";
+      } else if (i < c.delays.size()) {
+        choice.detail = DelayDetail(c.delays[i]);
+      }
       l.items.push_back(std::move(choice));
     }
     return y + h;
@@ -1600,10 +1614,16 @@ class Painter {
         } else {
           k.t->DrawEllipse(D2D1::Ellipse(dot, 8.5f, 8.5f), k.Color(secondary), 1.2f);
         }
-        k.Text(it.text, body_.get(), {r.left + 42, r.top, r.right - 100, r.bottom}, primary);
+        // With a detail: the name and the latency on top, the detail under them.
+        const float mid = (r.top + r.bottom) / 2;
+        const D2D1_RECT_F line = it.detail.empty() ? r : D2D1_RECT_F{r.left, r.top + 4, r.right, mid + 2};
+        k.Text(it.text, body_.get(), {line.left + 42, line.top, line.right - 120, line.bottom}, primary);
+        if (!it.detail.empty()) {
+          k.Text(it.detail, caption_.get(), {r.left + 42, mid + 2, r.right - 12, r.bottom - 4}, secondary);
+        }
         if (it.command == UiCommand::SetProtocol && it.index >= 0 && static_cast<std::size_t>(it.index) < c.delays.size()) {
           const UiDelay& delay = c.delays[static_cast<std::size_t>(it.index)];
-          k.Text(DelayLabel(delay), delay_.get(), {r.right - 100, r.top, r.right - 12, r.bottom},
+          k.Text(DelayLabel(delay), delay_.get(), {line.right - 120, line.top, line.right - 12, line.bottom},
                  FromColorRef(ui::DelayColor(delay)));
         }
         break;

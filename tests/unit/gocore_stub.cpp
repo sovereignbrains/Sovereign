@@ -129,8 +129,17 @@ __declspec(dllexport) char* __cdecl box_exitip(const char* request) {
 
 // A fixed answer covering every result shape.
 __declspec(dllexport) char* __cdecl box_delays() {
-  return Allocate(R"({"results":[{"tag":"nl","delay":48},{"tag":"fi","error":"i/o timeout"},)"
+  return Allocate(R"({"results":[{"tag":"nl","delay":48,"jitter":3,"loss":10,"samples":9,"connect":412},)"
+                  R"({"tag":"fi","error":"i/o timeout","connect":-1},)"
                   R"({"tag":"de","pending":true},{"delay":5},"junk"]})");
+}
+
+// Knows one selector with one option.
+__declspec(dllexport) char* __cdecl box_select(const char* selector, const char* outbound) {
+  if (std::string(selector) != "proxy") {
+    return Allocate("no such selector");
+  }
+  return Allocate(std::string(outbound) == "nl" ? "" : "no such option in the selector");
 }
 
 __declspec(dllexport) void __cdecl box_set_log_callback(LogCallback callback, void* context) {

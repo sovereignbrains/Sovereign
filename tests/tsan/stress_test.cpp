@@ -62,6 +62,7 @@ class UnsyncedCore final : public ICore {
   std::string StartUrlTest(const UrlTestRequest& /*request*/) override { return {}; }
   std::vector<DelayResult> Delays() override { return {}; }
   ExitIp LookupExitIp(const std::string& /*tag*/, bool /*refresh*/) override { return {}; }
+  std::string Select(const std::string& /*selector*/, const std::string& /*outbound*/) override { return {}; }
   void SetLogSink(LogSink /*sink*/) override {}
 
  private:

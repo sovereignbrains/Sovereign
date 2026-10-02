@@ -43,13 +43,17 @@ class FakeCore final : public ICore {
   }
   std::vector<DelayResult> Delays() override {
     // Tags come from configs: any bytes, bad UTF-8 included.
-    return {{"nl", DelayResult::State::Ok, 48, {}},
-            {"bad \xFF tag", DelayResult::State::Failed, 0, "err \xFE"},
-            {"de", DelayResult::State::Pending, 0, {}}};
+    return {{.tag = "nl", .state = DelayResult::State::Ok, .delayMs = 48, .jitterMs = 3, .samples = 9},
+            {.tag = "bad \xFF tag", .state = DelayResult::State::Failed, .connectMs = 700, .error = "err \xFE"},
+            {.tag = "de", .state = DelayResult::State::Pending}};
   }
   ExitIp LookupExitIp(const std::string& tag, bool /*refresh*/) override {
     // What comes back from the core is as unchecked as a tag: any bytes.
     return {tag, false, "185.12.34.56", "N\xFF", "err \xFE"};
+  }
+  std::string Select(const std::string& /*selector*/, const std::string& outbound) override {
+    // The core's refusal names what the request asked for: any bytes.
+    return outbound.size() % 2 == 0 ? std::string{} : "no such option " + outbound;
   }
   void SetLogSink(LogSink /*sink*/) override {}
 

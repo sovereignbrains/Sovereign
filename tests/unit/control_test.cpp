@@ -73,9 +73,16 @@ class FakeCore final : public ICore {
     return result;
   }
 
+  std::string Select(const std::string& selector, const std::string& outbound) override {
+    selected = {selector, outbound};
+    return selectError;
+  }
+
   void SetLogSink(LogSink sink) override { installedSink = std::move(sink); }
 
   bool running = false;
+  std::optional<std::pair<std::string, std::string>> selected;
+  std::string selectError;
   std::optional<sovereign::service::UrlTestRequest> urlTest;
   std::vector<sovereign::service::DelayResult> delays;
   sovereign::service::ExitIp exitIp;
@@ -175,13 +182,39 @@ void TestUrlTest() {
         core.urlTest->timeout == std::chrono::milliseconds(2000));
 
   using sovereign::service::DelayResult;
-  core.delays = {{"nl", DelayResult::State::Ok, 48, {}},
-                 {"fi", DelayResult::State::Failed, 0, "i/o timeout"},
-                 {"de", DelayResult::State::Pending, 0, {}}};
+  core.delays = {{.tag = "nl", .state = DelayResult::State::Ok, .delayMs = 48, .jitterMs = 3, .lossPercent = 10,
+                  .samples = 9, .connectMs = 412},
+                 {.tag = "fi", .state = DelayResult::State::Failed, .error = "i/o timeout"},
+                 {.tag = "de", .state = DelayResult::State::Pending}};
   const json delays = Send(handler, R"({"cmd":"box_delays"})");
   CHECK(delays.value("cmd", "") == "box_delays");
-  CHECK(delays["results"] == json::parse(R"([{"tag":"nl","delay":48},{"tag":"fi","error":"i/o timeout"},)"
+  CHECK(delays["results"] == json::parse(R"([{"tag":"nl","delay":48,"jitter":3,"loss":10,"samples":9,"connect":412},)"
+                                         R"({"tag":"fi","error":"i/o timeout"},)"
                                          R"({"tag":"de","pending":true}])"));
+}
+
+// box_select passes a checked selector and option on and reports the core's
+// refusal as an error.
+void TestSelect() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  ControlHandler handler(&core, log, lastConfig);
+  const auto rejected = [&](const std::string& request) {
+    return Send(handler, request).value("cmd", "") == "error" && !core.selected;
+  };
+  CHECK(rejected(R"({"cmd":"box_select"})"));
+  CHECK(rejected(R"({"cmd":"box_select","selector":"proxy"})"));
+  CHECK(rejected(R"({"cmd":"box_select","selector":"","outbound":"nl"})"));
+  CHECK(rejected(R"({"cmd":"box_select","selector":"proxy","outbound":5})"));
+  CHECK(rejected(json{{"cmd", "box_select"}, {"selector", "proxy"}, {"outbound", std::string(300, 'x')}}.dump()));
+
+  CHECK(Send(handler, R"({"cmd":"box_select","selector":"proxy","outbound":"nl"})").value("cmd", "") ==
+        "box_selected");
+  CHECK(core.selected == std::make_pair(std::string("proxy"), std::string("nl")));
+  core.selectError = "no such option in the selector";
+  CHECK(IsError(Send(handler, R"({"cmd":"box_select","selector":"proxy","outbound":"xx"})"),
+                "no such option in the selector"));
 }
 
 void TestExitIp() {
@@ -531,6 +564,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestReaderAheadAfterRestart();
     TestLogsCarryTime();
     TestUrlTest();
+    TestSelect();
     TestExitIp();
     TestKillSwitch();
     TestResumeAfterSleep();

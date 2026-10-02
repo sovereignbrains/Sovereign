@@ -42,6 +42,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -125,6 +126,13 @@ constexpr std::chrono::minutes kExitIpRecheck{5};
 
 // A latency test the service never finishes stops being waited for.
 constexpr std::chrono::seconds kUrlTestGiveUp{60};
+
+// With an auto pick the servers are measured again this often (a test takes
+// seconds and a few dozen small requests a server).
+constexpr std::chrono::minutes kAutoRetest{10};
+
+// A switch of the running selector the service refused is retried this often.
+constexpr std::chrono::seconds kSelectRetry{5};
 
 // A second tray start asks the running one to show its window (registered:
 // it crosses processes).
@@ -235,6 +243,9 @@ struct View {
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
   bool delaysTesting = false;
   std::string delayError;
+  int autoOption = -1;      // the protocol that is auto (a URL test), if any
+  std::string autoServer;   // with an auto pick, the server it runs on; "" until measured
+  std::string selectError;  // why the box couldn't be switched to the pick
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
   bool hideExitIp = false;
   std::string logLevel;
@@ -568,7 +579,7 @@ class Worker {
       FindAppPaths();
       if (protocol) {
         settings_.protocol = *protocol;
-        Save();  // likewise
+        Save();  // the running box switches to it (ApplySelection), no restart
       }
       const auto config = EffectiveConfig();
       // Nothing left to run - every configuration off, every server off: the
@@ -584,6 +595,7 @@ class Worker {
       const auto stats = PollStats();
       Execute(model_, model_.OnPoll(stats, TrayModel::Clock::now()), config);
       UpdateDelays(stats, urlTest);
+      ApplySelection(stats);
       UpdateExitIp(stats);
       if (toggleExitIp) {
         settings_.hideExitIp = !settings_.hideExitIp;
@@ -796,15 +808,15 @@ class Worker {
     Save();
   }
 
-  // The combined config with the protocol pick, the per-app rules and the
-  // cache file applied - what the box must run.
+  // The combined config with the per-app rules, the log level and the cache
+  // file applied - what the box must run. Not the protocol pick: that goes to
+  // the running box (ApplySelection), a new pick needs no restart.
   std::optional<std::string> EffectiveConfig() {
     const auto config = Combined();
     if (!config) {
       return std::nullopt;
     }
-    return sovereign::tray::EffectiveConfig(*config, {.protocol = settings_.protocol,
-                                                      .appsMode = settings_.appsMode,
+    return sovereign::tray::EffectiveConfig(*config, {.appsMode = settings_.appsMode,
                                                       .apps = settings_.apps,
                                                       .logLevel = settings_.logLevel,
                                                       .cacheFile = cacheFile_});
@@ -813,10 +825,35 @@ class Worker {
   // The selector's options in the combined config and which one the box
   // uses: the user's pick if it's still there, else the config's default.
   std::pair<std::vector<std::string>, int> Protocols() const {
+    auto [choices, current] = Choices();
+    return {std::move(choices.options), current};
+  }
+
+  // What the selector should be on: the pick; for an auto pick the server the
+  // tray's measurements chose for it (auto itself - sing-box's own test,
+  // one cold request a server - until there is one).
+  std::string Wanted(const sovereign::tray::ProtocolChoices& choices, int current) const {
+    if (current < 0) {
+      return {};
+    }
+    const std::string& pick = choices.options[static_cast<std::size_t>(current)];
+    const auto group = choices.groups.find(pick);
+    if (group != choices.groups.end() &&
+        std::find(group->second.begin(), group->second.end(), autoPick_.server) != group->second.end()) {
+      return autoPick_.server;
+    }
+    return pick;
+  }
+
+  bool IsAuto(const sovereign::tray::ProtocolChoices& choices, int current) const {
+    return current >= 0 && choices.groups.contains(choices.options[static_cast<std::size_t>(current)]);
+  }
+
+  std::pair<sovereign::tray::ProtocolChoices, int> Choices() const {
     if (!combined_) {
       return {{}, -1};
     }
-    const auto choices = sovereign::tray::FindProtocolChoices(*combined_);
+    auto choices = sovereign::tray::FindProtocolChoices(*combined_);
     const auto find = [&](const std::string& tag) {
       const auto it = std::find(choices.options.begin(), choices.options.end(), tag);
       return it == choices.options.end() ? -1 : static_cast<int>(it - choices.options.begin());
@@ -825,7 +862,7 @@ class Worker {
     if (current < 0) {
       current = find(choices.configDefault);
     }
-    return {choices.options, current};
+    return {std::move(choices), current};
   }
 
   void Save() {
@@ -1244,8 +1281,8 @@ class Worker {
     }
   }
 
-  // The servers' latency: tested once every time a box starts, and whenever
-  // the user asks; results polled while a test runs (the service only starts
+  // The servers' latency: tested once every time a box starts, whenever the
+  // user asks, and with an auto pick every kAutoRetest; results polled while a test runs (the service only starts
   // one - it takes seconds, and the pipe answers one request at a time).
   void UpdateDelays(const std::optional<sovereign::tray::Stats>& stats, bool asked) {
     if (!stats) {
@@ -1256,7 +1293,10 @@ class Worker {
       testing_ = false;
     }
     const bool on = model_.GetDisplay() == Display::On;
-    if (on && (asked || testedGeneration_ != generation_)) {
+    const auto [choices, current] = Choices();
+    const bool autoDue =
+        IsAuto(choices, current) && !testing_ && TrayModel::Clock::now() - testStarted_ >= kAutoRetest;
+    if (on && (asked || autoDue || testedGeneration_ != generation_)) {
       testedGeneration_ = generation_;
       StartUrlTest();
     } else if (asked) {
@@ -1301,8 +1341,8 @@ class Worker {
   // the server changes, polled while the lookup runs, and asked again now
   // and then (auto may have moved to another server).
   void UpdateExitIp(const std::optional<sovereign::tray::Stats>& stats) {
-    const auto [options, current] = Protocols();
-    const std::string tag = current >= 0 ? options[static_cast<std::size_t>(current)] : std::string();
+    const auto [choices, current] = Choices();
+    const std::string tag = Wanted(choices, current);
     if (!stats || model_.GetDisplay() != Display::On || tag.empty()) {
       exit_ = {};
       exitTag_.clear();
@@ -1330,8 +1370,49 @@ class Worker {
     }
   }
 
+  // The running box's selector switched to what it should be on (Wanted) -
+  // after every start of a box too: sing-box starts it on what its cache
+  // file kept, not necessarily what is wanted now.
+  void ApplySelection(const std::optional<sovereign::tray::Stats>& stats) {
+    if (!stats || !stats->running) {
+      selectError_.clear();
+      return;
+    }
+    const auto [choices, current] = Choices();
+    const std::string want = Wanted(choices, current);
+    if (choices.selector.empty() || want.empty() ||
+        (want == selected_ && stats->generation == selectedGeneration_)) {
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    if (!selectError_.empty() && lastSelectTry_ && now - *lastSelectTry_ < kSelectRetry) {
+      return;
+    }
+    lastSelectTry_ = now;
+    selectError_ = ServiceCall(
+        nlohmann::json{{"cmd", "box_select"}, {"selector", choices.selector}, {"outbound", want}}, "box_selected");
+    if (selectError_.empty()) {
+      selected_ = want;
+      selectedGeneration_ = stats->generation;
+    }
+  }
+
+  // Auto's server after a latency test (delays.h: JudgeAuto).
+  void PickAutoServer() {
+    const auto [choices, current] = Choices();
+    if (IsAuto(choices, current)) {
+      autoPick_ = sovereign::tray::JudgeAuto(std::move(autoPick_),
+                                             choices.groups.at(choices.options[static_cast<std::size_t>(current)]),
+                                             delays_);
+    }
+  }
+
   void StartUrlTest() {
-    const std::vector<std::string> tags = Protocols().first;
+    // The servers, not the groups: auto's own result would only repeat one of theirs.
+    const auto choices = Choices().first;
+    std::vector<std::string> tags;
+    std::copy_if(choices.options.begin(), choices.options.end(), std::back_inserter(tags),
+                 [&](const std::string& tag) { return !choices.groups.contains(tag); });
     if (tags.empty()) {
       return;
     }
@@ -1359,6 +1440,7 @@ class Worker {
     });
     if (!pending || TrayModel::Clock::now() - testStarted_ > kUrlTestGiveUp) {
       testing_ = false;
+      PickAutoServer();
     }
   }
 
@@ -1451,7 +1533,16 @@ class Worker {
 
   void Publish() {
     auto& shared = State();
-    auto protocols = Protocols();
+    auto [choices, current] = Choices();
+    std::string autoServer;  // "" until measured
+    if (IsAuto(choices, current)) {
+      autoServer = Wanted(choices, current);
+      if (autoServer == choices.options[static_cast<std::size_t>(current)]) {
+        autoServer.clear();
+      }
+    }
+    const auto autoOption = std::find_if(choices.options.begin(), choices.options.end(),
+                                         [&](const std::string& tag) { return choices.groups.contains(tag); });
     UpdateConfigState();  // reads the files: outside the lock
     HWND window = nullptr;
     {
@@ -1506,9 +1597,16 @@ class Worker {
         const std::string* path = sovereign::tray::AppPath(settings_, app);
         v.appPaths.push_back(path != nullptr ? *path : std::string());
       }
-      std::tie(v.protocols, v.protocol) = protocols;
+      v.protocols = choices.options;
+      v.protocol = current;
+      v.autoOption = autoOption == choices.options.end() ? -1 : static_cast<int>(autoOption - choices.options.begin());
+      v.autoServer = autoServer;
+      v.selectError = selectError_;
       v.delays.clear();
-      for (const std::string& tag : v.protocols) {
+      for (const std::string& option : v.protocols) {
+        // A group shows the latency of the server it runs on.
+        const auto group = choices.groups.find(option);
+        const std::string& tag = group != choices.groups.end() && !v.autoServer.empty() ? v.autoServer : option;
         const auto it = delays_.find(tag);
         v.delays.push_back(it == delays_.end() ? std::nullopt : std::optional(it->second));
       }
@@ -1552,6 +1650,11 @@ class Worker {
   std::int64_t generation_ = -1;        // the box the results belong to
   std::int64_t testedGeneration_ = -1;  // the box last tested automatically
   std::string delayError_;
+  sovereign::tray::AutoPick autoPick_;  // the server auto runs on
+  std::string selected_;                // what the running selector was last switched to
+  std::int64_t selectedGeneration_ = -1;  // in which box
+  std::string selectError_;
+  std::optional<TrayModel::Clock::time_point> lastSelectTry_;
   sovereign::tray::ExitIp exit_;
   std::string exitTag_;               // the server exit_ is about
   std::int64_t exitGeneration_ = -1;  // and the box
@@ -2392,12 +2495,20 @@ UiContent ContentFrom(const View& v) {
                 : delay->state == State::Failed ? sovereign::tray::UiDelay::State::Failed
                                                  : sovereign::tray::UiDelay::State::Pending;
       d.ms = delay->ms;
+      d.jitter = delay->jitter;
+      d.loss = delay->loss;
+      d.samples = delay->samples;
+      d.connect = delay->connect;
+      d.error = Widen(delay->error);
     }
     c.delays.push_back(d);
   }
   c.delaysTesting = v.delaysTesting;
   c.canTestDelays = v.display == Display::On && !v.protocols.empty();
   c.delayError = Widen(v.delayError);
+  c.autoOption = v.autoOption;
+  c.autoServer = Widen(v.autoServer);
+  c.selectError = Widen(v.selectError);
   c.exitIp = Widen(v.exitIp.ip);
   c.exitCountry = Widen(v.exitIp.country);
   c.exitCountryName = CountryName(c.exitCountry);

@@ -131,8 +131,16 @@ void TestBridge(const std::wstring& stubPath) {
     const auto delays = core->Delays();
     CHECK(delays.size() == 3);
     CHECK(delays.size() == 3 && delays[0].tag == "nl" && delays[0].state == State::Ok && delays[0].delayMs == 48);
-    CHECK(delays.size() == 3 && delays[1].state == State::Failed && delays[1].error == "i/o timeout");
+    CHECK(delays.size() == 3 && delays[0].jitterMs == 3 && delays[0].lossPercent == 10 && delays[0].samples == 9 &&
+          delays[0].connectMs == 412);
+    CHECK(delays.size() == 3 && delays[1].state == State::Failed && delays[1].error == "i/o timeout" &&
+          delays[1].connectMs == 0);  // negative: not a count, left out
     CHECK(delays.size() == 3 && delays[2].tag == "de" && delays[2].state == State::Pending);
+    CHECK(stub.outstanding() == 0);
+
+    CHECK(core->Select("proxy", "nl").empty());
+    CHECK(core->Select("proxy", "xx") == "no such option in the selector");
+    CHECK(core->Select("other", "nl") == "no such selector");
     CHECK(stub.outstanding() == 0);
 
     // The exit IP: the answer parsed, fields of the wrong type left empty.

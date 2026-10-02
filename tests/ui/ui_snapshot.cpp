@@ -66,9 +66,13 @@ UiContent SampleContent() {
   // One exe that is there on any Windows: its real icon; the rest aren't known.
   c.appPaths = {L"", L"", L"", L"C:\\Windows\\System32\\notepad.exe"};
   c.protocols = {L"auto", L"AnyTLS · Нидерланды", L"AnyTLS · Финляндия", L"REALITY · Германия", L"REALITY · Польша"};
-  c.protocol = 1;
+  c.protocol = 0;
+  c.autoOption = 0;
+  c.autoServer = L"AnyTLS · Нидерланды";
   using State = sovereign::tray::UiDelay::State;
-  c.delays = {{State::Ok, 48}, {State::Ok, 52}, {State::Ok, 310}, {State::Failed, 0}, {State::Pending, 0}};
+  const sovereign::tray::UiDelay nl{.state = State::Ok, .ms = 48, .jitter = 3, .samples = 7, .connect = 212};
+  c.delays = {nl, nl, {.state = State::Ok, .ms = 310, .jitter = 41, .loss = 13, .samples = 13, .connect = 940},
+              {.state = State::Failed, .error = L"i/o timeout"}, {.state = State::Pending}};
   c.canTestDelays = true;
   c.exitIp = L"185.12.34.56";
   c.exitCountry = L"NL";

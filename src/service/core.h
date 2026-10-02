@@ -38,8 +38,9 @@ struct CoreStats {
   std::int64_t generation = 0;
 };
 
-// A latency test of outbounds: one request to `url` through each of `tags`
-// (the config's outbound tags), each abandoned after `timeout`.
+// A latency test of outbounds through each of `tags` (the config's outbound
+// tags): a connection, then requests to `url` over it until the round trips
+// settle; each request abandoned after `timeout`.
 struct UrlTestRequest {
   std::vector<std::string> tags;
   std::string url;
@@ -49,10 +50,14 @@ struct UrlTestRequest {
 // Where one outbound's latency test is.
 struct DelayResult {
   enum class State : std::uint8_t { Pending, Ok, Failed };
-  std::string tag;
+  std::string tag{};
   State state = State::Pending;
-  int delayMs = 0;    // Ok: how long the request took
-  std::string error;  // Failed: why
+  int delayMs = 0;      // Ok: the median round trip through the outbound
+  int jitterMs = 0;     // Ok: half the interquartile range of the round trips
+  int lossPercent = 0;  // Ok: requests lost
+  int samples = 0;      // Ok: requests that came back
+  int connectMs = 0;    // a connection through the outbound, TLS and a first request; 0 if none was made
+  std::string error{};  // Failed: why
 };
 
 // The address the internet sees through an outbound, and its country.
@@ -111,6 +116,10 @@ class ICore {
   // outbound) when there's none for `tag` yet or `refresh` asks - so it's
   // polled like the delays. Everything is forgotten on Start().
   virtual ExitIp LookupExitIp(const std::string& tag, bool refresh) = 0;
+
+  // Switches the selector outbound `selector` to its option `outbound`, for
+  // new connections, without a restart. Empty string, or why not.
+  virtual std::string Select(const std::string& selector, const std::string& outbound) = 0;
 
   // Installs (or, with an empty sink, removes) the log sink. After this
   // returns, the previous sink is never called again.

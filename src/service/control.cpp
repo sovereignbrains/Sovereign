@@ -189,7 +189,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   const std::string cmd = parsed.value("cmd", "");
   for (const std::string_view known :
        {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays", "box_exitip",
-        "kill_switch"}) {
+        "box_select", "kill_switch"}) {
     if (cmd == known) {
       outcome.cmd = known;
     }
@@ -200,7 +200,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
 
   const bool isCoreCommand = cmd == "box_ping" || cmd == "box_start" || cmd == "box_stop" ||
                              cmd == "box_stats" || cmd == "box_urltest" || cmd == "box_delays" ||
-                             cmd == "box_exitip";
+                             cmd == "box_exitip" || cmd == "box_select";
   if (isCoreCommand && core_ == nullptr) {
     return fail("gocore not loaded");
   }
@@ -338,14 +338,39 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
       item["tag"] = result.tag;
       switch (result.state) {
         case DelayResult::State::Pending: item["pending"] = true; break;
-        case DelayResult::State::Ok: item["delay"] = result.delayMs; break;
+        case DelayResult::State::Ok:
+          item["delay"] = result.delayMs;
+          item["jitter"] = result.jitterMs;
+          item["loss"] = result.lossPercent;
+          item["samples"] = result.samples;
+          break;
         case DelayResult::State::Failed: item["error"] = result.error; break;
+      }
+      if (result.connectMs > 0) {
+        item["connect"] = result.connectMs;
       }
       results.push_back(std::move(item));
     }
     Json response;
     response["cmd"] = "box_delays";
     response["results"] = std::move(results);
+    return Dump(response);
+  }
+
+  if (cmd == "box_select") {
+    const Json selector = parsed.value("selector", Json());
+    const Json outbound = parsed.value("outbound", Json());
+    for (const Json* tag : {&selector, &outbound}) {
+      if (!tag->is_string() || tag->get<std::string>().empty() || tag->get<std::string>().size() > kMaxTagBytes) {
+        return fail("selector and outbound must be non-empty strings");
+      }
+    }
+    const std::string error = core_->Select(selector.get<std::string>(), outbound.get<std::string>());
+    if (!error.empty()) {
+      return fail(error);
+    }
+    Json response;
+    response["cmd"] = "box_selected";
     return Dump(response);
   }
 
