@@ -124,8 +124,9 @@ constexpr std::chrono::seconds kKillSwitchRetry{10};
 constexpr std::chrono::seconds kExitIpPoll{2};
 constexpr std::chrono::minutes kExitIpRecheck{5};
 
-// A latency test the service never finishes stops being waited for.
-constexpr std::chrono::seconds kUrlTestGiveUp{60};
+// A latency test the service never finishes stops being waited for (a server
+// takes up to 12 s, eight at a time).
+constexpr std::chrono::seconds kUrlTestGiveUp{120};
 
 // With an auto pick the servers are measured again this often (a test takes
 // seconds and a few dozen small requests a server).
@@ -580,6 +581,9 @@ class Worker {
       if (protocol) {
         settings_.protocol = *protocol;
         Save();  // the running box switches to it (ApplySelection), no restart
+        if (autoPick_.server.empty()) {
+          PickAutoServer();  // auto now: from the last test, not sing-box's until the next one
+        }
       }
       const auto config = EffectiveConfig();
       // Nothing left to run - every configuration off, every server off: the
