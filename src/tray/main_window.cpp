@@ -977,7 +977,16 @@ class Painter {
       if (i > 0) {
         l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
       }
-      Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kLatencyRow - 3}, c.protocols[i], nullptr,
+      // Where the server is, once known: its country's flag in place of any
+      // its name has, and the network it's in ahead of the measurement.
+      const UiLocation* location = i < c.locations.size() ? &c.locations[i] : nullptr;
+      const std::wstring flag = location != nullptr && location->country.size() == 2
+                                    ? FlagEmojiFor(std::string{static_cast<char>(location->country[0]),
+                                                               static_cast<char>(location->country[1])})
+                                    : std::wstring();
+      const std::wstring name = flag.empty() ? c.protocols[i] : flag + L" " + WithoutFlagEmoji(c.protocols[i]);
+      const std::wstring isp = location != nullptr ? location->isp : std::wstring();
+      Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kLatencyRow - 3}, name, nullptr,
                                 UiCommand::SetProtocol, static_cast<int>(i));
       choice.checked = static_cast<int>(i) == c.protocol;
       if (static_cast<int>(i) == c.autoOption) {
@@ -985,6 +994,9 @@ class Painter {
                                              : L"сейчас " + c.autoServer + L" — лучший по замерам";
       } else if (i < c.delays.size()) {
         choice.detail = DelayDetail(c.delays[i]);
+      }
+      if (!isp.empty() && static_cast<int>(i) != c.autoOption) {
+        choice.detail = choice.detail.empty() ? isp : isp + L" · " + choice.detail;
       }
       l.items.push_back(std::move(choice));
     }

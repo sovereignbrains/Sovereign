@@ -119,12 +119,12 @@ __declspec(dllexport) char* __cdecl box_urltest(const char* request) {
 __declspec(dllexport) char* __cdecl box_exitip(const char* request) {
   const std::string text = request != nullptr ? request : "";
   if (text.find("\"tag\":\"junk\"") != std::string::npos) {
-    return Allocate(R"({"tag":"junk","ip":5,"pending":"yes"})");
+    return Allocate(R"({"tag":"junk","ip":5,"isp":["x"],"pending":"yes"})");
   }
   if (text.find("\"refresh\":true") != std::string::npos) {
     return Allocate(R"({"tag":"nl","pending":true})");
   }
-  return Allocate(R"({"tag":"nl","ip":"185.12.34.56","country":"NL"})");
+  return Allocate(R"({"tag":"nl","ip":"185.12.34.56","country":"NL","isp":"Hetzner Online GmbH"})");
 }
 
 // A fixed answer covering every result shape.

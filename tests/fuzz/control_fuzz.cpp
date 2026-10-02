@@ -49,7 +49,7 @@ class FakeCore final : public ICore {
   }
   ExitIp LookupExitIp(const std::string& tag, bool /*refresh*/) override {
     // What comes back from the core is as unchecked as a tag: any bytes.
-    return {tag, false, "185.12.34.56", "N\xFF", "err \xFE"};
+    return {tag, false, "185.12.34.56", "N\xFF", "isp \xFD", "err \xFE"};
   }
   std::string Select(const std::string& /*selector*/, const std::string& outbound) override {
     // The core's refusal names what the request asked for: any bytes.

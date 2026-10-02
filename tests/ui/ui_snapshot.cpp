@@ -68,6 +68,8 @@ UiContent SampleContent() {
   c.protocols = {L"auto", L"AnyTLS · Нидерланды", L"AnyTLS · Финляндия", L"REALITY · Германия", L"REALITY · Польша"};
   // A flag emoji, as subscriptions name servers: drawn from the flags sprite.
   c.protocols.emplace_back(L"\U0001F1EA\U0001F1FA 4G | Whitelist №1");
+  // Where they are, looked up: the EU-flagged one is in Estonia.
+  c.locations = {{}, {.country = L"DE", .isp = L"Hetzner Online"}, {}, {}, {}, {.country = L"EE", .isp = L"Brainoza"}};
   c.protocol = 0;
   c.autoOption = 0;
   c.autoServer = L"AnyTLS · Нидерланды";

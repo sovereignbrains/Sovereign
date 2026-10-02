@@ -59,12 +59,28 @@ void TestFind() {
   CHECK(FindFlagEmoji(L"\xD83D\xDE80 rocket").empty());
 }
 
+// A server's own flag swapped for where it is.
+void TestReplace() {
+  CHECK(FlagEmojiFor("EE") == Flag('E', 'E'));
+  CHECK(FlagEmojiFor("ee") == Flag('E', 'E'));
+  CHECK(FlagEmojiFor("ZZ").empty());
+  CHECK(FlagEmojiFor("").empty());
+  const auto found = FindFlagEmoji(FlagEmojiFor("EE") + L" x");
+  CHECK(found.size() == 1 && found[0].index == FlagIndex("ee"));
+
+  CHECK(WithoutFlagEmoji(Flag('E', 'U') + L"  4G | Whitelist") == L"4G | Whitelist");
+  CHECK(WithoutFlagEmoji(L"NL " + Flag('N', 'L') + L" Amsterdam") == L"NL Amsterdam");
+  CHECK(WithoutFlagEmoji(L"AnyTLS-REALITY") == L"AnyTLS-REALITY");
+  CHECK(WithoutFlagEmoji(Flag('Z', 'Z')) == Flag('Z', 'Z'));  // nothing else: as it was
+}
+
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestIndex();
     TestFind();
+    TestReplace();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 1;

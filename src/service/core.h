@@ -60,12 +60,14 @@ struct DelayResult {
   std::string error{};  // Failed: why
 };
 
-// The address the internet sees through an outbound, and its country.
+// The address the internet sees through an outbound, its country and its
+// network's owner.
 struct ExitIp {
   std::string tag;
   bool pending = false;  // a lookup runs
   std::string ip;        // empty until known
   std::string country;   // ISO 3166-1 alpha-2, as the lookup says; may stay empty
+  std::string isp;       // the address's AS organization ("Hetzner Online GmbH"); may stay empty
   std::string error;     // why the last lookup failed
 };
 

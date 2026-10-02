@@ -236,12 +236,14 @@ void TestExitIp() {
   CHECK(core.exitIpAsked == std::make_pair(std::string("auto"), false));
   CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"auto","pending":true})"));
 
-  core.exitIp = {{}, false, "185.12.34.56", "NL", {}};
+  core.exitIp = {
+      .tag = {}, .pending = false, .ip = "185.12.34.56", .country = "NL", .isp = "Hetzner Online GmbH", .error = {}};
   answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl","refresh":true})");
   CHECK(core.exitIpAsked == std::make_pair(std::string("nl"), true));
-  CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","ip":"185.12.34.56","country":"NL"})"));
+  CHECK(answer == json::parse(
+                      R"({"cmd":"box_exitip","tag":"nl","ip":"185.12.34.56","country":"NL","isp":"Hetzner Online GmbH"})"));
 
-  core.exitIp = {{}, false, {}, {}, "i/o timeout"};
+  core.exitIp = {.tag = {}, .pending = false, .ip = {}, .country = {}, .isp = {}, .error = "i/o timeout"};
   answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl"})");
   CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","error":"i/o timeout"})"));
 }

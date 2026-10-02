@@ -145,10 +145,11 @@ void TestBridge(const std::wstring& stubPath) {
 
     // The exit IP: the answer parsed, fields of the wrong type left empty.
     const auto exit = core->LookupExitIp("nl", false);
-    CHECK(exit.tag == "nl" && exit.ip == "185.12.34.56" && exit.country == "NL" && !exit.pending && exit.error.empty());
+    CHECK(exit.tag == "nl" && exit.ip == "185.12.34.56" && exit.country == "NL" && exit.isp == "Hetzner Online GmbH" &&
+          !exit.pending && exit.error.empty());
     CHECK(core->LookupExitIp("nl", true).pending);
     const auto junk = core->LookupExitIp("junk", false);
-    CHECK(junk.ip.empty() && !junk.pending);
+    CHECK(junk.ip.empty() && junk.isp.empty() && !junk.pending);
     CHECK(stub.outstanding() == 0);
 
     const auto running = core->Stats();

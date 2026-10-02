@@ -186,6 +186,7 @@ ExitIp GoCore::LookupExitIp(const std::string& tag, bool refresh) {
   };
   result.ip = text("ip");
   result.country = text("country");
+  result.isp = text("isp");
   result.error = text("error");
   const auto pending = json.find("pending");
   result.pending = pending != json.end() && pending->is_boolean() && pending->get<bool>();

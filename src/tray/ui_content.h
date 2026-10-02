@@ -30,6 +30,13 @@ struct UiDelay {
 // Where the updater is (updater.h), as the windows show it.
 enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Failed };
 
+// Where a server is: its exit's country and the network it's in, as looked
+// up through it - not what its name says.
+struct UiLocation {
+  std::wstring country;  // "EE", or empty
+  std::wstring isp;      // "Brainoza" (exit_ip.h ShortIsp), or empty
+};
+
 // A server of a configuration, as its page lists it.
 struct UiServer {
   std::wstring name;   // its tag
@@ -110,6 +117,7 @@ struct UiContent {
   std::vector<std::wstring> protocols;  // the selector's options; empty = no choice
   int protocol = -1;                    // index of the one in use
   std::vector<UiDelay> delays;          // one per protocol (may be shorter: untested)
+  std::vector<UiLocation> locations;    // one per protocol (may be shorter: not known)
   bool delaysTesting = false;           // a latency test is running
   bool canTestDelays = false;           // the box runs: its servers can be tested
   std::wstring delayError;              // why the last test didn't start

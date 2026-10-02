@@ -34,6 +34,34 @@ void TestDropsWhatDoesNotFit() {
   CHECK(longError && longError->error.size() == 300);
 }
 
+void TestIsp() {
+  const auto full = ParseExitIpResponse(
+      R"({"cmd":"box_exitip","tag":"nl","ip":"185.12.34.56","country":"NL","isp":"Hetzner Online GmbH"})");
+  CHECK(full && full->isp == "Hetzner Online GmbH");
+  const auto twoLines = ParseExitIpResponse(R"({"cmd":"box_exitip","isp":"a\nb"})");
+  CHECK(twoLines && twoLines->isp.empty());
+  const auto number = ParseExitIpResponse(R"({"cmd":"box_exitip","isp":5})");
+  CHECK(number && number->isp.empty());
+  const auto tooLong = ParseExitIpResponse(R"({"cmd":"box_exitip","isp":")" + std::string(300, 'x') + R"("})");
+  CHECK(tooLong && tooLong->isp.empty());
+
+  using sovereign::tray::ShortIsp;
+  CHECK(ShortIsp("Hetzner Online GmbH") == "Hetzner Online");
+  CHECK(ShortIsp("AEZA INTERNATIONAL LTD") == "AEZA INTERNATIONAL");
+  CHECK(ShortIsp("Brainoza OU") == "Brainoza");
+  CHECK(ShortIsp("DigitalOcean, LLC") == "DigitalOcean");
+  CHECK(ShortIsp("Example, Inc.") == "Example");
+  CHECK(ShortIsp("OVH SAS") == "OVH");
+  CHECK(ShortIsp("OOO Selectel") == "Selectel");
+  CHECK(ShortIsp("Stark Industries Solutions Ltd") == "Stark Industries Solutions");
+  CHECK(ShortIsp("Cloudflare") == "Cloudflare");
+  CHECK(ShortIsp("Philip Fjaera trading as PFWeb Solutions") == "PFWeb Solutions");
+  CHECK(ShortIsp("AEZA GROUP LLC") == "AEZA GROUP");
+  CHECK(ShortIsp("LLC") == "LLC");  // nothing else: the whole name
+  CHECK(ShortIsp("Ltd. Co.") == "Ltd.");
+  CHECK(ShortIsp("") == "");
+}
+
 void TestRejectsOtherAnswers() {
   CHECK(!ParseExitIpResponse(R"({"cmd":"error","message":"gocore not loaded"})"));
   CHECK(!ParseExitIpResponse("not json"));
@@ -46,6 +74,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestParses();
     TestDropsWhatDoesNotFit();
+    TestIsp();
     TestRejectsOtherAnswers();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

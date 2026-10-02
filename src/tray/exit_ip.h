@@ -13,9 +13,16 @@ namespace sovereign::tray {
 struct ExitIp {
   std::string ip;       // "185.12.34.56" / "2a01:4f8::1"; empty until known
   std::string country;  // "NL": two uppercase letters, or empty
+  std::string isp;      // the address's network owner ("Hetzner Online GmbH"): one line, or empty
   bool pending = false; // a lookup runs
   std::string error;    // why the last one failed
 };
+
+// An ISP's name to show next to a server: legal forms cut off -
+// "Hetzner Online GmbH" -> "Hetzner Online", "AEZA INTERNATIONAL LTD" ->
+// "AEZA INTERNATIONAL", "OOO Selectel" -> "Selectel". The whole name if that
+// would leave nothing.
+std::string ShortIsp(std::string_view isp);
 
 // nullopt unless it's a box_exitip answer. Fields that don't look like what
 // they should (an address of other characters, a country that isn't two

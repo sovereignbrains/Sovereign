@@ -396,6 +396,9 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     if (!exit.country.empty()) {
       response["country"] = exit.country;
     }
+    if (!exit.isp.empty()) {
+      response["isp"] = exit.isp;
+    }
     if (!exit.error.empty()) {
       response["error"] = exit.error;
     }

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -75,6 +76,42 @@ inline std::vector<FlagEmoji> FindFlagEmoji(std::wstring_view text) {
     }
   }
   return found;
+}
+
+// The flag emoji of a country ("EE" or "ee"): what FindFlagEmoji finds and
+// the window draws. Empty if the sprite has no flag for it.
+inline std::wstring FlagEmojiFor(std::string_view code) {
+  if (!FlagIndex(code)) {
+    return {};
+  }
+  std::wstring flag;
+  for (const char c : code) {
+    const char lower = c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    flag += wchar_t{0xD83C};
+    flag += static_cast<wchar_t>(0xDDE6 + (lower - 'a'));
+  }
+  return flag;
+}
+
+// `name` without its regional indicators (any flag emoji a server's name
+// has - "🇪🇺 4G" says nothing of where it is) and with the spaces left
+// around them collapsed: "🇪🇺  4G | x" -> "4G | x".
+inline std::wstring WithoutFlagEmoji(std::wstring_view name) {
+  std::wstring out;
+  for (std::size_t i = 0; i < name.size(); ++i) {
+    if (i + 1 < name.size() && name[i] == 0xD83C && name[i + 1] >= 0xDDE6 && name[i + 1] <= 0xDDFF) {
+      ++i;
+      continue;
+    }
+    if (name[i] == L' ' && (out.empty() || out.back() == L' ')) {
+      continue;
+    }
+    out += name[i];
+  }
+  while (!out.empty() && out.back() == L' ') {
+    out.pop_back();
+  }
+  return out.empty() ? std::wstring(name) : out;
 }
 
 }  // namespace sovereign::tray

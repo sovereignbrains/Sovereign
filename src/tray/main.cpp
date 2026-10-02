@@ -127,6 +127,9 @@ constexpr std::chrono::seconds kKillSwitchRetry{10};
 // The exit IP: how often a running lookup is polled, and a known one rechecked.
 constexpr std::chrono::seconds kExitIpPoll{2};
 constexpr std::chrono::minutes kExitIpRecheck{5};
+// Where each server is: lookups a box makes for one before giving up on it
+// (QUIC-based servers drop a first connection now and then).
+constexpr int kServerExitTries = 3;
 
 // A latency test the service never finishes stops being waited for (a server
 // takes up to 12 s, eight at a time).
@@ -252,6 +255,7 @@ struct View {
   std::string autoServer;   // with an auto pick, the server it runs on; "" until measured
   std::string selectError;  // why the box couldn't be switched to the pick
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
+  std::vector<sovereign::tray::ExitIp> locations;  // per protocol: where it is, once known
   bool hideExitIp = false;
   std::string logLevel;
   bool killSwitch = false;
@@ -605,6 +609,7 @@ class Worker {
       UpdateDelays(stats, urlTest);
       ApplySelection(stats);
       UpdateExitIp(stats);
+      UpdateServerExits(stats);
       if (toggleExitIp) {
         settings_.hideExitIp = !settings_.hideExitIp;
         Save();
@@ -1405,6 +1410,48 @@ class Worker {
     }
   }
 
+  // Where each server is: its exit looked up through it once a box (the core
+  // runs a few at a time), polled until known. What's known stays across
+  // boxes until a new answer - a server rarely moves.
+  void UpdateServerExits(const std::optional<sovereign::tray::Stats>& stats) {
+    if (!stats || !stats->running || model_.GetDisplay() != Display::On) {
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    if (stats->generation != serverExitsGeneration_) {
+      serverExitsGeneration_ = stats->generation;
+      serverExitsTries_.clear();
+    } else if (serverExitsPolled_ && now - *serverExitsPolled_ < kExitIpPoll) {
+      return;
+    }
+    serverExitsPolled_ = now;
+    const auto [choices, current] = Choices();
+    for (const std::string& tag : choices.options) {
+      if (choices.groups.contains(tag)) {
+        continue;  // auto: it's wherever its server is
+      }
+      int& tries = serverExitsTries_[tag];
+      sovereign::tray::ExitIp& known = serverExits_[tag];
+      if (!known.pending && tries >= kServerExitTries) {
+        continue;
+      }
+      const bool refresh = !known.pending || tries == 0;  // else: polling the lookup this box runs
+      const auto response = sovereign::tray::RequestService(
+          nlohmann::json{{"cmd", "box_exitip"}, {"tag", tag}, {"refresh", refresh}}.dump());
+      const auto parsed = response ? sovereign::tray::ParseExitIpResponse(*response) : std::nullopt;
+      if (!parsed) {
+        continue;  // the service didn't answer: asked again at the next poll
+      }
+      tries += refresh ? 1 : 0;
+      if (parsed->pending || parsed->ip.empty()) {
+        known.pending = parsed->pending;  // a failure keeps what was known, and is tried again
+      } else {
+        known = *parsed;
+        tries = kServerExitTries;  // known: done for this box
+      }
+    }
+  }
+
   // The running box's selector switched to what it should be on (Wanted) -
   // after every start of a box too: sing-box starts it on what its cache
   // file kept, not necessarily what is wanted now.
@@ -1648,6 +1695,11 @@ class Worker {
       v.delaysTesting = testing_;
       v.delayError = delayError_;
       v.exitIp = exit_;
+      v.locations.clear();
+      for (const std::string& option : v.protocols) {
+        const auto it = serverExits_.find(option);
+        v.locations.push_back(it == serverExits_.end() ? sovereign::tray::ExitIp{} : it->second);
+      }
       v.hideExitIp = settings_.hideExitIp;
       v.logLevel = settings_.logLevel;
       v.killSwitch = settings_.killSwitch;
@@ -1694,6 +1746,10 @@ class Worker {
   std::string exitTag_;               // the server exit_ is about
   std::int64_t exitGeneration_ = -1;  // and the box
   std::optional<TrayModel::Clock::time_point> exitAsked_;
+  std::map<std::string, sovereign::tray::ExitIp> serverExits_;  // where each server is, by tag
+  std::map<std::string, int> serverExitsTries_;  // lookups started in this box, per tag
+  std::int64_t serverExitsGeneration_ = -1;   // which box
+  std::optional<TrayModel::Clock::time_point> serverExitsPolled_;
   bool killSwitchActive_ = false;
   std::string killSwitchError_;
   std::optional<TrayModel::Clock::time_point> lastKillSwitchTry_;
@@ -2544,6 +2600,9 @@ UiContent ContentFrom(const View& v) {
   c.autoOption = v.autoOption;
   c.autoServer = Widen(v.autoServer);
   c.selectError = Widen(v.selectError);
+  for (const auto& location : v.locations) {
+    c.locations.push_back({.country = Widen(location.country), .isp = Widen(sovereign::tray::ShortIsp(location.isp))});
+  }
   c.exitIp = Widen(v.exitIp.ip);
   c.exitCountry = Widen(v.exitIp.country);
   c.exitCountryName = CountryName(c.exitCountry);
