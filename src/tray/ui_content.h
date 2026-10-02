@@ -67,7 +67,7 @@ struct UiProfile {
 // The routing's page (routing.h).
 struct UiRule {
   std::wstring text;    // "qwen.ai, alicdn.com"
-  std::wstring action;  // "напрямую" / "через прокси" / "блокировать"
+  std::wstring action;  // "напрямую" / "через прокси" / "блокировать" / "через WARP"
 };
 struct UiRouting {
   bool own = true;            // the client's own routing; else a configuration's
@@ -82,6 +82,12 @@ struct UiRouting {
   std::vector<UiRule> rules;
   std::wstring lists;      // "списки обновлены 01.10 14:00", "скачиваются: 2 из 4"
   bool listsFailed = false;
+  // Cloudflare WARP (warp.h).
+  bool warp = false;          // on (registered, or being registered)
+  bool warpRegistered = false;
+  bool warpViaProxy = true;
+  bool warpIpv6 = false;
+  std::wstring warpAddress;   // the device's address in WARP, once registered
 };
 
 // The checks' page (diagnostics.h): one row each.
@@ -173,6 +179,9 @@ enum class UiCommand : std::uint8_t {
   ToggleBlockQuic,
   ToggleFinalDirect,
   ToggleIpv4Only,
+  ToggleWarp,         // on: registers a WARP device first if there's none
+  ChooseWarpVia,      // anchor: over the proxy or directly
+  ToggleWarpIpv6,
   ChooseRemoteDns,    // anchor: where to open the menu
   ChooseLocalDns,     // anchor
   AddRule,            // starts typing over the button

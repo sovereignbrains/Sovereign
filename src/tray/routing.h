@@ -8,6 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "warp.h"
+
 // Where traffic goes and how names are resolved - the client's to decide,
 // not each subscription's. The rules here come first in whatever config runs
 // (sing-box takes the first rule that matches), and in "own" mode the tray
@@ -25,7 +27,7 @@
 namespace sovereign::tray {
 
 struct RouteRule {
-  enum class Action : std::uint8_t { Direct, Proxy, Block };
+  enum class Action : std::uint8_t { Direct, Proxy, Block, Warp };  // Warp: the WARP endpoint (warp.h), if it's on
   std::vector<std::string> domains;    // domain_suffix: the domain and its subdomains
   std::vector<std::string> keywords;   // domain_keyword
   std::vector<std::string> ips;        // ip_cidr ("1.2.3.0/24", a bare address is /32 or /128)
@@ -50,7 +52,21 @@ struct RoutingSettings {
   LocalDns localDns = LocalDns::Cloudflare;     // directly: Russian and direct names, the servers' own
   bool ipv4Only = true;
   std::vector<RouteRule> rules;  // the user's, first of all
+
+  // Cloudflare WARP (warp.h): an endpoint the box has while warp is on and
+  // there's an account; rules with Action::Warp go to it, IPv6 too with
+  // warpIpv6 (names get IPv6 addresses again then, IPv4 first).
+  bool warp = false;
+  bool warpViaProxy = true;  // WireGuard to Cloudflare over the proxy (else directly)
+  bool warpIpv6 = false;
+  std::optional<WarpAccount> warpAccount;
 };
+
+// The WARP endpoint's tag in the config.
+inline constexpr std::string_view kWarpTag = "warp";
+
+// Whether the box gets the WARP endpoint: on, and registered.
+inline bool WarpReady(const RoutingSettings& s) { return s.warp && s.warpAccount.has_value(); }
 
 // tray.json's "routing", read defensively (a wrong field keeps its default).
 nlohmann::json RoutingToJson(const RoutingSettings& settings);

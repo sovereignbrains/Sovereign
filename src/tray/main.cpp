@@ -37,6 +37,7 @@
 #include <condition_variable>
 #include <ctime>
 #include <deque>
+#include <expected>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -78,6 +79,8 @@
 #include "ui_content.h"
 #include "update.h"
 #include "updater.h"
+#include "warp.h"
+#include "x25519.h"
 
 namespace {
 
@@ -305,6 +308,9 @@ struct RoutingChange {
     SetRuleAction,  // index; value: RouteRule::Action
     RemoveRule,     // index
     ImportFrom,     // text: a configuration's id - its rules copied
+    Warp,           // on (a device registered first if there's none)
+    WarpVia,        // on: over the proxy; off: directly
+    WarpIpv6,       // on
   };
   What what = What::Source;
   bool on = false;
@@ -793,6 +799,20 @@ class Worker {
       case RoutingChange::What::BlockQuic: r.blockQuic = change.on; break;
       case RoutingChange::What::FinalDirect: r.finalDirect = change.on; break;
       case RoutingChange::What::Ipv4Only: r.ipv4Only = change.on; break;
+      case RoutingChange::What::Warp:
+        if (change.on && !r.warpAccount) {
+          // The first time: a device of its own at Cloudflare.
+          auto account = RegisterWarp();
+          if (!account) {
+            Notify(L"Sovereign: WARP не включился", Widen(account.error()), true, UiPage::Routing);
+            break;
+          }
+          r.warpAccount = std::move(*account);
+        }
+        r.warp = change.on;
+        break;
+      case RoutingChange::What::WarpVia: r.warpViaProxy = change.on; break;
+      case RoutingChange::What::WarpIpv6: r.warpIpv6 = change.on; break;
       case RoutingChange::What::RemoteDns:
         r.remoteDns = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 2));
         break;
@@ -801,14 +821,14 @@ class Worker {
         break;
       case RoutingChange::What::AddRule:
         if (auto rule = sovereign::tray::ParseRule(change.text, static_cast<sovereign::tray::RouteRule::Action>(
-                                                                     std::clamp(change.value, 0, 2)))) {
+                                                                     std::clamp(change.value, 0, 3)))) {
           sovereign::tray::MergeRules(r.rules, {*rule});
         }
         break;
       case RoutingChange::What::SetRuleAction:
         if (change.index >= 0 && static_cast<std::size_t>(change.index) < r.rules.size()) {
           r.rules[static_cast<std::size_t>(change.index)].action =
-              static_cast<sovereign::tray::RouteRule::Action>(std::clamp(change.value, 0, 2));
+              static_cast<sovereign::tray::RouteRule::Action>(std::clamp(change.value, 0, 3));
         }
         break;
       case RoutingChange::What::RemoveRule:
@@ -967,6 +987,50 @@ class Worker {
       hwid += std::format("{:08x}", random());
     }
     return hwid;
+  }
+
+  // A WARP device of the user's own (warp.h): a WireGuard key made here, its
+  // public half registered with Cloudflare as the official client does, the
+  // device then switched on. The request goes the way the tray's traffic
+  // goes - through the proxy while the box runs.
+  static std::expected<sovereign::tray::WarpAccount, std::string> RegisterWarp() {
+    std::random_device random;  // the system's CSPRNG with MSVC (rand_s)
+    sovereign::tray::X25519Key privateKey{};
+    for (std::size_t i = 0; i < privateKey.size(); i += 4) {
+      const unsigned int word = random();
+      for (std::size_t b = 0; b < 4; ++b) {
+        privateKey[i + b] = static_cast<std::uint8_t>(word >> (8 * b));
+      }
+    }
+    const auto bytes = [](const sovereign::tray::X25519Key& key) {
+      return std::string(reinterpret_cast<const char*>(key.data()), key.size());  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    };
+    const std::string publicKey = sovereign::tray::EncodeBase64(bytes(sovereign::tray::X25519Public(privateKey)));
+    SYSTEMTIME now{};
+    GetSystemTime(&now);
+    const std::string tos = std::format("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", now.wYear, now.wMonth, now.wDay,
+                                        now.wHour, now.wMinute, now.wSecond, now.wMilliseconds);
+    const std::wstring url = Widen(std::string(sovereign::tray::kWarpRegisterUrl));
+    const std::wstring agent = Widen(std::string(sovereign::tray::kWarpUserAgent));
+    const std::wstring headers = L"Content-Type: application/json; charset=UTF-8\r\nCF-Client-Version: " +
+                                 Widen(std::string(sovereign::tray::kWarpClientVersion));
+    const auto answer = sovereign::tray::HttpsSend(url, agent, L"POST",
+                                                   sovereign::tray::WarpRegisterBody(publicKey, tos), headers, std::size_t{64} * 1024);
+    if (!answer) {
+      return std::unexpected("Cloudflare: " + answer.error());
+    }
+    auto account = sovereign::tray::ParseWarpRegistration(*answer, sovereign::tray::EncodeBase64(bytes(privateKey)));
+    if (!account) {
+      return std::unexpected(std::string("Cloudflare ответил не так, как ждали"));
+    }
+    // Switched on, as the official client does next; a failure here isn't
+    // fatal (a new device works without it too).
+    if (!account->id.empty() && !account->token.empty()) {
+      [[maybe_unused]] const auto enabled = sovereign::tray::HttpsSend(
+          url + L"/" + Widen(account->id), agent, L"PATCH", R"({"warp_enabled":true})",
+          headers + L"\r\nAuthorization: Bearer " + Widen(account->token), std::size_t{64} * 1024);
+    }
+    return std::move(*account);
   }
 
   // Fetches configuration `id`'s subscription into its folder. False, with
@@ -2192,7 +2256,7 @@ std::optional<std::size_t> PickFromMenu(HWND window, POINT at, const std::vector
 
 // A rule's action, as the menus and the page say it (RouteRule::Action's order).
 const std::vector<std::wstring>& RuleActions() {
-  static const std::vector<std::wstring> actions = {L"напрямую", L"через прокси", L"блокировать"};
+  static const std::vector<std::wstring> actions = {L"напрямую", L"через прокси", L"блокировать", L"через WARP"};
   return actions;
 }
 
@@ -2566,6 +2630,11 @@ UiContent ContentFrom(const View& v) {
   c.routing.blockQuic = r.blockQuic;
   c.routing.finalDirect = r.finalDirect;
   c.routing.ipv4Only = r.ipv4Only;
+  c.routing.warp = r.warp;
+  c.routing.warpRegistered = r.warpAccount.has_value();
+  c.routing.warpViaProxy = r.warpViaProxy;
+  c.routing.warpIpv6 = r.warpIpv6;
+  c.routing.warpAddress = r.warpAccount ? Widen(r.warpAccount->address4) : std::wstring();
   c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
                         : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? L"Quad9 (DoH)"
                                                                             : L"Cloudflare (DoH)";
@@ -2808,6 +2877,13 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleBlockQuic: send(What::BlockQuic, !r.blockQuic); break;
     case UiCommand::ToggleFinalDirect: send(What::FinalDirect, !r.finalDirect); break;
     case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
+    case UiCommand::ToggleWarp: send(What::Warp, !r.warp); break;
+    case UiCommand::ToggleWarpIpv6: send(What::WarpIpv6, !r.warpIpv6); break;
+    case UiCommand::ChooseWarpVia:
+      if (const auto picked = PickFromMenu(owner, args.anchor, {L"через прокси", L"напрямую"}, r.warpViaProxy ? 0 : 1)) {
+        send(What::WarpVia, *picked == 0);
+      }
+      break;
     case UiCommand::ChooseRemoteDns:
       if (const auto picked = PickFromMenu(owner, args.anchor, {L"Cloudflare (DoH)", L"Google (DoH)", L"Quad9 (DoH)"},
                                            static_cast<int>(r.remoteDns))) {
@@ -2911,6 +2987,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleBlockQuic:
     case UiCommand::ToggleFinalDirect:
     case UiCommand::ToggleIpv4Only:
+    case UiCommand::ToggleWarp:
+    case UiCommand::ChooseWarpVia:
+    case UiCommand::ToggleWarpIpv6:
     case UiCommand::ChooseRemoteDns:
     case UiCommand::ChooseLocalDns:
     case UiCommand::AddRule:

@@ -27,6 +27,13 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
 std::expected<std::string, std::string> Download(const std::wstring& url, const std::wstring& userAgent,
                                                  std::size_t maxBytes);
 
+// Any request over https with `headers` ("Name: value", CRLF between),
+// same client; the answer's body, an error for anything but a 200.
+// Blocking: call it off the UI thread.
+std::expected<std::string, std::string> HttpsSend(const std::wstring& url, const std::wstring& userAgent,
+                                                  const wchar_t* method, std::string_view body,
+                                                  const std::wstring& headers, std::size_t maxBytes);
+
 // A POST of `body` over https, same client; an error for anything but a 200.
 // Blocking: call it off the UI thread.
 std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body);

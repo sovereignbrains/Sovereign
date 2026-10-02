@@ -1602,16 +1602,49 @@ class Painter {
       const float top = y + 2 * kRow;
       Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSwitchRow - 2}, L"Только IPv4", nullptr,
                             UiCommand::ToggleIpv4Only);
-      v4.checked = r.ipv4Only;
+      v4.checked = r.ipv4Only && !(r.warp && r.warpIpv6);
+      v4.enabled = !(r.warp && r.warpIpv6);  // IPv6 goes through WARP then
       l.items.push_back(std::move(v4));
       HintAfter(l, L"Только IPv4", body_.get(), x0 + 20, x1 - 80, top + kSwitchRow / 2,
                 L"Адреса IPv6 не выдаются программам — их трафик не уйдёт мимо туннеля.");
       y += h + kGap + 4;
     }
 
+    // WARP: a way out of its own - for chosen sites (rules "через WARP") and IPv6.
+    y = Heading(l, L"WARP", x0, x1, y,
+                L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
+                L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nКуда его "
+                L"использовать: правила «через WARP» (сайты, которые не пускают с адресов VPN-серверов) и IPv6, "
+                L"если у сервера его нет.\n\nПоверх прокси — WireGuard идёт к Cloudflare через твой сервер: "
+                L"провайдер его не видит и не может заблокировать.");
+    {
+      std::vector<SwitchRow> rows = {
+          Row(L"WARP", {}, r.warp, UiCommand::ToggleWarp,
+              r.warp ? (r.warpViaProxy ? L"поверх прокси" : L"напрямую") +
+                           (r.warpAddress.empty() ? std::wstring() : L" · " + r.warpAddress)
+                     : std::wstring(r.warpRegistered ? L"выключен" : L"при включении зарегистрирует устройство"))};
+      if (r.warp) {
+        rows.push_back(Row(L"IPv6 через WARP",
+                           L"Сайты по IPv6 открываются через WARP; имена снова получают IPv6-адреса (IPv4 — "
+                           L"первым), «Только IPv4» не действует.",
+                           r.warpIpv6, UiCommand::ToggleWarpIpv6));
+      }
+      y = Switches(l, rows, x0, x1, y);
+      if (r.warp) {
+        Item via = CommandItem(Kind::ValueRow, {x0, y + 8, x1, y + 8 + kRow}, L"Подключение", nullptr,
+                               UiCommand::ChooseWarpVia);
+        via.detail = r.warpViaProxy ? L"поверх прокси" : L"напрямую";
+        l.items.push_back(Make(Kind::Card, via.rect));
+        via.rect = {x0 + 4, via.rect.top + 2, x1 - 4, via.rect.bottom - 2};
+        l.items.push_back(std::move(via));
+        y += 8 + kRow;
+      }
+      y += kGap + 4;
+    }
+
     // The user's rules.
     y = Heading(l, L"Свои правила", x0, x1, y,
-                L"Сайты, IP-подсети или программы (.exe) — напрямую, через прокси или в блок. Работают раньше "
+                L"Сайты, IP-подсети или программы (.exe) — напрямую, через прокси, через WARP или в блок. Работают раньше "
                 L"всех остальных правил. Клик или правый клик по правилу — изменить или удалить.");
     if (r.rules.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 48}));

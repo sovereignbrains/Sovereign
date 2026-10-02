@@ -287,6 +287,56 @@ int TryReal(int argc, char** argv) {
   return failed == 0 ? 0 : 1;
 }
 
+// WARP: its endpoint over the proxy, rules "через WARP" and IPv6 to it, DNS
+// giving IPv6 addresses again; off, none of it - and the rules wait.
+void TestWarp() {
+  RoutingSettings s;
+  s.rules.push_back(*ParseRule("chatgpt.com", RouteRule::Action::Warp));
+  WarpAccount account;
+  account.privateKey = "YJ9Lx3UFbVd6R+1QpYx0K5nV5+OYn5cB4m3Hk4qH0lI=";
+  account.peerKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=";
+  account.address4 = "172.16.0.2";
+  account.address6 = "2606:4700:110:87bf:c0a0:2c80:262b:5924";
+  account.reserved = {0x21, 0xEE, 0x10};
+  s.warpAccount = account;
+
+  // Off: no endpoint, the rule left out.
+  const auto off = CombineConfigs({{"ключи", Keys(), {}}}, OwnFrame(s));
+  const json o = json::parse(ApplyRouting(off.config.value_or("{}"), s, Files()));
+  CHECK(!o.contains("endpoints"));
+  CHECK(o["route"]["rules"].dump().find("chatgpt.com") == std::string::npos);
+  CHECK(o["dns"]["strategy"] == "ipv4_only");
+
+  s.warp = true;
+  s.warpIpv6 = true;
+  const auto on = CombineConfigs({{"ключи", Keys(), {}}}, OwnFrame(s));
+  const std::string text = ApplyRouting(on.config.value_or("{}"), s, Files());
+  Checked().emplace_back("warp", text);
+  const json c = json::parse(text);
+  CHECK(c["endpoints"].size() == 1);
+  if (c["endpoints"].size() == 1) {
+    CHECK(c["endpoints"][0]["type"] == "wireguard" && c["endpoints"][0]["tag"] == "warp" &&
+          c["endpoints"][0]["detour"] == "proxy");
+  }
+  bool rule = false;
+  bool ipv6 = false;
+  for (const json& r : c["route"]["rules"]) {
+    rule = rule || (r.value("outbound", "") == "warp" && r.dump().find("chatgpt.com") != std::string::npos);
+    ipv6 = ipv6 || (r.value("ip_version", 0) == 6 && r.value("outbound", "") == "warp");
+  }
+  CHECK(rule && ipv6);
+  CHECK(c["dns"]["strategy"] == "prefer_ipv4");
+
+  // Directly: no detour.
+  s.warpViaProxy = false;
+  const json d = json::parse(ApplyRouting(on.config.value_or("{}"), s, Files()));
+  CHECK(!d["endpoints"][0].contains("detour"));
+
+  // tray.json keeps it all.
+  const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
+  CHECK(back.warp && back.warpIpv6 && !back.warpViaProxy && back.warpAccount.has_value() &&
+        back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Warp);
+}
 int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see the catch below
   if (argc >= 5 && std::string_view(argv[1]) == "--try") {
     return TryReal(argc, argv);
@@ -305,6 +355,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestImport();
     TestOwn();
     TestProfile();
+    TestWarp();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

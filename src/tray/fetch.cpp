@@ -171,6 +171,19 @@ std::expected<std::string, std::string> Download(const std::wstring& url, const 
   return std::move(response->body);
 }
 
+std::expected<std::string, std::string> HttpsSend(const std::wstring& url, const std::wstring& userAgent,
+                                                  const wchar_t* method, std::string_view body,
+                                                  const std::wstring& headers, std::size_t maxBytes) {
+  auto response = HttpsGet(url, userAgent, maxBytes, {}, "сервер", method, body, headers);
+  if (!response) {
+    return std::unexpected(response.error());
+  }
+  if (response->status != 200) {
+    return std::unexpected(std::format("сервер ответил {}", response->status));
+  }
+  return std::move(response->body);
+}
+
 std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body) {
   auto response = HttpsGet(url, userAgent, std::size_t{1024} * 1024, {}, "сервер", L"POST", body);
   if (!response) {

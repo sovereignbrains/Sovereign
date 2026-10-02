@@ -46,6 +46,10 @@ add_library(sovereign_tray_lib STATIC
   qr_codes.cpp
   qr_codes.h
   flags.h
+  warp.cpp
+  warp.h
+  x25519.cpp
+  x25519.h
 )
 target_include_directories(sovereign_tray_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_lib PUBLIC sovereign_common PRIVATE ZXing::ZXing yaml-cpp::yaml-cpp)

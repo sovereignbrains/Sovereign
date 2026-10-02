@@ -58,11 +58,21 @@ std::vector<std::string> Strings(const Json& value) {
   return out;
 }
 
+// The own frame's DNS strategy: IPv4 only, unless IPv6 goes through WARP -
+// then both, IPv4 first; nothing when IPv6 is simply allowed.
+const char* DnsStrategy(const RoutingSettings& s) {
+  if (WarpReady(s) && s.warpIpv6) {
+    return "prefer_ipv4";
+  }
+  return s.ipv4Only ? "ipv4_only" : nullptr;
+}
+
 const char* ActionName(RouteRule::Action action) {
   switch (action) {
     case RouteRule::Action::Direct: return "direct";
     case RouteRule::Action::Proxy: return "proxy";
     case RouteRule::Action::Block: return "block";
+    case RouteRule::Action::Warp: return "warp";
   }
   return "direct";
 }
@@ -163,7 +173,11 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
                        : s.localDns == RoutingSettings::LocalDns::System ? "system"
                                                                           : "cloudflare"},
           {"ipv4Only", s.ipv4Only},
-          {"rules", std::move(rules)}};
+          {"rules", std::move(rules)},
+          {"warp", s.warp},
+          {"warpViaProxy", s.warpViaProxy},
+          {"warpIpv6", s.warpIpv6},
+          {"warpAccount", s.warpAccount ? WarpToJson(*s.warpAccount) : nlohmann::json()}};
 }
 
 RoutingSettings RoutingFromJson(const nlohmann::json& json) {
@@ -187,6 +201,12 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   flag("blockQuic", s.blockQuic);
   flag("finalDirect", s.finalDirect);
   flag("ipv4Only", s.ipv4Only);
+  flag("warp", s.warp);
+  flag("warpViaProxy", s.warpViaProxy);
+  flag("warpIpv6", s.warpIpv6);
+  if (const auto it = json.find("warpAccount"); it != json.end()) {
+    s.warpAccount = WarpFromJson(*it);
+  }
   const std::string remote = text("remoteDns");
   s.remoteDns = remote == "google"  ? RoutingSettings::RemoteDns::Google
                 : remote == "quad9" ? RoutingSettings::RemoteDns::Quad9
@@ -214,6 +234,7 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
       const std::string action = entry.contains("action") && entry["action"].is_string() ? entry["action"].get<std::string>() : "";
       const auto rule = ParseRule(line, action == "block"   ? RouteRule::Action::Block
                                         : action == "proxy" ? RouteRule::Action::Proxy
+                                        : action == "warp"  ? RouteRule::Action::Warp
                                                             : RouteRule::Action::Direct);
       if (rule) {
         s.rules.push_back(*rule);
@@ -391,8 +412,8 @@ std::string OwnFrame(const RoutingSettings& settings) {
   Json dns = {{"servers", Json::array({Json{{"type", "https"}, {"tag", "remote"}, {"server", remote}, {"detour", "proxy"}},
                                        LocalDnsServer(settings.localDns)})},
               {"final", "remote"}};
-  if (settings.ipv4Only) {
-    dns["strategy"] = "ipv4_only";
+  if (const char* strategy = DnsStrategy(settings)) {
+    dns["strategy"] = strategy;
   }
   Json config = Json::object();
   config["log"] = {{"level", "info"}, {"timestamp", true}};
@@ -431,6 +452,9 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       config[key] = list ? Json::array() : Json::object();
     }
   }
+  if (WarpReady(settings) && (!config.contains("endpoints") || !config["endpoints"].is_array())) {
+    config["endpoints"] = Json::array();
+  }
   Json& outbounds = config["outbounds"];
   Json& dns = config["dns"];
   Json& route = config["route"];
@@ -462,6 +486,19 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     outbounds.push_back(Json{{"type", "direct"}, {"tag", direct}});
   }
   const std::string proxy = MainSelector(config);
+
+  // WARP: its endpoint, over the proxy unless the user said directly.
+  std::string warp;
+  if (WarpReady(settings)) {
+    std::set<std::string> taken = Tags(outbounds);
+    taken.merge(Tags(config["endpoints"]));
+    warp = std::string(kWarpTag);
+    for (int n = 2; taken.contains(warp); ++n) {
+      warp = std::format("{} {}", kWarpTag, n);
+    }
+    config["endpoints"].push_back(
+        WarpEndpoint(*settings.warpAccount, warp, settings.warpViaProxy ? proxy : std::string()));
+  }
 
   // The lists that are there, as local files.
   std::set<std::string> lists;
@@ -523,6 +560,11 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
         continue;
       }
       rule["outbound"] = proxy;
+    } else if (r.action == RouteRule::Action::Warp) {
+      if (warp.empty()) {
+        continue;  // WARP is off: the rule waits
+      }
+      rule["outbound"] = warp;
     } else {
       rule["outbound"] = direct;
     }
@@ -530,6 +572,9 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   }
   if (settings.blockAds && lists.contains(std::string(kAds))) {
     rules.push_back(Json{{"rule_set", kAds}, {"action", "reject"}});
+  }
+  if (!warp.empty() && settings.warpIpv6) {
+    rules.push_back(Json{{"ip_version", 6}, {"outbound", warp}});
   }
   if (settings.russiaDirect) {
     rules.push_back(Json{{"domain_suffix", zones}, {"outbound", direct}});
@@ -592,8 +637,8 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     dns.erase("rules");
   }
   if (settings.source == RoutingSettings::Source::Own) {
-    if (settings.ipv4Only) {
-      dns["strategy"] = "ipv4_only";
+    if (const char* strategy = DnsStrategy(settings)) {
+      dns["strategy"] = strategy;
     } else {
       dns.erase("strategy");
     }

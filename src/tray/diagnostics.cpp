@@ -289,6 +289,7 @@ std::string ClientRuleFor(std::string_view host, const RoutingSettings& routing)
     if (domain || keyword || ip) {
       const char* action = rule.action == RouteRule::Action::Direct  ? "напрямую"
                            : rule.action == RouteRule::Action::Proxy ? "через прокси"
+                           : rule.action == RouteRule::Action::Warp  ? "через WARP"
                                                                      : "блокировать";
       std::string text = RuleText(rule);
       if (text.size() > 40) {
