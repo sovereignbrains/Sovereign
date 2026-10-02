@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 // The country flags sprite (assets/flags/flags.png, resource IDR_FLAGS): 257
 // flags of kFlagWidth x kFlagHeight pixels, kFlagColumns a row, in the order
@@ -38,6 +40,41 @@ inline std::optional<std::size_t> FlagIndex(std::string_view code) {
     }
   }
   return std::nullopt;
+}
+
+// A flag emoji in text - two regional indicators, "🇪🇺" - that the sprite
+// has: Windows' emoji font has no flags and shows the two letters, so the
+// window draws the sprite's flag in its place.
+struct FlagEmoji {
+  std::size_t at = 0;     // where it starts, in UTF-16 code units (it takes 4)
+  std::size_t index = 0;  // its flag in the sprite (FlagIndex)
+};
+
+// The flag emoji in `text`, left to right. An indicator that pairs up into
+// no known flag is skipped alone, so "🇽🇳🇱" finds NL.
+inline std::vector<FlagEmoji> FindFlagEmoji(std::wstring_view text) {
+  // A regional indicator, U+1F1E6..U+1F1FF, is D83C DDE6..DDFF in UTF-16.
+  const auto letter = [&](std::size_t i) -> char {
+    if (i + 1 < text.size() && text[i] == 0xD83C && text[i + 1] >= 0xDDE6 && text[i + 1] <= 0xDDFF) {
+      return static_cast<char>('a' + (text[i + 1] - 0xDDE6));
+    }
+    return 0;
+  };
+  std::vector<FlagEmoji> found;
+  for (std::size_t i = 0; i + 3 < text.size();) {
+    const char first = letter(i);
+    const char second = first != 0 ? letter(i + 2) : 0;
+    const std::array<char, 2> code{first, second};
+    const std::optional<std::size_t> index =
+        second != 0 ? FlagIndex(std::string_view(code.data(), code.size())) : std::nullopt;
+    if (index) {
+      found.push_back({.at = i, .index = *index});
+      i += 4;
+    } else {
+      i += first != 0 ? 2 : 1;
+    }
+  }
+  return found;
 }
 
 }  // namespace sovereign::tray

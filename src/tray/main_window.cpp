@@ -409,6 +409,92 @@ std::wstring UpdateStatus(const UiContent& c) {
   return {};
 }
 
+// A flag emoji in a text layout (flags.h FindFlagEmoji), drawn as the
+// sprite's flag, 4:3, centered on the text's capitals. Kept next to the
+// layout it's in and outliving it, so AddRef and Release count nothing.
+// Without a target - a layout only measured - it takes its room and draws
+// nothing.
+class FlagInline final : public IDWriteInlineObject {
+ public:
+  FlagInline(float fontSize, std::size_t index, ID2D1RenderTarget* target, ID2D1Bitmap* sprite)
+      : fontSize_(fontSize), height_(std::round(fontSize * 0.86f)), index_(index), target_(target), sprite_(sprite) {}
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) noexcept override {
+    if (object == nullptr) {
+      return E_POINTER;
+    }
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(IDWriteInlineObject)) {
+      *object = static_cast<IDWriteInlineObject*>(this);
+      return S_OK;
+    }
+    *object = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() noexcept override { return 1; }
+  ULONG STDMETHODCALLTYPE Release() noexcept override { return 1; }
+
+  HRESULT STDMETHODCALLTYPE Draw(void* /*context*/, IDWriteTextRenderer* /*renderer*/, FLOAT originX, FLOAT originY,
+                                 BOOL /*sideways*/, BOOL /*rightToLeft*/, IUnknown* /*effect*/) noexcept override {
+    if (target_ == nullptr || sprite_ == nullptr) {
+      return S_OK;
+    }
+    const auto n = static_cast<float>(index_);
+    const float column = std::fmod(n, static_cast<float>(kFlagColumns));
+    const float row = std::floor(n / static_cast<float>(kFlagColumns));
+    const D2D1_RECT_F source{column * kFlagWidth, row * kFlagHeight, (column + 1) * kFlagWidth,
+                             (row + 1) * kFlagHeight};
+    const D2D1_RECT_F place{originX + 1, originY, originX + 1 + Width(), originY + height_};
+    target_->DrawBitmap(sprite_, place, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetMetrics(DWRITE_INLINE_OBJECT_METRICS* metrics) noexcept override {
+    // The flag's middle where the capitals' is: about 0.35 em over the baseline.
+    *metrics = {.width = Width() + 3, .height = height_, .baseline = height_ / 2 + fontSize_ * 0.35f,
+                .supportsSideways = FALSE};
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetOverhangMetrics(DWRITE_OVERHANG_METRICS* overhangs) noexcept override {
+    *overhangs = {};
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetBreakConditions(DWRITE_BREAK_CONDITION* before,
+                                               DWRITE_BREAK_CONDITION* after) noexcept override {
+    *before = DWRITE_BREAK_CONDITION_NEUTRAL;
+    *after = DWRITE_BREAK_CONDITION_NEUTRAL;
+    return S_OK;
+  }
+
+ private:
+  float Width() const { return std::round(height_ * 4 / 3); }
+
+  float fontSize_;
+  float height_;
+  std::size_t index_;
+  ID2D1RenderTarget* target_;
+  ID2D1Bitmap* sprite_;
+};
+
+// `text` laid out in `format` with its flag emoji as flags, drawn onto
+// `target` from `sprite` (none: measured only). The flags are kept in
+// `flags`, which must outlive the layout. Null if DirectWrite fails.
+wil::com_ptr<IDWriteTextLayout> MakeTextLayout(IDWriteFactory* dwrite, std::wstring_view text, IDWriteTextFormat* format,
+                                               float width, float height, std::vector<FlagInline>& flags,
+                                               ID2D1RenderTarget* target = nullptr, ID2D1Bitmap* sprite = nullptr) {
+  wil::com_ptr<IDWriteTextLayout> layout;
+  if (FAILED(dwrite->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), format, std::max(width, 0.0f),
+                                      std::max(height, 0.0f), layout.put()))) {
+    return nullptr;
+  }
+  const std::vector<FlagEmoji> found = FindFlagEmoji(text);
+  flags.clear();
+  flags.reserve(found.size());  // no reallocation below: the layout holds their addresses
+  for (const FlagEmoji& flag : found) {
+    flags.emplace_back(format->GetFontSize(), flag.index, target, sprite);
+    layout->SetInlineObject(&flags.back(), {static_cast<UINT32>(flag.at), 4});
+  }
+  return layout;
+}
+
 // Device-independent resources and everything between content and pixels:
 // the layout of a page and its drawing onto any Direct2D target - a window's
 // or, for snapshots, a WIC bitmap's.
@@ -494,7 +580,7 @@ class Painter {
     if (FAILED(t->CreateSolidColorBrush(Rgb(0, 0, 0), brush.put()))) {
       return;
     }
-    Canvas k{t, brush.get()};
+    Canvas k{t, brush.get(), dwrite_.get(), Flags(t)};
     const D2D1_SIZE_F size = t->GetSize();
     t->Clear(FromColorRef(ui::kWindowColor));
 
@@ -548,6 +634,8 @@ class Painter {
   struct Canvas {
     ID2D1RenderTarget* t;
     ID2D1SolidColorBrush* b;
+    IDWriteFactory* dwrite;  // for text with flags in it
+    ID2D1Bitmap* sprite;     // the flags (flags.h); null if it couldn't be had
 
     ID2D1Brush* Color(D2D1_COLOR_F c) const { return SetColor(b, c); }
     void Fill(D2D1_RECT_F r, D2D1_COLOR_F c) const { t->FillRectangle(r, Color(c)); }
@@ -561,8 +649,16 @@ class Painter {
       t->DrawLine(a, z, Color(c), width);
     }
     void Text(std::wstring_view s, IDWriteTextFormat* f, D2D1_RECT_F r, D2D1_COLOR_F c) const {
-      if (!s.empty()) {
+      if (s.empty()) {
+        return;
+      }
+      if (sprite == nullptr || FindFlagEmoji(s).empty()) {
         t->DrawText(s.data(), static_cast<UINT32>(s.size()), f, r, Color(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        return;
+      }
+      std::vector<FlagInline> flags;
+      if (const auto layout = MakeTextLayout(dwrite, s, f, r.right - r.left, r.bottom - r.top, flags, t, sprite)) {
+        t->DrawTextLayout({r.left, r.top}, layout.get(), Color(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
       }
     }
   };
@@ -656,14 +752,21 @@ class Painter {
 
   // The height `text` takes wrapped to `width` in `format`.
   float TextHeight(std::wstring_view text, IDWriteTextFormat* format, float width) const {
-    wil::com_ptr<IDWriteTextLayout> layout;
+    const auto metrics = Metrics(text, format, width, 10000);
+    return metrics ? std::ceil(metrics->height) : 20;
+  }
+
+  // What `text` takes in `format` within width x height, laid out as
+  // Canvas::Text lays it out - flags and all. Nullopt if DirectWrite fails.
+  std::optional<DWRITE_TEXT_METRICS> Metrics(std::wstring_view text, IDWriteTextFormat* format, float width,
+                                             float height) const {
+    std::vector<FlagInline> flags;
+    const auto layout = MakeTextLayout(dwrite_.get(), text, format, width, height, flags);
     DWRITE_TEXT_METRICS metrics{};
-    if (FAILED(dwrite_->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), format, width, 10000,
-                                         layout.put())) ||
-        FAILED(layout->GetMetrics(&metrics))) {
-      return 20;
+    if (!layout || FAILED(layout->GetMetrics(&metrics))) {
+      return std::nullopt;
     }
-    return std::ceil(metrics.height);
+    return metrics;
   }
 
   /* ---- layout ---- */
@@ -1518,13 +1621,8 @@ class Painter {
         // The name centered, the chevron right after it.
         const D2D1_COLOR_F ink = it.enabled ? primary : secondary;
         float textWidth = r.right - r.left - 48;
-        wil::com_ptr<IDWriteTextLayout> layout;
-        if (SUCCEEDED(dwrite_->CreateTextLayout(it.text.data(), static_cast<UINT32>(it.text.size()), center_.get(),
-                                                textWidth, r.bottom - r.top, layout.put()))) {
-          DWRITE_TEXT_METRICS m{};
-          if (SUCCEEDED(layout->GetMetrics(&m))) {
-            textWidth = std::min(textWidth, m.width);
-          }
+        if (const auto m = Metrics(it.text, center_.get(), textWidth, r.bottom - r.top)) {
+          textWidth = std::min(textWidth, m->width);
         }
         const float left = (r.left + r.right - textWidth - (it.enabled ? 22.0f : 0.0f)) / 2;
         k.Text(it.text, center_.get(), {left - 2, r.top, left + textWidth + 2, r.bottom}, ink);
@@ -1536,13 +1634,8 @@ class Painter {
       case Kind::ExitLine: {
         // The flag and the text, centered together.
         float textWidth = r.right - r.left - kFlagW - 8;
-        wil::com_ptr<IDWriteTextLayout> layout;
-        if (SUCCEEDED(dwrite_->CreateTextLayout(it.text.data(), static_cast<UINT32>(it.text.size()), caption_.get(),
-                                                textWidth, r.bottom - r.top, layout.put()))) {
-          DWRITE_TEXT_METRICS m{};
-          if (SUCCEEDED(layout->GetMetrics(&m))) {
-            textWidth = std::min(textWidth, m.width);
-          }
+        if (const auto m = Metrics(it.text, caption_.get(), textWidth, r.bottom - r.top)) {
+          textWidth = std::min(textWidth, m->width);
         }
         const std::optional<std::size_t> flag = FlagIndex(std::wstring_view(it.detail).size() == 2
                                                               ? std::string{static_cast<char>(it.detail[0]),
@@ -1777,14 +1870,9 @@ class Painter {
       k.Outline(r, 6, Rgb(255, 255, 255, 0.07f));
     }
     // Glyph and text centered together.
-    wil::com_ptr<IDWriteTextLayout> layout;
     float textWidth = 0;
-    if (SUCCEEDED(dwrite_->CreateTextLayout(it.text.data(), static_cast<UINT32>(it.text.size()), button_.get(),
-                                            r.right - r.left, r.bottom - r.top, layout.put()))) {
-      DWRITE_TEXT_METRICS m{};
-      if (SUCCEEDED(layout->GetMetrics(&m))) {
-        textWidth = m.width;
-      }
+    if (const auto m = Metrics(it.text, button_.get(), r.right - r.left, r.bottom - r.top)) {
+      textWidth = m->width;
     }
     const float glyphWidth = it.glyph.empty() ? 0.0f : 26.0f;
     const float left = (r.left + r.right - textWidth - glyphWidth) / 2;

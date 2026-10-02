@@ -52,7 +52,7 @@ UiContent SampleContent() {
   keys.id = "p2";
   keys.name = L"NL-1 и ещё 2";
   keys.detail = L"свой конфиг · серверов: 3";
-  keys.servers = {UiServer{L"NL-1", L"Trojan · WS", true}, UiServer{L"DE-2", L"Hysteria2", true},
+  keys.servers = {UiServer{L"NL-1", L"Trojan · WS", true}, UiServer{L"\U0001F1E9\U0001F1EA DE-2", L"Hysteria2", true},
                   UiServer{L"WARP", L"WireGuard", true}};
   sovereign::tray::UiProfile off;
   off.id = "p3";
@@ -66,13 +66,15 @@ UiContent SampleContent() {
   // One exe that is there on any Windows: its real icon; the rest aren't known.
   c.appPaths = {L"", L"", L"", L"C:\\Windows\\System32\\notepad.exe"};
   c.protocols = {L"auto", L"AnyTLS · Нидерланды", L"AnyTLS · Финляндия", L"REALITY · Германия", L"REALITY · Польша"};
+  // A flag emoji, as subscriptions name servers: drawn from the flags sprite.
+  c.protocols.emplace_back(L"\U0001F1EA\U0001F1FA 4G | Whitelist №1");
   c.protocol = 0;
   c.autoOption = 0;
   c.autoServer = L"AnyTLS · Нидерланды";
   using State = sovereign::tray::UiDelay::State;
   const sovereign::tray::UiDelay nl{.state = State::Ok, .ms = 48, .jitter = 3, .samples = 7, .connect = 212};
   c.delays = {nl, nl, {.state = State::Ok, .ms = 310, .jitter = 41, .loss = 13, .samples = 13, .connect = 940},
-              {.state = State::Failed, .error = L"i/o timeout"}, {.state = State::Pending}};
+              {.state = State::Failed, .error = L"i/o timeout"}, {.state = State::Pending}, nl};
   c.canTestDelays = true;
   c.exitIp = L"185.12.34.56";
   c.exitCountry = L"NL";

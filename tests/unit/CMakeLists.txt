@@ -112,6 +112,11 @@ target_link_libraries(unit-diagnostics PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-diagnostics)
 add_test(NAME unit-diagnostics COMMAND unit-diagnostics)
 
+add_executable(unit-flags flags_test.cpp check.h)
+target_link_libraries(unit-flags PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-flags)
+add_test(NAME unit-flags COMMAND unit-flags)
+
 add_executable(unit-profiles profiles_test.cpp check.h)
 target_link_libraries(unit-profiles PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-profiles)
