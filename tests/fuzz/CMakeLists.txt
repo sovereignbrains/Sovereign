@@ -55,6 +55,7 @@ sovereign_fuzz_target(fuzz-tray-input tray_input_fuzz.cpp
   "${CMAKE_SOURCE_DIR}/src/tray/import_formats.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/combine.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/routing.cpp"
+  "${CMAKE_SOURCE_DIR}/src/tray/warp.cpp"
   "${CMAKE_SOURCE_DIR}/src/tray/diagnostics.cpp")
 target_include_directories(fuzz-tray-input PRIVATE "${CMAKE_SOURCE_DIR}/src/tray")
 target_link_libraries(fuzz-tray-input PRIVATE yaml-cpp::yaml-cpp)
