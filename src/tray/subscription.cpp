@@ -40,14 +40,14 @@ std::wstring UrlHost(std::wstring_view url) {
 
 ConfigCheck CheckSubscriptionConfig(std::string_view body) {
   if (body.size() > kMaxSubscriptionBytes) {
-    return {.error = "ответ больше 4 МБ - это не конфиг"};
+    return {.error = "ответ больше 4 МБ — это не конфиг"};
   }
   const auto json = nlohmann::json::parse(body, nullptr, /*allow_exceptions=*/false);
   if (json.is_discarded()) {
     return {.error = "ответ не JSON (ссылка отдаёт не конфиг sing-box?)"};
   }
   if (!json.is_object()) {
-    return {.error = "ответ - не объект конфига sing-box"};
+    return {.error = "ответ — не объект конфига sing-box"};
   }
   const auto outbounds = json.find("outbounds");
   if (outbounds == json.end() || !outbounds->is_array() || outbounds->empty()) {

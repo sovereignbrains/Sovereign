@@ -212,7 +212,7 @@ CheckResult JudgeDnsLeak(const std::vector<DnsResolverSeen>& resolvers) {
   if (resolvers.empty()) {
     result.status = CheckResult::Status::Warn;
     result.summary = "DNS-серверы не увиделись";
-    result.detail = "Тестовые имена не дошли до сервиса проверки - попробуй ещё раз позже.";
+    result.detail = "Тестовые имена не дошли до сервиса проверки — попробуй ещё раз позже.";
     return result;
   }
   std::vector<std::string> names;
@@ -235,10 +235,10 @@ CheckResult JudgeDnsLeak(const std::vector<DnsResolverSeen>& resolvers) {
   result.summary = list;
   if (russian) {
     result.status = CheckResult::Status::Fail;
-    result.detail = "Зарубежные имена спрашивает DNS-сервер в России - скорее всего, провайдера: он видит, куда ты ходишь.";
+    result.detail = "Зарубежные имена спрашивает DNS-сервер в России — скорее всего, провайдера: он видит, куда ты ходишь.";
   } else {
     result.status = CheckResult::Status::Ok;
-    result.detail = "Зарубежные имена спрашиваются через прокси - провайдер их не видит.";
+    result.detail = "Зарубежные имена спрашиваются через прокси — провайдер их не видит.";
   }
   return result;
 }

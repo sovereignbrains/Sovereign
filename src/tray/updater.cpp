@@ -208,7 +208,7 @@ void Updater::DoInstall() {
     matches = false;
   }
   if (!matches) {
-    return fail("установщик не совпал с контрольной суммой - не запускаю");
+    return fail("установщик не совпал с контрольной суммой — не запускаю");
   }
   const std::wstring path = TempPath(name);
   if (path.empty() || !WriteFileAll(path, *installer)) {

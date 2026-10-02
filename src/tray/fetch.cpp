@@ -139,7 +139,7 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
   }
   if (response->status != 200) {
     return std::unexpected(response->status == 404
-                               ? std::string("сервер не знает такую подписку (404) - ссылку сменили?")
+                               ? std::string("сервер не знает такую подписку (404) — ссылку сменили?")
                                : std::format("сервер ответил {}", response->status));
   }
   FetchResult result;

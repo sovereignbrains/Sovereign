@@ -429,7 +429,7 @@ std::string StartBox(const std::optional<std::string>& config) {
   if (sovereign::tray::ConfigHasTun(*config)) {
     if (const auto other = ForeignSingTun()) {
       return "уже работает другой клиент sing-box с TUN (адаптер " + Narrow(*other) +
-             ") - выключи его, Sovereign подключится сам";
+             ") — выключи его, Sovereign подключится сам";
     }
   }
   nlohmann::json request;
@@ -690,7 +690,7 @@ class Worker {
     if (routing.source == RoutingSettings::Source::Profile) {
       if (source == std::string::npos) {
         routing.source = RoutingSettings::Source::Own;
-        notes.emplace_back("маршруты выбранной конфигурации недоступны (выключена или удалена) - работают свои");
+        notes.emplace_back("маршруты выбранной конфигурации недоступны (выключена или удалена) — работают свои");
       } else {
         std::rotate(parts.begin(), parts.begin() + static_cast<std::ptrdiff_t>(source),
                     parts.begin() + static_cast<std::ptrdiff_t>(source) + 1);
@@ -734,7 +734,7 @@ class Worker {
             rulesError_.clear();
             rulesUpdated_ = std::time(nullptr);
           } else {
-            rulesError_ = got ? std::string("ответ - не список правил") : got.error();
+            rulesError_ = got ? std::string("ответ — не список правил") : got.error();
           }
         } else if (!age || *age >= std::chrono::hours(24)) {
           pending = true;
@@ -1223,7 +1223,7 @@ class Worker {
           }
           const auto merged = sovereign::tray::MergeConfigs(*original, *config, *waiting);
           if (!merged) {
-            state.choiceError = "не получилось: config.json или подписка - не JSON-объект";
+            state.choiceError = "не получилось: config.json или подписка — не JSON-объект";
             break;
           }
           const auto check = sovereign::tray::CheckSubscriptionConfig(merged->config);
@@ -2635,7 +2635,7 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::CopyProfileLink:
       if (!profile.url.empty() && CopyText(owner, Widen(profile.url)) && g_trayIcon != nullptr) {
         g_trayIcon->Balloon(L"Sovereign: ссылка скопирована",
-                            L"В ней твой ключ доступа - отдавай только своим устройствам.", NIIF_INFO);
+                            L"В ней твой ключ доступа — отдавай только своим устройствам.", NIIF_INFO);
       }
       break;
     case UiCommand::RemoveProfile: {
@@ -2941,7 +2941,7 @@ void OnUpdateChanged(HWND trayWindow) {
   if (update.status == Status::Available && update.latest != g_announcedUpdate && g_trayIcon != nullptr) {
     g_announcedUpdate = update.latest;
     g_trayIcon->Balloon(L"Sovereign: доступна версия " + Widen(update.latest),
-                        L"Нажми, чтобы обновить - установщик скачается с GitHub.", NIIF_INFO);
+                        L"Нажми, чтобы обновить — установщик скачается с GitHub.", NIIF_INFO);
     g_balloonPage = UiPage::Settings;
   }
   if (update.status == Status::Ready && !g_installerLaunched) {

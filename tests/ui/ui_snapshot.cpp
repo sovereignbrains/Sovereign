@@ -128,16 +128,16 @@ int Snapshots(const std::wstring& dir) {
   checked.checks = {
       {L"Выход через прокси", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok},
       {L"Российское напрямую", L"46.148.140.142", L"Российские сайты видят твой адрес, не адрес сервера.", Check::Status::Ok},
-      {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через прокси - провайдер их не видит.",
+      {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через прокси — провайдер их не видит.",
        Check::Status::Ok},
       {L"WebRTC / UDP", L"UDP не проходит",
        L"STUN не ответил: звонки в браузере и игры через UDP могут не работать (утечки при этом нет).", Check::Status::Warn},
-      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо прокси - сайты могут увидеть твой адрес.", Check::Status::Fail},
+      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо прокси — сайты могут увидеть твой адрес.", Check::Status::Fail},
       {L"Локальная сеть", L"проверяю...", L"", Check::Status::Running},
       {L"Задержка DNS", L"", L"", Check::Status::NotRun},
       {L"Скорость интернета", L"↓ 151 · ↑ 98 Мбит/с · 84 мс", L"Через прокси, до ближайшего узла Cloudflare.",
        Check::Status::Ok},
-      {L"Куда пойдёт адрес", L"vk.com -> напрямую", L"Ни одно из твоих правил не подошло - решили списки.",
+      {L"Куда пойдёт адрес", L"vk.com -> напрямую", L"Ни одно из твоих правил не подошло — решили списки.",
        Check::Status::Ok}};
   checked.checksRunning = true;
   sovereign::tray::RenderMainWindowSnapshot(checked, UiPage::Checks, logs, 400, 1300, 96, dir + L"\\checks.png");
@@ -151,7 +151,7 @@ int Snapshots(const std::wstring& dir) {
   sovereign::tray::RenderMainWindowSnapshot(empty, UiPage::Overview, {}, 400, 620, 96, dir + L"\\overview-empty.png");
   UiContent failed = content;
   failed.display = sovereign::tray::Display::Error;
-  failed.error = L"уже работает другой клиент sing-box с TUN (адаптер sing-tun) - выключи его, Sovereign подключится сам";
+  failed.error = L"уже работает другой клиент sing-box с TUN (адаптер sing-tun) — выключи его, Sovereign подключится сам";
   failed.profiles[0].failed = true;
   failed.profiles[0].error = L"сервер ответил 403";
   sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 400, 620, 96, dir + L"\\overview-error.png");
