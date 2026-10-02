@@ -70,8 +70,6 @@ constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
 constexpr float kPower = 104;      // the on/off button's diameter
 constexpr float kNav = 62;         // the overview's navigation under the page
-constexpr float kFlagW = 20;       // a flag in the bar, 4:3
-constexpr float kFlagH = 15;
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
@@ -160,7 +158,6 @@ enum class Kind : std::uint8_t {
   NavItem,       // a page in the overview's navigation: glyph, word; `checked`: a dot; detail: its tip
   NavBar,        // the navigation's panel
   ServerCard,    // the server in use: flag and name, its network and latency; opens the servers
-  ExitLine,      // the bar's exit: the country's flag (detail: its code) and the address or the country
   Banner,        // a one-line call to action in the accent color
   Button,        // a normal button
   AccentButton,  // the page's main action
@@ -677,9 +674,9 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 32> kNames = {
+    static constexpr std::array<const wchar_t*, 31> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
-        L"Error",    L"Field",    L"Power",    L"Nav",      L"NavBar",   L"Server", L"Exit",   L"Banner",
+        L"Error",    L"Field",    L"Power",    L"Nav",      L"NavBar",   L"Server", L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
         L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Stat",   L"Value"};
     std::wstring out;
@@ -1009,8 +1006,8 @@ class Painter {
 
   // The one screen for every day, top to bottom: the state, what waits for a
   // click (an update, a subscription), the switch, the server it runs on and
-  // where it comes out, the traffic, the kill switch. The rest of the window
-  // is a tap away in the navigation under it (Nav).
+  // where it comes out, the traffic. The rest of the window - the kill switch
+  // too, in the settings - is a tap away in the navigation under it (Nav).
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
     const float cx = (x0 + x1) / 2;
 
@@ -1072,25 +1069,7 @@ class Painter {
     // The server it runs on: where it really is, its network, its latency.
     y = ServerCard(l, c, x0, x1, y);
 
-    // Where the traffic comes out: the flag, the address or (hidden with a
-    // click) the country.
-    if (!c.exitIp.empty() || c.exitPending) {
-      std::wstring text;
-      if (c.exitIp.empty()) {
-        text = L"определяю выходной IP…";
-      } else if (c.hideExitIp) {
-        text = c.exitCountryName.empty() ? std::wstring(L"IP скрыт") : c.exitCountryName;
-      } else {
-        text = c.exitCountryName.empty() ? c.exitIp : c.exitIp + L" · " + c.exitCountryName;
-      }
-      Item exit = CommandItem(Kind::ExitLine, {cx - 160, y + 4, cx + 160, y + 28}, std::move(text), nullptr,
-                              UiCommand::ToggleExitIp);
-      exit.detail = c.exitCountry;
-      exit.enabled = !c.exitIp.empty();
-      l.items.push_back(std::move(exit));
-      y += 32;
-    }
-    y += kGap - 4;
+    y += kGap;
 
     // The traffic, while it flows.
     if (on) {
@@ -1115,13 +1094,15 @@ class Painter {
       y += h + kGap;
     }
 
-    // The kill switch: on the overview, it's what decides what a drop does.
-    y = KillSwitchCard(l, c, x0, x1, y);
+    y -= kGap;
+    if (!c.killSwitchError.empty()) {
+      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y + kGap);
+    }
 
     // Room to spare in a tall window: the switch and what's under it move
-    // down into it, half of it at most a little - not stuck to the top.
+    // down into it, half of it - to the middle, not stuck to the top.
     if (const float spare = bottom - y; spare > 8) {
-      const float shift = std::min(spare / 2, 56.0f);
+      const float shift = std::min(spare / 2, 110.0f);
       for (std::size_t i = hero; i < l.items.size(); ++i) {
         l.items[i].rect.top += shift;
         l.items[i].rect.bottom += shift;
@@ -1172,6 +1153,14 @@ class Painter {
     if (isAuto) {
       parts.emplace_back(c.autoServer.empty() ? L"авто: выберет после замера" : L"авто");
     }
+    // Where the traffic comes out - unless hidden (the right-click menu).
+    if (c.display == Display::On && !c.hideExitIp) {
+      if (!c.exitIp.empty()) {
+        parts.push_back(c.exitIp);
+      } else if (c.exitPending) {
+        parts.emplace_back(L"определяю IP…");
+      }
+    }
     if (location != nullptr && !location->isp.empty()) {
       parts.push_back(location->isp);
     }
@@ -1188,26 +1177,6 @@ class Painter {
     card.detail = detail.empty() ? std::wstring(L"нажми, чтобы выбрать сервер") : std::move(detail);
     l.items.push_back(std::move(card));
     return y + h;
-  }
-
-  float KillSwitchCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
-    Item kill = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 60}, L"Kill switch", nullptr,
-                            UiCommand::ToggleKillSwitch);
-    kill.checked = c.killSwitch;
-    if (!c.killSwitch) {
-      kill.detail = L"при обрыве трафик пойдёт напрямую";
-    } else if (c.killSwitchActive && c.display != Display::On && c.display != Display::Off) {
-      kill.detail = L"интернет закрыт до восстановления";
-    } else {
-      kill.detail = L"при обрыве трафик не пойдёт мимо прокси";
-    }
-    l.items.push_back(std::move(kill));
-    y += 64;
-    if (!c.killSwitchError.empty()) {
-      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y + 8);
-    }
-    return y;
   }
 
   // The overview's navigation, fixed under the page: an icon and a word a
@@ -1963,38 +1932,6 @@ class Painter {
         k.Text(kGlyphChevron, glyph_.get(), {r.right - 28, r.top, r.right - 8, r.bottom}, secondary);
         break;
       }
-      case Kind::ExitLine: {
-        // The flag and the text, centered together.
-        float textWidth = r.right - r.left - kFlagW - 8;
-        if (const auto m = Metrics(it.text, caption_.get(), textWidth, r.bottom - r.top)) {
-          textWidth = std::min(textWidth, m->width);
-        }
-        const std::optional<std::size_t> flag = FlagIndex(std::wstring_view(it.detail).size() == 2
-                                                              ? std::string{static_cast<char>(it.detail[0]),
-                                                                            static_cast<char>(it.detail[1])}
-                                                              : std::string());
-        ID2D1Bitmap* sprite = flag ? Flags(k.t) : nullptr;
-        const float flagWidth = sprite != nullptr ? kFlagW + 8 : 0.0f;
-        const float left = (r.left + r.right - textWidth - flagWidth) / 2;
-        if (hovered && it.enabled) {
-          k.Round({left - 8, r.top + 1, left + flagWidth + textWidth + 8, r.bottom - 1}, 6,
-                  Rgb(255, 255, 255, pressed ? 0.04f : 0.07f));
-        }
-        if (sprite != nullptr) {
-          const auto n = static_cast<float>(*flag);
-          const float column = std::fmod(n, static_cast<float>(kFlagColumns));
-          const float row = std::floor(n / static_cast<float>(kFlagColumns));
-          const D2D1_RECT_F source{column * kFlagWidth, row * kFlagHeight, (column + 1) * kFlagWidth,
-                                   (row + 1) * kFlagHeight};
-          const float cy = (r.top + r.bottom) / 2;
-          const D2D1_RECT_F place{left, cy - kFlagH / 2, left + kFlagW, cy + kFlagH / 2};
-          k.t->DrawBitmap(sprite, place, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
-          k.Outline(place, 1.5f, Rgb(255, 255, 255, 0.12f));
-        }
-        k.Text(it.text, caption_.get(), {left + flagWidth, r.top, left + flagWidth + textWidth + 2, r.bottom},
-               it.enabled ? secondary : FromColorRef(ui::kSecondaryText, 0.7f));
-        break;
-      }
       case Kind::Banner: {
         k.Round(r, kRadius, FromColorRef(ui::kAccent, pressed ? 0.10f : (hovered ? 0.18f : 0.13f)));
         const D2D1_COLOR_F ink = it.enabled ? accent : secondary;
@@ -2564,8 +2501,8 @@ struct MainWindow::Impl {
     for (std::size_t i = layout.items.size(); i-- > 0;) {
       const Item& it = layout.items[i];
       const bool rowKind = it.kind == Kind::Choice || it.kind == Kind::ProfileRow || it.kind == Kind::CheckRow ||
-                           it.kind == Kind::Switch || it.kind == Kind::AppRow || it.kind == Kind::ExitLine ||
-                           it.kind == Kind::Field;
+                           it.kind == Kind::Switch || it.kind == Kind::AppRow ||
+                           it.kind == Kind::Field || it.kind == Kind::ServerCard;
       if (rowKind && Contains(it.rect, x, y) && (!it.scrolls || (y >= layout.viewTop && y < layout.viewBottom))) {
         found = &it;
         break;
@@ -2650,8 +2587,13 @@ struct MainWindow::Impl {
         add(kMenuRemove, L"Убрать из списка");
         add(kMenuCopyName, L"Копировать имя");
         break;
-      case Kind::ExitLine:
-        add(kMenuCopyIp, L"Копировать IP", !content.exitIp.empty());
+      case Kind::ServerCard:
+        add(kMenuOpen, L"Выбрать сервер…", item.enabled);
+        add(kMenuTestDelays, L"Проверить задержку", content.canTestDelays && !content.delaysTesting);
+        separator();
+        add(kMenuCopyIp, content.exitIp.empty() ? std::wstring(L"Копировать IP выхода")
+                                                : L"Копировать IP выхода: " + content.exitIp,
+            !content.exitIp.empty());
         add(kMenuToggleExitIp, content.hideExitIp ? L"Показывать IP" : L"Скрыть IP");
         ip = content.exitIp;
         break;
@@ -2669,7 +2611,9 @@ struct MainWindow::Impl {
       case kMenuCopyIp: CopyToClipboard(hwnd, ip); break;
       case kMenuCopyValue: CopyToClipboard(hwnd, item.detail); break;
       case kMenuOpen:
-        if (profile != nullptr) {
+        if (item.kind == Kind::ServerCard) {
+          Go(UiPage::Servers);
+        } else if (profile != nullptr) {
           openProfile = profile->id;
           Go(UiPage::Profile);
         }
