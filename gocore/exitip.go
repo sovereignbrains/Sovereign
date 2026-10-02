@@ -177,7 +177,13 @@ func lookupExitIP(ctx context.Context, outbound adapter.Outbound) exitIPState {
 	var found exitIPState
 	var failure string
 	for _, source := range exitIPSources {
+		// Twice: QUIC-based servers (Hysteria2, TUIC) drop about every other
+		// new stream at once with EOF (seen 02.10.2026 on the user's own);
+		// the next one goes through.
 		body, err := fetchExitIP(ctx, &client, source.url)
+		if err != nil && ctx.Err() == nil {
+			body, err = fetchExitIP(ctx, &client, source.url)
+		}
 		if err == nil {
 			state := source.parse(body)
 			switch {
