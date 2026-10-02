@@ -69,4 +69,9 @@ class MainWindow {
 void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::vector<std::wstring>& logs,
                               UINT width, UINT height, float dpi, const std::wstring& pngPath);
 
+// page's layout in a client area of width x height DIPs as text, an item
+// a line, marked where text needs more room than it has or clickable items
+// overlap - for tests/ui's layout check.
+std::wstring DescribeMainWindowLayout(const UiContent& content, UiPage page, float width, float height);
+
 }  // namespace sovereign::tray

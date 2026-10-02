@@ -14,10 +14,14 @@
 #include <wil/resource.h>
 #include <wil/result.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <exception>
+#include <fstream>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "main_window.h"
@@ -69,7 +73,7 @@ UiContent SampleContent() {
   // A flag emoji, as subscriptions name servers: drawn from the flags sprite.
   c.protocols.emplace_back(L"\U0001F1EA\U0001F1FA 4G | Whitelist №1");
   // Where they are, looked up: the EU-flagged one is in Estonia.
-  c.locations = {{}, {.country = L"DE", .isp = L"Hetzner Online"}, {}, {}, {}, {.country = L"EE", .isp = L"Brainoza"}};
+  c.locations = {{}, {.country = L"DE", .isp = L"Hetzner Online", .ip = L"5.9.1.2"}, {}, {}, {}, {.country = L"EE", .isp = L"Brainoza", .ip = L"5.181.201.59"}};
   c.protocol = 0;
   c.autoOption = 0;
   c.autoServer = L"AnyTLS · Нидерланды";
@@ -100,6 +104,25 @@ std::vector<std::wstring> SampleLogs() {
   };
 }
 
+// The checks: run, one warning, one failing, one running, speed and an address.
+std::vector<sovereign::tray::UiCheck> SampleChecks() {
+  using Check = sovereign::tray::UiCheck;
+  return {
+      {L"Выход через прокси", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok, L"Что проверяет и как."},
+      {L"Российское напрямую", L"46.148.140.142", L"Российские сайты видят твой адрес, не адрес сервера.", Check::Status::Ok, L"Что проверяет и как."},
+      {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через прокси — провайдер их не видит.",
+       Check::Status::Ok, L"Что проверяет и как."},
+      {L"WebRTC / UDP", L"UDP не проходит",
+       L"STUN не ответил: звонки в браузере и игры через UDP могут не работать (утечки при этом нет).", Check::Status::Warn, L"Что проверяет и как."},
+      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо прокси — сайты могут увидеть твой адрес.", Check::Status::Fail, L"Что проверяет и как."},
+      {L"Локальная сеть", L"проверяю...", L"", Check::Status::Running, L"Что проверяет и как."},
+      {L"Задержка DNS", L"", L"", Check::Status::NotRun, L"Что проверяет и как."},
+      {L"Скорость интернета", L"↓ 151 · ↑ 98 Мбит/с · 84 мс", L"Через прокси, до ближайшего узла Cloudflare.",
+       Check::Status::Ok, L"Что проверяет и как."},
+      {L"Куда пойдёт адрес", L"vk.com -> напрямую", L"Ни одно из твоих правил не подошло — решили списки.",
+       Check::Status::Ok, L"Что проверяет и как."}};
+}
+
 int Snapshots(const std::wstring& dir) {
   const UiContent content = SampleContent();
   const std::vector<std::wstring> logs = SampleLogs();
@@ -128,21 +151,7 @@ int Snapshots(const std::wstring& dir) {
                                             dir + L"\\routing-subscription.png");
   // The checks: run, one warning, one failing, one running, speed and an address.
   UiContent checked = content;
-  using Check = sovereign::tray::UiCheck;
-  checked.checks = {
-      {L"Выход через прокси", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok},
-      {L"Российское напрямую", L"46.148.140.142", L"Российские сайты видят твой адрес, не адрес сервера.", Check::Status::Ok},
-      {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через прокси — провайдер их не видит.",
-       Check::Status::Ok},
-      {L"WebRTC / UDP", L"UDP не проходит",
-       L"STUN не ответил: звонки в браузере и игры через UDP могут не работать (утечки при этом нет).", Check::Status::Warn},
-      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо прокси — сайты могут увидеть твой адрес.", Check::Status::Fail},
-      {L"Локальная сеть", L"проверяю...", L"", Check::Status::Running},
-      {L"Задержка DNS", L"", L"", Check::Status::NotRun},
-      {L"Скорость интернета", L"↓ 151 · ↑ 98 Мбит/с · 84 мс", L"Через прокси, до ближайшего узла Cloudflare.",
-       Check::Status::Ok},
-      {L"Куда пойдёт адрес", L"vk.com -> напрямую", L"Ни одно из твоих правил не подошло — решили списки.",
-       Check::Status::Ok}};
+  checked.checks = SampleChecks();
   checked.checksRunning = true;
   sovereign::tray::RenderMainWindowSnapshot(checked, UiPage::Checks, logs, 400, 1300, 96, dir + L"\\checks.png");
   // A configuration's page: the first one's.
@@ -299,6 +308,57 @@ int EditTest(HINSTANCE instance) {
   return failures == 0 ? 0 : 1;
 }
 
+// Every page laid out with the sample content at the default width and the
+// narrowest, written as text into `dir` (DescribeMainWindowLayout): fails
+// on clickable items that overlap or anything past the window's edge, and
+// counts the lines whose text is cut.
+int LayoutTest(const std::wstring& dir) {
+  UiContent content = SampleContent();
+  content.checks = SampleChecks();
+  UiContent routed = content;
+  routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"}};
+  const std::array<std::pair<UiPage, const wchar_t*>, 9> pages = {{{UiPage::Overview, L"overview"},
+                                                                   {UiPage::Servers, L"servers"},
+                                                                   {UiPage::Subscription, L"subscription"},
+                                                                   {UiPage::Apps, L"apps"},
+                                                                   {UiPage::Logs, L"logs"},
+                                                                   {UiPage::Settings, L"settings"},
+                                                                   {UiPage::Profile, L"profile"},
+                                                                   {UiPage::Routing, L"routing"},
+                                                                   {UiPage::Checks, L"checks"}}};
+  CreateDirectoryW(dir.c_str(), nullptr);
+  int failures = 0;
+  int cut = 0;
+  for (const float width : {420.0f, 360.0f}) {
+    for (const auto& [page, name] : pages) {
+      const std::wstring text =
+          sovereign::tray::DescribeMainWindowLayout(page == UiPage::Routing ? routed : content, page, width, 660);
+      std::string utf8(static_cast<std::size_t>(WideCharToMultiByte(CP_UTF8, 0, text.data(),
+                                                                    static_cast<int>(text.size()), nullptr, 0,
+                                                                    nullptr, nullptr)),
+                       '\0');
+      WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), utf8.data(),
+                          static_cast<int>(utf8.size()), nullptr, nullptr);
+      std::ofstream(dir + L"\\" + name + L"-" + std::to_wstring(static_cast<int>(width)) + L".txt",
+                    std::ios::binary)
+          << utf8;
+      for (std::size_t at = 0; at < text.size();) {
+        const std::size_t end = std::min(text.find(L'\n', at), text.size());
+        const std::wstring_view line(text.data() + at, end - at);
+        if (line.size() > 3 && (line[1] == L'x' || line[2] == L'>')) {
+          std::fwprintf(stderr, L"%ls @%d: %.*ls\n", name, static_cast<int>(width), static_cast<int>(line.size()),
+                        line.data());
+          ++failures;
+        }
+        cut += line.size() > 3 && line[0] == L'!' ? 1 : 0;
+        at = end + 1;
+      }
+    }
+  }
+  std::fwprintf(stdout, L"layout: %d overlapping or outside, %d lines of text cut\n", failures, cut);
+  return failures == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - see the catch below
@@ -312,6 +372,7 @@ int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - se
     const std::wstring arg = argc > 1 ? argv[1] : L"ui-snapshots";
     result = arg == L"--window"      ? Window(GetModuleHandleW(nullptr))
              : arg == L"--edit-test" ? EditTest(GetModuleHandleW(nullptr))
+             : arg == L"--layout-test" ? LayoutTest(argc > 2 ? argv[2] : L"ui-layout")
                                      : Snapshots(arg);
   } catch (const wil::ResultException& e) {
     std::fprintf(stderr, "ui-snapshot: 0x%08lx\n", static_cast<unsigned long>(e.GetErrorCode()));

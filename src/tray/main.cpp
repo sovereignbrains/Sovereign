@@ -2531,12 +2531,30 @@ UiContent ContentFrom(const View& v) {
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckTitles = {
       L"Выход через прокси", L"Российское напрямую", L"Утечка DNS",        L"WebRTC / UDP", L"IPv6",
       L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Куда пойдёт адрес"};
+  // What each check does - its "?" on the page.
+  static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckHints = {
+      L"Какой адрес и страну видят зарубежные сайты (Cloudflare). Должен быть адрес сервера, а не твой.",
+      L"Какой адрес видят российские сайты (Яндекс). С «Российское напрямую» — твой собственный: сайты не "
+      L"видят адрес сервера и не свяжут его с тобой.",
+      L"Чьи DNS-серверы на самом деле узнают адреса сайтов, которые ты открываешь (bash.ws). Российский "
+      L"резолвер провайдера — утечка: он видит, куда ты ходишь.",
+      L"Какой адрес браузер может выдать через WebRTC — запросом к STUN-серверам Google и Cloudflare по UDP. "
+      L"Должен совпадать с адресом прокси.",
+      L"Есть ли IPv6 и идёт ли он через прокси: IPv6 мимо туннеля раскрывает твой адрес.",
+      L"Доступен ли роутер — ping шлюза. С kill switch'ем локальная сеть открыта, только если это включено в "
+      L"настройках.",
+      L"Сколько занимает узнать адрес сайта: зарубежного (через прокси) и российского (напрямую).",
+      L"Скорость скачивания и отдачи через текущий маршрут (speed.cloudflare.com). Гоняет десятки мегабайт — "
+      L"поэтому своей кнопкой.",
+      L"Введи сайт — трей откроет его и по журналу ядра покажет, через какой выход он пошёл и по какому "
+      L"правилу."};
   for (std::size_t i = 0; i < sovereign::tray::kCheckCount; ++i) {
     const auto& result = v.checks[i];
     c.checks.push_back({.title = kCheckTitles[i],
                         .summary = Widen(result.summary),
                         .detail = Widen(result.detail),
-                        .status = static_cast<sovereign::tray::UiCheck::Status>(result.status)});
+                        .status = static_cast<sovereign::tray::UiCheck::Status>(result.status),
+                        .hint = kCheckHints[i]});
   }
   c.checksRunning = v.checksRunning;
   using sovereign::tray::RoutingSettings;
@@ -2601,7 +2619,9 @@ UiContent ContentFrom(const View& v) {
   c.autoServer = Widen(v.autoServer);
   c.selectError = Widen(v.selectError);
   for (const auto& location : v.locations) {
-    c.locations.push_back({.country = Widen(location.country), .isp = Widen(sovereign::tray::ShortIsp(location.isp))});
+    c.locations.push_back({.country = Widen(location.country),
+                           .isp = Widen(sovereign::tray::ShortIsp(location.isp)),
+                           .ip = Widen(location.ip)});
   }
   c.exitIp = Widen(v.exitIp.ip);
   c.exitCountry = Widen(v.exitIp.country);

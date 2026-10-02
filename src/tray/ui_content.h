@@ -35,6 +35,7 @@ enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downlo
 struct UiLocation {
   std::wstring country;  // "EE", or empty
   std::wstring isp;      // "Brainoza" (exit_ip.h ShortIsp), or empty
+  std::wstring ip;       // the exit's address, for copying
 };
 
 // A server of a configuration, as its page lists it.
@@ -90,6 +91,7 @@ struct UiCheck {
   std::wstring summary;
   std::wstring detail;
   Status status = Status::NotRun;
+  std::wstring hint;  // what it checks and how - its "?"
 };
 
 // What the tray's window shows; built by main.cpp from the worker's view.

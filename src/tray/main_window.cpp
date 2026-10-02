@@ -47,8 +47,8 @@ constexpr wchar_t kClassName[] = L"SovereignMainWindow";
 
 // Layout, in DIPs (1/96 inch): render targets work in DIPs at the window's
 // DPI, so nothing below is scaled by hand.
-constexpr float kDefaultWidth = 400;
-constexpr float kDefaultHeight = 620;
+constexpr float kDefaultWidth = 420;
+constexpr float kDefaultHeight = 660;
 constexpr float kMinWidth = 360;
 constexpr float kMinHeight = 440;
 constexpr float kPad = 16;         // the page's margins
@@ -56,7 +56,13 @@ constexpr float kMaxPage = 560;    // wider windows keep the page at this, cente
 constexpr float kRow = 44;         // a list row
 constexpr float kLatencyRow = 56;  // a server to pick: its name and latency, what the measurement is made of
 constexpr float kProfileRow = 54;  // a configuration's row: its name and its state
-constexpr float kCheckRow = 96;   // a check: its title, its result, what it means (two lines)
+constexpr float kCheckRow = 42;    // a check: its title and "?", its result on the right
+constexpr float kSwitchRow = 48;   // a switch whose explanation is in its "?"
+constexpr float kHint = 18;        // a "?" that shows a tip when pointed at
+
+// The checks with a button of their own (diagnostics.h CheckId order).
+constexpr std::size_t kCheckSpeed = 7;
+constexpr std::size_t kCheckRoute = 8;
 constexpr float kServerRow = 60;   // a server on a configuration's page: its name, protocol and switch
 constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
@@ -85,6 +91,27 @@ constexpr UINT kLogMenuCopyAll = 2;
 constexpr UINT kLogMenuSelectAll = 3;
 constexpr UINT kLogMenuSave = 4;
 constexpr UINT kLogMenuClear = 5;
+
+// A right-click menu's items, on anything but the log (ItemMenu).
+constexpr UINT kMenuOpen = 101;
+constexpr UINT kMenuSelect = 102;
+constexpr UINT kMenuTestDelays = 103;
+constexpr UINT kMenuCopyName = 104;
+constexpr UINT kMenuCopyIp = 105;
+constexpr UINT kMenuToggle = 106;
+constexpr UINT kMenuRefresh = 107;
+constexpr UINT kMenuCopyLink = 108;
+constexpr UINT kMenuRename = 109;
+constexpr UINT kMenuRemove = 110;
+constexpr UINT kMenuRun = 111;
+constexpr UINT kMenuCopyResult = 112;
+constexpr UINT kMenuCopyAll = 113;
+constexpr UINT kMenuToggleExitIp = 114;
+constexpr UINT kMenuCopyValue = 115;
+
+// An icon button's name shows when it's pointed at this long; a "?" at once.
+constexpr UINT_PTR kTipTimer = 1;
+constexpr UINT kTipDelayMs = 500;
 
 // Segoe Fluent Icons (Windows 11; the same code points in Segoe MDL2 Assets).
 constexpr const wchar_t* kGlyphSync = L"\xE895";
@@ -150,10 +177,22 @@ enum class Kind : std::uint8_t {
   Chip,          // an on/off filter: tinted when on
   AppRow,        // a program in the per-app list
   LogBox,        // the log's lines
+  Hint,          // a "?": pointed at, its text shows in a tip
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
-enum class ItemAction : std::uint8_t { None, Command, Page, OpenProfile, EditName, ToggleLevel, PauseLogs, SaveLogs };
+// Hint: nothing on a click - it's there to be pointed at.
+enum class ItemAction : std::uint8_t {
+  None,
+  Command,
+  Page,
+  OpenProfile,
+  EditName,
+  ToggleLevel,
+  PauseLogs,
+  SaveLogs,
+  Hint
+};
 
 struct Item {
   Kind kind = Kind::Text;
@@ -255,6 +294,7 @@ struct Interaction {
   int pressed = -1;
   int focus = -1;
   bool focusVisible = false;
+  int tip = -1;  // the item whose tip shows: a "?" pointed at, an icon button pointed at a while
 };
 
 bool Contains(const D2D1_RECT_F& r, float x, float y) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; }
@@ -522,6 +562,11 @@ class Painter {
     wrap_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_NORMAL, true);
     captionWrap_ = MakeFormat(kText, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
     mono_ = MakeFormat(L"Consolas", 12.5f);
+    trailing_ = MakeFormat(kText, 12.5f);
+    trailing_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    hint_ = MakeFormat(kText, 11, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    hint_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    tip_ = MakeFormat(kText, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -614,9 +659,85 @@ class Painter {
       }
       t->PopAxisAlignedClip();
     }
+    if (in.tip >= 0 && static_cast<std::size_t>(in.tip) < l.items.size()) {
+      DrawTip(k, l.items[static_cast<std::size_t>(in.tip)], size);
+    }
   }
 
   IWICImagingFactory* Wic() const { return wic_.get(); }
+
+  // How wide a line of body text is: for what the window lays over the page.
+  float BodyWidth(std::wstring_view text) const { return TextWidth(text, body_.get()); }
+
+  // A layout as text, an item a line - its kind, rectangle, text - with "!"
+  // where a line of text needs more room than the item gives it (it's cut
+  // with "…" then), and "x" where two clickable items overlap other than a
+  // "?" or a button over its row. For tests/ui: the layout checked without
+  // looking at pictures.
+  static std::wstring OneLine(std::wstring_view text, std::size_t max) {
+    std::wstring line(text.substr(0, max));
+    std::replace(line.begin(), line.end(), L'\n', L' ');
+    return line;
+  }
+  std::wstring Describe(const Layout& l, float width) const {
+    static constexpr std::array<const wchar_t*, 30> kNames = {
+        L"Card",   L"Divider", L"Title",        L"Heading",      L"Text",       L"Muted",  L"Wrap",
+        L"Caption", L"Error",  L"Field",        L"Power",        L"Tile",       L"Bar",    L"ServerLink",
+        L"Exit",   L"Banner",  L"Button",       L"AccentButton", L"DangerButton", L"Icon", L"Switch",
+        L"Choice", L"Profile", L"Toggle",       L"Check",        L"Segment",    L"Chip",   L"App",
+        L"Log",    L"Hint"};
+    std::wstring out;
+    for (std::size_t i = 0; i < l.items.size(); ++i) {
+      const Item& it = l.items[i];
+      const D2D1_RECT_F r = it.rect;
+      const float w = r.right - r.left;
+      // Room for the text on the item's line, as DrawItem gives it.
+      float room = 0;
+      float need = 0;
+      switch (it.kind) {
+        case Kind::Title: room = w; need = TextWidth(it.text, title_.get()); break;
+        case Kind::Heading: room = w; need = TextWidth(it.text, heading_.get()); break;
+        case Kind::Button:
+        case Kind::AccentButton:
+        case Kind::DangerButton:
+          room = w - 4;
+          need = TextWidth(it.text, body_.get()) + (it.glyph.empty() ? 0.0f : 26.0f);
+          break;
+        case Kind::Switch: room = w - 16 - 76; need = TextWidth(it.text, body_.get()); break;
+        case Kind::Choice: room = w - 42 - 120; need = TextWidth(it.text, body_.get()); break;
+        case Kind::ProfileRow: room = w - 14 - 28; need = TextWidth(it.text, body_.get()); break;
+        case Kind::Tile: room = w - 24; need = std::max(TextWidth(it.text, body_.get()), TextWidth(it.detail, caption_.get())); break;
+        case Kind::Segment: room = w - 8; need = TextWidth(it.text, button_.get()); break;
+        case Kind::CheckRow:
+          room = w - 30 - (it.checked ? 44.0f : 12.0f);
+          need = TextWidth(it.text, body_.get()) + 6 + kHint + 8 + TextWidth(it.detail, trailing_.get());
+          break;
+        default: break;
+      }
+      bool overlaps = false;
+      if (Interactive(it) && it.kind != Kind::Hint) {
+        for (std::size_t j = i + 1; j < l.items.size(); ++j) {
+          const Item& o = l.items[j];
+          const bool over = Interactive(o) && o.rect.left < r.right && o.rect.right > r.left && o.rect.top < r.bottom &&
+                            o.rect.bottom > r.top;
+          const bool allowed = o.kind == Kind::Hint || (o.kind == Kind::IconButton && it.kind == Kind::Title);
+          overlaps = overlaps || (over && !allowed);
+        }
+      }
+      const bool outside = r.left < 0 || r.right > width + 0.5f;
+      out += std::format(L"{}{}{} {:<12} [{:6.1f} {:6.1f} {:6.1f} {:6.1f}] {}", need > room + 0.5f ? L"!" : L" ",
+                         overlaps ? L"x" : L" ", outside ? L">" : L" ", kNames[static_cast<std::size_t>(it.kind)],
+                         r.left, r.top, r.right, r.bottom, OneLine(it.text, 60));
+      if (need > room + 0.5f) {
+        out += std::format(L"   (needs {:.0f}, has {:.0f})", need, room);
+      }
+      if (!it.detail.empty() && it.kind != Kind::AppRow) {
+        out += L"  | " + OneLine(it.detail, 50);
+      }
+      out += L"\n";
+    }
+    return out;
+  }
 
   // The program icons and the flags are the render target's: a new target
   // needs new ones.
@@ -772,20 +893,109 @@ class Painter {
   /* ---- layout ---- */
 
   // A page's top: back to the overview, the title, and a wrapped subtitle.
+  // How wide `text` is on one line in `format`.
+  float TextWidth(std::wstring_view text, IDWriteTextFormat* format) const {
+    const auto m = Metrics(text, format, 10000, 100);
+    return m ? m->widthIncludingTrailingWhitespace : 0.0f;
+  }
+
+  // A "?" at `x`, centered on `cy`: pointed at, `text` shows in a tip.
+  static void AddHint(Layout& l, float x, float cy, std::wstring text, bool scrolls = true) {
+    Item hint = Make(Kind::Hint, {x, cy - kHint / 2, x + kHint, cy + kHint / 2}, std::move(text));
+    hint.action = ItemAction::Hint;
+    hint.scrolls = scrolls;
+    l.items.push_back(std::move(hint));
+  }
+
+  // A "?" right after `text` drawn in `format` from `left` (as far as `right`
+  // lets it), on the line centered on `cy`.
+  void HintAfter(Layout& l, std::wstring_view text, IDWriteTextFormat* format, float left, float right, float cy,
+                 std::wstring hint) const {
+    const float x = std::min(left + TextWidth(text, format) + 6, right - kHint);
+    AddHint(l, x, cy, std::move(hint));
+  }
+
+  // A page's top: back, the title (a "?" after it with `hint`), and under it
+  // `subtitle` - what the page says now, not what it's for.
   float PageTitle(Layout& l, const wchar_t* title, const wchar_t* subtitle, float x0, float x1, float y,
-                  UiPage backTo = UiPage::Overview) const {
+                  UiPage backTo = UiPage::Overview, std::wstring hint = {}, float titleRight = 0) const {
     Item back = Make(Kind::IconButton, {x0 - 6, y, x0 + 30, y + 36}, L"Назад", kGlyphBack);
     back.action = ItemAction::Page;
     back.index = static_cast<int>(backTo);
     l.items.push_back(std::move(back));
-    l.items.push_back(Make(Kind::Title, {x0 + 38, y, x1, y + 36}, title));
-    y += 36 + 8;
-    if (subtitle != nullptr) {
-      const float h = TextHeight(subtitle, captionWrap_.get(), x1 - x0);
-      l.items.push_back(Make(Kind::Caption, {x0, y, x1, y + h}, subtitle));
-      y += h;
+    const float right = titleRight > 0 ? titleRight : x1;
+    l.items.push_back(Make(Kind::Title, {x0 + 38, y, right - (hint.empty() ? 0 : kHint + 8), y + 36}, title));
+    if (!hint.empty()) {
+      HintAfter(l, title, title_.get(), x0 + 38, right, y + 18, std::move(hint));
     }
-    return y + 14;
+    y += 36 + 8;
+    if (subtitle != nullptr && *subtitle != L'\0') {
+      const float h = TextHeight(subtitle, captionWrap_.get(), x1 - x0);
+      l.items.push_back(Make(Kind::Caption, {x0, y - 4, x1, y - 4 + h}, subtitle));
+      y += h + 2;
+    }
+    return y + 8;
+  }
+
+  // A card's heading, a "?" after it with `hint`.
+  float Heading(Layout& l, const std::wstring& text, float x0, float x1, float y, std::wstring hint = {}) const {
+    l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28}, text));
+    if (!hint.empty()) {
+      HintAfter(l, text, heading_.get(), x0, x1, y + 14, std::move(hint));
+    }
+    return y + 28 + 6;
+  }
+
+  // A card of switches, one row each; one with a hint has a "?" after its
+  // title and no line under it, unless it has a detail too.
+  struct SwitchRow {
+    std::wstring title;
+    std::wstring detail;  // a state worth a line ("при обрыве..."); empty: the title alone
+    std::wstring hint;
+    bool on = false;
+    UiCommand command = UiCommand::Toggle;
+    int index = 0;
+    bool enabled = true;
+  };
+  static SwitchRow Row(std::wstring title, std::wstring hint, bool on, UiCommand command, std::wstring detail = {},
+                       int index = 0, bool enabled = true) {
+    SwitchRow row;
+    row.title = std::move(title);
+    row.hint = std::move(hint);
+    row.on = on;
+    row.command = command;
+    row.detail = std::move(detail);
+    row.index = index;
+    row.enabled = enabled;
+    return row;
+  }
+  float Switches(Layout& l, const std::vector<SwitchRow>& rows, float x0, float x1, float y) const {
+    float h = 0;
+    for (const SwitchRow& row : rows) {
+      h += row.detail.empty() ? kSwitchRow : 60;
+    }
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+    float top = y;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+      const SwitchRow& row = rows[i];
+      const float rowHeight = row.detail.empty() ? kSwitchRow : 60;
+      if (i > 0) {
+        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      }
+      Item item = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + rowHeight - 2}, row.title, nullptr,
+                              row.command, row.index);
+      item.detail = row.detail;
+      item.checked = row.on;
+      item.enabled = row.enabled;
+      l.items.push_back(std::move(item));
+      if (!row.hint.empty()) {
+        // Where Kind::Switch draws the title: 16 in, on the row's middle or its top line.
+        const float cy = row.detail.empty() ? top + rowHeight / 2 : top + 2 + 10 + 12;
+        HintAfter(l, row.title, body_.get(), x0 + 20, x1 - 80, cy, row.hint);
+      }
+      top += rowHeight;
+    }
+    return y + h;
   }
 
   float Paragraph(Layout& l, Kind kind, const std::wstring& text, float x0, float x1, float y) const {
@@ -861,11 +1071,11 @@ class Painter {
     tile(0, kGlyphSync, L"Конфигурации", SubscriptionLine(c), UiPage::Subscription, AnyWaiting(c));
     tile(1, kGlyphRoute, L"Маршруты и DNS", RoutingLine(c), UiPage::Routing, c.routing.listsFailed);
     tile(2, kGlyphProgram, L"Приложения", AppsLine(c), UiPage::Apps, false);
-    tile(3, kGlyphLog, L"Журнал", c.display == Display::Error ? L"есть ошибка" : L"ядро и трей", UiPage::Logs,
+    tile(3, kGlyphShield, L"Проверка", ChecksLine(c), UiPage::Checks, false);
+    tile(4, kGlyphLog, L"Журнал", c.display == Display::Error ? L"есть ошибка" : L"ядро и трей", UiPage::Logs,
          c.display == Display::Error);
-    tile(4, kGlyphSettings, L"Настройки", L"Sovereign " + c.version.substr(0, c.version.find(L' ')), UiPage::Settings,
+    tile(5, kGlyphSettings, L"Настройки", L"Sovereign " + c.version.substr(0, c.version.find(L' ')), UiPage::Settings,
          c.update == UiUpdate::Available);
-    tile(5, kGlyphShield, L"Проверка", ChecksLine(c), UiPage::Checks, false);
     y += 3 * kTile + 2 * 10 + kGap;
 
     // The kill switch: on the overview, it's what decides what a drop does.
@@ -947,9 +1157,7 @@ class Painter {
   // The servers of the subscription's selector, with their latency.
   float Servers(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const float titleTop = y;
-    std::wstring note =
-        L"Задержка — медиана нескольких запросов через уже открытое соединение, ± — их разброс. "
-        L"Авто берёт лучший по замерам и меняет его, только когда другой заметно быстрее два замера подряд.";
+    std::wstring note;
     if (!c.selectError.empty()) {
       note = L"Не удалось переключить сервер: " + c.selectError;
     } else if (c.delaysTesting) {
@@ -959,7 +1167,12 @@ class Painter {
     } else if (!c.delayError.empty()) {
       note = L"Не удалось проверить: " + c.delayError;
     }
-    y = PageTitle(l, L"Серверы", note.c_str(), x0, x1, y);
+    y = PageTitle(l, L"Серверы", note.c_str(), x0, x1, y, UiPage::Overview,
+                  L"Флаг и провайдер — где сервер на самом деле: его выход, узнанный через него самого, а не то, "
+                  L"что написано в названии.\n\nЗадержка — медиана нескольких запросов через уже открытое "
+                  L"соединение, ± — их разброс. Авто берёт лучший по замерам и меняет его, только когда другой "
+                  L"заметно быстрее два замера подряд.\n\nПравый клик по серверу — копировать имя или IP выхода.",
+                  x1 - 40);
     Item test = CommandItem(Kind::IconButton, {x1 - 36, titleTop, x1, titleTop + 36}, L"Проверить задержку",
                             kGlyphStopwatch, UiCommand::TestDelays);
     test.enabled = c.canTestDelays && !c.delaysTesting;
@@ -1004,11 +1217,11 @@ class Painter {
   }
 
   float Subscription(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Конфигурации",
+    y = PageTitle(l, L"Конфигурации", nullptr, x0, x1, y, UiPage::Overview,
                   L"Подписки, ключи и свои конфиги. Включённые работают вместе: их серверы — в общем списке "
-                  L"«Серверы», маршруты и DNS — от первой включённой. Нажми на конфигурацию, чтобы "
-                  L"переименовать её, настроить обновление или выключить отдельные серверы.",
-                  x0, x1, y);
+                  L"«Серверы», маршруты и DNS — от первой включённой.\n\nНажми на конфигурацию, чтобы "
+                  L"переименовать её, настроить обновление или выключить отдельные серверы. Правый клик — "
+                  L"обновить, копировать ссылку, удалить.");
 
     // Every configuration: the switch turns it on and off, a click opens it.
     if (c.profiles.empty()) {
@@ -1097,15 +1310,7 @@ class Painter {
       autoUpdate.checked = p.autoUpdate;
       l.items.push_back(std::move(autoUpdate));
     }
-    y += cardHeight + 8;    Item rename = Make(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Переименовать", kGlyphRename);
-    rename.action = ItemAction::EditName;
-    rename.index = index;
-    l.items.push_back(std::move(rename));
-    if (p.subscription) {
-      l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Период…", kGlyphClock,
-                                    UiCommand::ChooseRefreshPeriod, index));
-    }
-    y += kButton + kGap;
+    y += cardHeight + kGap;
 
     if (p.subscription) {
       const std::vector<std::pair<const wchar_t*, std::wstring>> fields = {
@@ -1153,15 +1358,25 @@ class Painter {
                                       UiCommand::RevertConfig, index));
         y += kButton + 8;
       }
-      y += kGap - 8;
     }
+    Item rename = Make(Kind::Button, {x0, y, p.subscription ? mid - 4 : x1, y + kButton}, L"Переименовать",
+                       kGlyphRename);
+    rename.action = ItemAction::EditName;
+    rename.index = index;
+    l.items.push_back(std::move(rename));
+    if (p.subscription) {
+      l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Период…", kGlyphClock,
+                                    UiCommand::ChooseRefreshPeriod, index));
+    }
+    y += kButton + kGap + 4;
 
     // Its servers: a switch each.
     const auto off = std::count_if(p.servers.begin(), p.servers.end(), [](const UiServer& s) { return !s.enabled; });
-    l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28},
-                           off > 0 ? std::format(L"Серверы: {}, выключено {}", p.servers.size(), off)
-                                   : std::format(L"Серверы: {}", p.servers.size())));
-    y += 28 + 8;
+    y = Heading(l,
+                off > 0 ? std::format(L"Серверы: {}, выключено {}", p.servers.size(), off)
+                        : std::format(L"Серверы: {}", p.servers.size()),
+                x0, x1, y,
+                L"Выключенный сервер не попадает в общий список и в авто. Правый клик — копировать его имя.");
     if (p.servers.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
       l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56}, L"В конфиге нет серверов."));
@@ -1230,10 +1445,11 @@ class Painter {
   // the switches, DNS, the user's rules - first, whatever the source.
   float Routing(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const UiRouting& r = c.routing;
-    y = PageTitle(l, L"Маршруты и DNS",
+    y = PageTitle(l, L"Маршруты и DNS", nullptr, x0, x1, y, UiPage::Overview,
                   L"Куда идёт трафик и через какой DNS узнаются адреса. Правила здесь работают первыми, что бы "
-                  L"ни было в подписках.",
-                  x0, x1, y);
+                  L"ни было в подписках.\n\n«Свои» — TUN, DNS и маршруты строит Sovereign, из конфигураций "
+                  L"берутся только серверы. «Из подписки» — DNS и маршруты выбранной конфигурации, правила "
+                  L"отсюда — перед её правилами.");
     const float mid = (x0 + x1) / 2;
     Item own = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Свои", nullptr, UiCommand::SetRoutingSource, 0);
     own.checked = r.own;
@@ -1242,12 +1458,7 @@ class Painter {
     sub.checked = !r.own;
     l.items.push_back(std::move(own));
     l.items.push_back(std::move(sub));
-    y += 36 + 12;
-    y = Paragraph(l, Kind::Wrap,
-                  r.own ? L"TUN, DNS и маршруты строит Sovereign; из конфигураций берутся только серверы."
-                        : L"DNS и маршруты — от выбранной конфигурации, правила ниже — перед её правилами.",
-                  x0, x1, y) +
-        kGap;
+    y += 36 + kGap;
 
     if (!r.own) {
       std::vector<std::size_t> on;
@@ -1276,72 +1487,49 @@ class Painter {
       }
     }
 
-    // The switches.
-    struct Toggle {
-      const wchar_t* title;
-      const wchar_t* detail;
-      bool on;
-      UiCommand command;
-    };
-    std::vector<Toggle> toggles = {
-        {L"Российское напрямую",
-         L"сайты .ru/.рф/.su, российские сервисы и IP — мимо прокси: они не увидят адрес сервера, их DNS — тоже напрямую",
-         r.russiaDirect, UiCommand::ToggleRussiaDirect},
-        {L"Блокировать рекламу", L"рекламные и следящие домены", r.blockAds, UiCommand::ToggleBlockAds},
-        {L"Блокировать QUIC", L"браузеры перейдут на TCP — через прокси так стабильнее", r.blockQuic,
-         UiCommand::ToggleBlockQuic},
+    // The switches: the title alone, what it does in its "?".
+    std::vector<SwitchRow> toggles = {
+        Row(L"Российское напрямую",
+            L"Сайты .ru/.рф/.su, российские сервисы и IP идут мимо прокси: они не увидят адрес сервера "
+            L"(и не свяжут его с тобой), их DNS — тоже напрямую.",
+            r.russiaDirect, UiCommand::ToggleRussiaDirect),
+        Row(L"Блокировать рекламу", L"Рекламные и следящие домены не открываются — ни через прокси, ни напрямую.",
+            r.blockAds, UiCommand::ToggleBlockAds),
+        Row(L"Блокировать QUIC", L"Браузеры перейдут с QUIC (HTTP/3 по UDP) на TCP — через прокси так стабильнее.",
+            r.blockQuic, UiCommand::ToggleBlockQuic),
     };
     if (r.own) {
-      toggles.push_back({L"Остальное напрямую", L"через прокси — только то, что в правилах", r.finalDirect,
-                         UiCommand::ToggleFinalDirect});
+      toggles.push_back(Row(L"Остальное напрямую",
+                            L"Через прокси пойдёт только то, что в правилах; всё прочее — напрямую.", r.finalDirect,
+                            UiCommand::ToggleFinalDirect));
     }
-    const float switchRow = 64;
-    const float th = static_cast<float>(toggles.size()) * switchRow;
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + th}));
-    for (std::size_t i = 0; i < toggles.size(); ++i) {
-      const float top = y + static_cast<float>(i) * switchRow;
-      if (i > 0) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-      }
-      Item row = CommandItem(Kind::Switch, {x0 + 4, top + 4, x1 - 4, top + switchRow - 4}, toggles[i].title, nullptr,
-                             toggles[i].command);
-      row.detail = toggles[i].detail;
-      row.checked = toggles[i].on;
-      l.items.push_back(std::move(row));
-    }
-    y += th + kGap;
+    y = Switches(l, toggles, x0, x1, y) + kGap + 4;
 
     // DNS: the client's own, in own mode.
     if (r.own) {
-      l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28}, L"DNS"));
-      y += 28 + 8;
+      y = Heading(l, L"DNS", x0, x1, y,
+                  L"Через прокси — все имена, кроме прямых. Напрямую — российские и твои прямые адреса и адреса "
+                  L"самих серверов.\n\nЗашифрованный DNS прячет их от провайдера; если перестанет подключаться — "
+                  L"выбери системный.");
       l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Через прокси: " + r.remoteDns,
                                     kGlyphGlobe, UiCommand::ChooseRemoteDns));
       y += kButton + 8;
       l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Напрямую: " + r.localDns, kGlyphGlobe,
                                     UiCommand::ChooseLocalDns));
       y += kButton + 8;
-      y = Paragraph(l, Kind::Caption,
-                    L"Напрямую — российские и твои прямые адреса и адреса самих серверов. Зашифрованный DNS прячет "
-                    L"их от провайдера; если перестанет подключаться — выбери системный.",
-                    x0, x1, y) +
-          8;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + switchRow}));
-      Item v4 = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + switchRow - 4}, L"Только IPv4", nullptr,
-                            UiCommand::ToggleIpv4Only);
-      v4.detail = L"адреса IPv6 не выдаются — не уйдут мимо туннеля";
-      v4.checked = r.ipv4Only;
-      l.items.push_back(std::move(v4));
-      y += switchRow + kGap;
+      y = Switches(l,
+                   {Row(L"Только IPv4", L"Адреса IPv6 не выдаются программам — их трафик не уйдёт мимо туннеля.",
+                        r.ipv4Only, UiCommand::ToggleIpv4Only)},
+                   x0, x1, y) +
+          kGap + 4;
     }
 
     // The user's rules.
-    l.items.push_back(Make(Kind::Heading, {x0, y, x1, y + 28}, L"Свои правила"));
-    y += 28 + 8;
+    y = Heading(l, L"Свои правила", x0, x1, y,
+                L"Сайты, IP-подсети или программы (.exe) — напрямую, через прокси или в блок. Работают раньше "
+                L"всех остальных правил. Клик или правый клик по правилу — изменить или удалить.");
     if (r.rules.empty()) {
-      y = Paragraph(l, Kind::Caption, L"Пока нет. Сайты, IP-подсети или программы (.exe) — напрямую, через прокси или в блок.",
-                    x0, x1, y) +
-          8;
+      y = Paragraph(l, Kind::Caption, L"Пока нет.", x0, x1, y) + 8;
     } else {
       const float h = static_cast<float>(r.rules.size()) * kProfileRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
@@ -1372,54 +1560,65 @@ class Painter {
   // The checks: what the internet sees, leaks, the local network, DNS, and -
   // on their own buttons - speed and where an address goes.
   float Checks(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Проверка",
+    // "Check all" in the title's row; what the page is about in its "?".
+    const float titleTop = y;
+    const float allWidth = 140;
+    y = PageTitle(l, L"Проверка", nullptr, x0, x1, y, UiPage::Overview,
                   L"Запросы трея идут как у любой программы — через туннель и правила, поэтому видно то же, что "
-                  L"видят твои программы и сайты.",
-                  x0, x1, y);
-    Item all = CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton},
+                  L"видят твои программы и сайты.\n\n«Проверить всё» — все строки, кроме скорости и адреса: у них "
+                  L"свои кнопки справа. Наведи на «?» у строки — что она проверяет и что значит результат. Правый "
+                  L"клик — проверить снова или скопировать результат.",
+                  x1 - allWidth - 8);
+    Item all = CommandItem(Kind::AccentButton, {x1 - allWidth, titleTop + 1, x1, titleTop + 1 + kButton},
                            c.checksRunning ? L"Проверяю…" : L"Проверить всё", kGlyphShield, UiCommand::RunChecks);
     all.enabled = !c.checksRunning;
     l.items.push_back(std::move(all));
-    y += kButton + kGap;
-    const auto rows = [&](std::size_t from, std::size_t to) {
-      const float h = static_cast<float>(to - from) * kCheckRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      for (std::size_t i = from; i < to && i < c.checks.size(); ++i) {
-        const float top = y + static_cast<float>(i - from) * kCheckRow;
-        if (i > from) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-        }
-        const UiCheck& check = c.checks[i];
-        Item row = Make(Kind::CheckRow, {x0 + 4, top + 2, x1 - 4, top + kCheckRow - 2}, check.title);
-        row.detail = check.status == UiCheck::Status::NotRun ? std::wstring(L"—") : check.summary;
-        row.glyph = {};
-        row.index = static_cast<int>(check.status);
-        row.text2 = check.detail;
-        l.items.push_back(std::move(row));
-      }
-      y += h + kGap;
-    };
-    rows(0, std::min<std::size_t>(7, c.checks.size()));
 
-    // Speed and an address: traffic and an answer of their own.
-    const float mid = (x0 + x1) / 2;
-    Item speed = CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Замерить скорость", kGlyphSpeed,
-                             UiCommand::RunSpeed);
-    speed.enabled = !c.checksRunning;
-    Item route = CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Куда пойдёт адрес…", kGlyphRoute,
-                             UiCommand::CheckRoute);
-    route.enabled = !c.checksRunning;
-    l.items.push_back(std::move(speed));
-    l.items.push_back(std::move(route));
-    y += kButton + kGap;
-    if (c.checks.size() >= 9) {
-      rows(7, 9);
+    // One card, a line each: status, title and "?", the result on the right.
+    // Speed and an address make traffic or need one: a button of their own.
+    const std::size_t count = c.checks.size();
+    const float h = static_cast<float>(count) * kCheckRow;
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+    for (std::size_t i = 0; i < count; ++i) {
+      const float top = y + static_cast<float>(i) * kCheckRow;
+      if (i > 0) {
+        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      }
+      const UiCheck& check = c.checks[i];
+      const UiCommand own = i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute;
+      const bool hasButton = i == kCheckSpeed || i == kCheckRoute;
+      Item row = Make(Kind::CheckRow, {x0 + 4, top + 1, x1 - 4, top + kCheckRow - 1}, check.title);
+      row.detail = check.status == UiCheck::Status::NotRun ? std::wstring(L"—") : check.summary;
+      row.index = static_cast<int>(check.status);
+      row.sub = static_cast<int>(i);
+      row.text2 = check.detail;
+      row.checked = hasButton;  // the result stops short of the button
+      l.items.push_back(std::move(row));
+
+      std::wstring hint = check.hint;
+      if (check.status != UiCheck::Status::NotRun && check.status != UiCheck::Status::Running) {
+        hint += L"\n\nСейчас: " + check.summary;
+        if (!check.detail.empty()) {
+          hint += L"\n" + check.detail;
+        }
+      }
+      HintAfter(l, check.title, body_.get(), x0 + 4 + 30, x1 - 120, top + kCheckRow / 2, std::move(hint));
+
+      if (hasButton) {
+        Item run = CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
+                               i == kCheckSpeed ? L"Замерить скорость" : L"Куда пойдёт адрес…",
+                               i == kCheckSpeed ? kGlyphSpeed : kGlyphRoute, own);
+        run.enabled = !c.checksRunning;
+        l.items.push_back(std::move(run));
+      }
     }
-    return y - kGap;
+    return y + h;
   }
 
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Приложения", L"Какие программы идут через прокси. Имена — как у exe-файла, без пути.", x0, x1, y);
+    y = PageTitle(l, L"Приложения", nullptr, x0, x1, y, UiPage::Overview,
+                  L"Какие программы идут через прокси. Имена — как у exe-файла, без пути: правило ловит программу, "
+                  L"где бы она ни лежала.");
     const float mid = (x0 + x1) / 2;
     Item except = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Все, кроме списка", nullptr,
                               UiCommand::SetAppsMode, 0);
@@ -1450,6 +1649,7 @@ class Painter {
         }
         Item app = Make(Kind::AppRow, {x0 + 8, top, x1 - 56, top + kRow}, c.apps[i], kGlyphProgram);
         app.detail = i < c.appPaths.size() ? c.appPaths[i] : std::wstring();  // the icon's exe
+        app.index = static_cast<int>(i);  // for its right-click menu
         l.items.push_back(std::move(app));
         const float bt = top + (kRow - kButton) / 2;
         Item remove = CommandItem(Kind::IconButton, {x1 - 12 - kButton, bt, x1 - 12, bt + kButton}, L"Убрать",
@@ -1521,31 +1721,27 @@ class Painter {
   }
 
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Настройки", nullptr, x0, x1, y);
+    y = PageTitle(l, L"Настройки", nullptr, x0, x1, y, UiPage::Overview,
+                  L"«Папка данных» — %LOCALAPPDATA%\\Sovereign: настройки, конфиги, их история.\n\n«Выйти» "
+                  L"закрывает трей; подключение остаётся — им управляет служба, и следующий запуск продолжит с того "
+                  L"же места.");
 
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 68}));
-    Item autostart = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 64}, L"Запуск при входе в Windows", nullptr,
-                                 UiCommand::ToggleAutostart);
-    autostart.detail = L"В трее, без окна.";
-    autostart.checked = c.autostart;
-    l.items.push_back(std::move(autostart));
-    y += 68 + kGap;
+    y = Switches(l,
+                 {Row(L"Запуск при входе в Windows", L"Трей запускается в области уведомлений, без окна.", c.autostart,
+                      UiCommand::ToggleAutostart)},
+                 x0, x1, y) +
+        kGap;
 
     // The kill switch and what it lets through.
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 128}));
-    Item kill = CommandItem(Kind::Switch, {x0 + 4, y + 4, x1 - 4, y + 60}, L"Kill switch", nullptr,
-                            UiCommand::ToggleKillSwitch);
-    kill.detail = L"Трафик не пойдёт мимо прокси.";
-    kill.checked = c.killSwitch;
-    l.items.push_back(std::move(kill));
-    l.items.push_back(Make(Kind::Divider, {x0 + 16, y + 64, x1 - 16, y + 65}));
-    Item lan = CommandItem(Kind::Switch, {x0 + 4, y + 68, x1 - 4, y + 124}, L"Локальная сеть", nullptr,
-                           UiCommand::ToggleKillSwitchLan);
-    lan.detail = L"Принтер, NAS — доступны и при обрыве.";
-    lan.checked = c.killSwitchLan;
-    lan.enabled = c.killSwitch;
-    l.items.push_back(std::move(lan));
-    y += 128 + kGap;
+    y = Switches(l,
+                 {Row(L"Kill switch",
+                      L"Если подключение оборвётся, трафик не пойдёт мимо прокси: интернет закрыт, пока оно не "
+                      L"восстановится.",
+                      c.killSwitch, UiCommand::ToggleKillSwitch),
+                  Row(L"Локальная сеть", L"Принтер, NAS, роутер доступны и при обрыве — kill switch их не закрывает.",
+                      c.killSwitchLan, UiCommand::ToggleKillSwitchLan, {}, 0, c.killSwitch)},
+                 x0, x1, y) +
+        kGap;
     if (!c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
@@ -1572,12 +1768,7 @@ class Painter {
                                   UiCommand::OpenFolder));
     l.items.push_back(CommandItem(Kind::DangerButton, {mid + 4, y, x1, y + kButton}, L"Выйти", kGlyphExit,
                                   UiCommand::Exit));
-    y += kButton + 10;
-    return Paragraph(l, Kind::Caption,
-                     L"Папка — %LOCALAPPDATA%\\Sovereign: настройки, конфиг, его история. "
-                     L"«Выйти» закрывает трей; подключение остаётся — им управляет служба, "
-                     L"и следующий запуск продолжит с того же места.",
-                     x0, x1, y);
+    return y + kButton;
   }
 
   /* ---- drawing ---- */
@@ -1703,8 +1894,13 @@ class Painter {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
         }
         const float right = r.right - 16;
-        k.Text(it.text, body_.get(), {r.left + 16, r.top + 10, right - 60, r.top + 34}, primary);
-        k.Text(it.detail, caption_.get(), {r.left + 16, r.top + 34, right - 60, r.top + 56}, secondary);
+        const D2D1_COLOR_F ink = it.enabled ? primary : secondary;
+        if (it.detail.empty()) {
+          k.Text(it.text, body_.get(), {r.left + 16, r.top, right - 60, r.bottom}, ink);
+        } else {
+          k.Text(it.text, body_.get(), {r.left + 16, r.top + 10, right - 60, r.top + 34}, ink);
+          k.Text(it.detail, caption_.get(), {r.left + 16, r.top + 34, right - 60, r.top + 56}, secondary);
+        }
         DrawSwitch(k, {right - 40, (r.top + r.bottom) / 2 - 10, right, (r.top + r.bottom) / 2 + 10}, it.checked);
         break;
       }
@@ -1748,11 +1944,24 @@ class Painter {
         const std::array<D2D1_COLOR_F, 5> colors = {secondary, accent, FromColorRef(ui::kUpload),
                                                     FromColorRef(ui::kWarning), FromColorRef(ui::kDanger)};
         const D2D1_COLOR_F status = colors[static_cast<std::size_t>(std::clamp(it.index, 0, 4))];
-        k.t->FillEllipse(D2D1::Ellipse({r.left + 16, r.top + 17}, 5, 5), k.Color(status));
-        k.Text(it.text, body_.get(), {r.left + 32, r.top + 4, r.right - 8, r.top + 28}, primary);
-        k.Text(it.detail, body_.get(), {r.left + 32, r.top + 28, r.right - 8, r.top + 52},
-               it.index >= 3 ? status : primary);
-        k.Text(it.text2, captionWrap_.get(), {r.left + 32, r.top + 54, r.right - 8, r.bottom - 2}, secondary);
+        const float cy = (r.top + r.bottom) / 2;
+        k.t->FillEllipse(D2D1::Ellipse({r.left + 16, cy}, 4.5f, 4.5f), k.Color(status));
+        // The title and its "?" (a Hint item after it), the result in what's
+        // left on the right - cut with "…": the "?" has it in full.
+        const float titleRight = r.left + 30 + TextWidth(it.text, body_.get());
+        k.Text(it.text, body_.get(), {r.left + 30, r.top, titleRight + 2, r.bottom}, primary);
+        const float resultLeft = titleRight + 6 + kHint + 8;
+        const float resultRight = r.right - (it.checked ? 44.0f : 12.0f);
+        const bool quiet = it.index <= 1;  // not run, running
+        k.Text(it.detail, trailing_.get(), {resultLeft, r.top, resultRight, r.bottom},
+               quiet ? secondary : (it.index >= 3 ? status : primary));
+        break;
+      }
+      case Kind::Hint: {
+        const D2D1_POINT_2F center{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+        const D2D1_COLOR_F ink = hovered ? accent : FromColorRef(ui::kSecondaryText, 0.85f);
+        k.t->DrawEllipse(D2D1::Ellipse(center, 7.5f, 7.5f), k.Color(ink), 1.2f);
+        k.Text(L"?", hint_.get(), {center.x - 8, center.y - 8.5f, center.x + 8, center.y + 7.5f}, ink);
         break;
       }
       case Kind::Toggle: {
@@ -1795,6 +2004,33 @@ class Painter {
       }
       case Kind::LogBox: break;  // DrawLog
     }
+  }
+
+  // A tip over everything: under the item it's about (over it if there's no
+  // room below), inside the window.
+  void DrawTip(const Canvas& k, const Item& it, D2D1_SIZE_F size) const {
+    if (it.text.empty()) {
+      return;
+    }
+    const float pad = 10;
+    const float maxWidth = std::min(300.0f, size.width - 24 - 2 * pad);
+    const auto m = Metrics(it.text, tip_.get(), maxWidth, 10000);
+    if (!m) {
+      return;
+    }
+    const float w = std::ceil(m->width) + 2 * pad;
+    const float h = std::ceil(m->height) + 2 * pad;
+    const float left = std::clamp(it.rect.left - 12, 12.0f, std::max(12.0f, size.width - 12 - w));
+    float top = it.rect.bottom + 6;
+    if (top + h > size.height - 8) {
+      top = std::max(8.0f, it.rect.top - 6 - h);
+    }
+    const D2D1_RECT_F box{left, top, left + w, top + h};
+    k.Round(Inflate(box, 1), kRadius, Rgb(0, 0, 0, 0.35f));  // a hint of a shadow
+    k.Round(box, kRadius, Rgb(46, 50, 58));
+    k.Outline(box, kRadius, Rgb(255, 255, 255, 0.12f));
+    k.Text(it.text, tip_.get(), {left + pad, top + pad, left + pad + maxWidth, top + h - pad},
+           FromColorRef(ui::kPrimaryText));
   }
 
   // The log's visible lines in `box`: time and level in their own colors,
@@ -1942,6 +2178,9 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> wrap_;
   wil::com_ptr<IDWriteTextFormat> captionWrap_;
   wil::com_ptr<IDWriteTextFormat> mono_;
+  wil::com_ptr<IDWriteTextFormat> trailing_;  // a result on a row's right, cut with "…"
+  wil::com_ptr<IDWriteTextFormat> hint_;      // the "?" of a hint
+  wil::com_ptr<IDWriteTextFormat> tip_;       // a tip's text, wrapped
   wil::com_ptr<IDWriteTextFormat> glyph_;
   wil::com_ptr<IDWriteTextFormat> glyphBig_;
   // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
@@ -2060,12 +2299,14 @@ struct MainWindow::Impl {
     return {ToDip(rc.right), ToDip(rc.bottom)};
   }
 
-  int HitAt(POINT px) const {
+  // The item under a point: the last laid out wins - drawn last, it's on top
+  // (a "?" over its row, a button in a check's line).
+  int HitAt(POINT px, bool anyItem = false) const {
     const float x = ToDip(px.x);
     const float y = ToDip(px.y);
-    for (std::size_t i = 0; i < layout.items.size(); ++i) {
+    for (std::size_t i = layout.items.size(); i-- > 0;) {
       const Item& item = layout.items[i];
-      if (!Interactive(item) || !Contains(item.rect, x, y)) {
+      if ((!anyItem && !Interactive(item)) || !Contains(item.rect, x, y)) {
         continue;
       }
       if (item.scrolls && (y < layout.viewTop || y >= layout.viewBottom)) {
@@ -2074,6 +2315,27 @@ struct MainWindow::Impl {
       return static_cast<int>(i);
     }
     return -1;
+  }
+
+  // What shows a tip: a "?" at once, an icon button (its name) after a while.
+  bool IsKind(int index, Kind kind) const {
+    return index >= 0 && static_cast<std::size_t>(index) < layout.items.size() &&
+           layout.items[static_cast<std::size_t>(index)].kind == kind;
+  }
+
+  // The pointer is over `h` now: a "?" shows its tip, an icon button starts
+  // the wait for its name.
+  void Hover(int h) {
+    if (h == in.hover) {
+      return;
+    }
+    in.hover = h;
+    KillTimer(hwnd, kTipTimer);
+    in.tip = IsKind(h, Kind::Hint) ? h : -1;
+    if (IsKind(h, Kind::IconButton)) {
+      SetTimer(hwnd, kTipTimer, kTipDelayMs, nullptr);
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
   }
 
   bool InLog(POINT px) const { return layout.logBox && Contains(*layout.logBox, ToDip(px.x), ToDip(px.y)); }
@@ -2121,7 +2383,11 @@ struct MainWindow::Impl {
     }
     layout = painter.Build(content, page, openProfile, size.width, size.height, scroll, state);
     ClampLog();
+    // The same spot may hold another item now: a tip stays only on one of
+    // its kind (the content refreshes every second under a resting pointer).
+    const bool tipShown = in.tip >= 0;
     in.hover = mouse ? HitAt(*mouse) : -1;
+    in.tip = IsKind(in.hover, Kind::Hint) || (tipShown && IsKind(in.hover, Kind::IconButton)) ? in.hover : -1;
     if (in.focus >= static_cast<int>(layout.items.size()) ||
         (in.focus >= 0 && !Interactive(layout.items[static_cast<std::size_t>(in.focus)]))) {
       in.focus = -1;
@@ -2136,10 +2402,194 @@ struct MainWindow::Impl {
       const bool title = anchor == UiCommand::RenameProfile && it.kind == Kind::Title;
       const bool button = it.action == ItemAction::Command && it.command == anchor && it.index == index;
       if (title || button) {
-        BeginEdit(it.rect, onEnter, index, initial, digitsOnly);
+        D2D1_RECT_F rect = it.rect;
+        if (anchor == UiCommand::CheckRoute) {
+          // Its button is an icon: the address is typed over the line's result.
+          for (const Item& row : layout.items) {
+            if (row.kind == Kind::CheckRow && row.rect.top < it.rect.bottom && row.rect.bottom > it.rect.top) {
+              rect = {row.rect.left + 30 + TitleWidth(row) + kHint + 16, it.rect.top, it.rect.left - 4,
+                      it.rect.bottom};
+            }
+          }
+        }
+        BeginEdit(rect, onEnter, index, initial, digitsOnly);
         return;
       }
     }
+  }
+
+  float TitleWidth(const Item& row) const { return painter.BodyWidth(row.text); }
+
+  // Right-click on an item: what can be done with it - a server, a
+  // configuration, a check, a rule, a program, the exit, a field. The row
+  // under a "?" or a button counts; nothing for the rest.
+  void ItemMenu(POINT screen) {
+    POINT client = screen;
+    ScreenToClient(hwnd, &client);
+    const float x = ToDip(client.x);
+    const float y = ToDip(client.y);
+    const Item* found = nullptr;
+    for (std::size_t i = layout.items.size(); i-- > 0;) {
+      const Item& it = layout.items[i];
+      const bool rowKind = it.kind == Kind::Choice || it.kind == Kind::ProfileRow || it.kind == Kind::CheckRow ||
+                           it.kind == Kind::Switch || it.kind == Kind::AppRow || it.kind == Kind::ExitLine ||
+                           it.kind == Kind::Field;
+      if (rowKind && Contains(it.rect, x, y) && (!it.scrolls || (y >= layout.viewTop && y < layout.viewBottom))) {
+        found = &it;
+        break;
+      }
+    }
+    if (found == nullptr) {
+      return;
+    }
+    const Item item = *found;  // a copy: a command may relayout
+    UiArgs args;
+    args.index = item.index;
+    args.sub = item.sub;
+    args.owner = hwnd;
+    args.anchor = screen;
+    if (item.kind == Kind::ProfileRow && item.action == ItemAction::Command && item.command == UiCommand::RuleMenu) {
+      onCommand(UiCommand::RuleMenu, args);  // a rule's menu is its click's
+      return;
+    }
+
+    wil::unique_hmenu menu(CreatePopupMenu());
+    if (!menu) {
+      return;
+    }
+    const auto add = [&](UINT id, const std::wstring& text, bool enabled = true) {
+      AppendMenuW(menu.get(), enabled ? MF_STRING : MF_STRING | MF_GRAYED, id, text.c_str());
+    };
+    const auto separator = [&] { AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr); };
+    const auto at = [](const auto& list, int i) { return i >= 0 && static_cast<std::size_t>(i) < list.size(); };
+    std::wstring name = item.text;  // what "copy the name" copies
+    std::wstring ip;
+    const UiProfile* profile = nullptr;
+    switch (item.kind) {
+      case Kind::Choice:
+        if (item.command != UiCommand::SetProtocol || !at(content.protocols, item.index)) {
+          return;
+        }
+        name = content.protocols[static_cast<std::size_t>(item.index)];
+        ip = at(content.locations, item.index) ? content.locations[static_cast<std::size_t>(item.index)].ip
+                                                : std::wstring();
+        add(kMenuSelect, L"Подключаться через этот", !item.checked);
+        add(kMenuTestDelays, L"Проверить задержку", content.canTestDelays && !content.delaysTesting);
+        separator();
+        add(kMenuCopyName, L"Копировать имя");
+        add(kMenuCopyIp, ip.empty() ? std::wstring(L"Копировать IP выхода") : L"Копировать IP выхода: " + ip,
+            !ip.empty());
+        break;
+      case Kind::ProfileRow:
+        if (item.action != ItemAction::OpenProfile || !at(content.profiles, item.index)) {
+          return;
+        }
+        profile = &content.profiles[static_cast<std::size_t>(item.index)];
+        add(kMenuOpen, L"Открыть");
+        add(kMenuToggle, profile->enabled ? L"Выключить" : L"Включить");
+        if (profile->subscription) {
+          add(kMenuRefresh, L"Обновить");
+          add(kMenuCopyLink, L"Копировать ссылку");
+        }
+        add(kMenuRename, L"Переименовать");
+        separator();
+        add(kMenuRemove, L"Удалить…");
+        break;
+      case Kind::CheckRow: {
+        const bool running = content.checksRunning;
+        add(kMenuRun,
+            item.sub == static_cast<int>(kCheckSpeed)   ? L"Замерить скорость"
+            : item.sub == static_cast<int>(kCheckRoute) ? L"Проверить адрес…"
+                                                        : L"Проверить снова",
+            !running);
+        separator();
+        add(kMenuCopyResult, L"Копировать результат", item.index > 1);
+        add(kMenuCopyAll, L"Копировать все результаты");
+        break;
+      }
+      case Kind::Switch:
+        if (item.command != UiCommand::ToggleServer) {
+          return;
+        }
+        add(kMenuToggle, item.checked ? L"Выключить сервер" : L"Включить сервер");
+        add(kMenuCopyName, L"Копировать имя");
+        break;
+      case Kind::AppRow:
+        add(kMenuRemove, L"Убрать из списка");
+        add(kMenuCopyName, L"Копировать имя");
+        break;
+      case Kind::ExitLine:
+        add(kMenuCopyIp, L"Копировать IP", !content.exitIp.empty());
+        add(kMenuToggleExitIp, content.hideExitIp ? L"Показывать IP" : L"Скрыть IP");
+        ip = content.exitIp;
+        break;
+      case Kind::Field:
+        add(kMenuCopyValue, L"Копировать «" + item.detail + L"»", !item.detail.empty());
+        break;
+      default: return;
+    }
+    const auto command = static_cast<UINT>(TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                                                          screen.x, screen.y, 0, hwnd, nullptr));
+    switch (command) {
+      case kMenuSelect: onCommand(UiCommand::SetProtocol, args); break;
+      case kMenuTestDelays: onCommand(UiCommand::TestDelays, args); break;
+      case kMenuCopyName: CopyToClipboard(hwnd, name); break;
+      case kMenuCopyIp: CopyToClipboard(hwnd, ip); break;
+      case kMenuCopyValue: CopyToClipboard(hwnd, item.detail); break;
+      case kMenuOpen:
+        if (profile != nullptr) {
+          openProfile = profile->id;
+          Go(UiPage::Profile);
+        }
+        break;
+      case kMenuToggle:
+        onCommand(item.kind == Kind::Switch ? UiCommand::ToggleServer : UiCommand::ToggleProfile, args);
+        break;
+      case kMenuRefresh: onCommand(UiCommand::RefreshProfile, args); break;
+      case kMenuCopyLink: onCommand(UiCommand::CopyProfileLink, args); break;
+      case kMenuRename:
+        if (profile != nullptr) {
+          const std::wstring current = profile->name;
+          openProfile = profile->id;
+          Go(UiPage::Profile);
+          EditOver(UiCommand::RenameProfile, args.index, UiCommand::RenameProfile, current, false);
+        }
+        break;
+      case kMenuRemove:
+        onCommand(item.kind == Kind::AppRow ? UiCommand::RemoveApp : UiCommand::RemoveProfile, args);
+        break;
+      case kMenuRun:
+        args.index = 0;
+        onCommand(item.sub == static_cast<int>(kCheckSpeed)   ? UiCommand::RunSpeed
+                  : item.sub == static_cast<int>(kCheckRoute) ? UiCommand::CheckRoute
+                                                              : UiCommand::RunChecks,
+                  args);
+        break;
+      case kMenuCopyResult:
+        if (at(content.checks, item.sub)) {
+          CopyToClipboard(hwnd, CheckText(content.checks[static_cast<std::size_t>(item.sub)]));
+        }
+        break;
+      case kMenuCopyAll: {
+        std::wstring all;
+        for (const UiCheck& check : content.checks) {
+          all += CheckText(check) + L"\r\n";
+        }
+        CopyToClipboard(hwnd, all);
+        break;
+      }
+      case kMenuToggleExitIp: onCommand(UiCommand::ToggleExitIp, args); break;
+      default: break;
+    }
+  }
+
+  // A check as text: "Утечка DNS: i3D.net (DE) — резолверы не в России."
+  static std::wstring CheckText(const UiCheck& check) {
+    std::wstring text = check.title + L": " + (check.status == UiCheck::Status::NotRun ? L"не проверялось" : check.summary);
+    if (!check.detail.empty()) {
+      text += L" — " + check.detail;
+    }
+    return text;
   }
 
   void Go(UiPage p) {
@@ -2155,7 +2605,8 @@ struct MainWindow::Impl {
 
   void Activate(const Item& item) {
     switch (item.action) {
-      case ItemAction::None: return;
+      case ItemAction::None:
+      case ItemAction::Hint: return;
       case ItemAction::Page: Go(static_cast<UiPage>(item.index)); return;
       case ItemAction::EditName:
         if (item.index >= 0 && static_cast<std::size_t>(item.index) < content.profiles.size()) {
@@ -2350,7 +2801,7 @@ struct MainWindow::Impl {
   void MoveFocus(bool back) {
     std::vector<int> order;
     for (std::size_t i = 0; i < layout.items.size(); ++i) {
-      if (Interactive(layout.items[i])) {
+      if (Interactive(layout.items[i]) && layout.items[i].kind != Kind::Hint) {
         order.push_back(static_cast<int>(i));
       }
     }
@@ -2531,20 +2982,25 @@ struct MainWindow::Impl {
           }
           return 0;
         }
-        const int h = HitAt(at);
-        if (h != in.hover) {
-          in.hover = h;
-          InvalidateRect(w, nullptr, FALSE);
-        }
+        Hover(HitAt(at));
         TRACKMOUSEEVENT tme{sizeof tme, TME_LEAVE, w, 0};
         TrackMouseEvent(&tme);
         return 0;
       }
       case WM_MOUSELEAVE:
         mouse.reset();
-        in.hover = -1;
-        InvalidateRect(w, nullptr, FALSE);
+        Hover(-1);
         return 0;
+      case WM_TIMER:
+        if (wParam == kTipTimer) {
+          KillTimer(w, kTipTimer);
+          if (IsKind(in.hover, Kind::IconButton)) {
+            in.tip = in.hover;
+            InvalidateRect(w, nullptr, FALSE);
+          }
+          return 0;
+        }
+        return DefWindowProcW(w, message, wParam, lParam);
       case WM_LBUTTONDOWN: {
         const POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         SetFocus(w);
@@ -2605,6 +3061,10 @@ struct MainWindow::Impl {
             ClientToScreen(w, &at);
           }
           LogMenu(at);
+          return 0;
+        }
+        if (POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}; at.x != -1 || at.y != -1) {
+          ItemMenu(at);
           return 0;
         }
         return DefWindowProcW(w, message, wParam, lParam);
@@ -2789,6 +3249,14 @@ void MainWindow::AppendLogs(const std::vector<std::wstring>& lines) {
   if (!lines.empty()) {
     impl_->AddLogs(lines, false);
   }
+}
+
+std::wstring DescribeMainWindowLayout(const UiContent& content, UiPage page, float width, float height) {
+  const Painter painter;
+  float scroll = 0;
+  const std::string profile = content.profiles.empty() ? std::string() : content.profiles.front().id;
+  const Layout layout = painter.Build(content, page, profile, width, height, scroll, LogState{});
+  return painter.Describe(layout, width);
 }
 
 void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::vector<std::wstring>& logs, UINT width,
