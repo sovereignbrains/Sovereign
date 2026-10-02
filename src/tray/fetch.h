@@ -16,10 +16,11 @@ struct FetchResult {
 };
 
 // GET over https with WinHTTP (system proxy settings, 10-30 s timeouts, the
-// body capped at kMaxSubscriptionBytes). The error is for the user and never
-// contains the URL - it carries the subscription token. Blocking: call it off
-// the UI thread.
-std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent);
+// body capped at kMaxSubscriptionBytes), with `hwid` as x-hwid when it is
+// one (profiles.h IsHwid). The error is for the user and never contains the
+// URL - it carries the subscription token. Blocking: call it off the UI thread.
+std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent,
+                                                          std::string_view hwid);
 
 // Any other GET over https, same client, the body capped at maxBytes; an
 // error for anything but a 200. Blocking: call it off the UI thread.

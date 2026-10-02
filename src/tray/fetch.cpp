@@ -39,7 +39,7 @@ struct Response {
 std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std::wstring& userAgent,
                                               std::size_t maxBytes, std::initializer_list<const wchar_t*> headerNames,
                                               std::string_view what, const wchar_t* method = L"GET",
-                                              std::string_view body = {}) {
+                                              std::string_view body = {}, const std::wstring& extraHeaders = {}) {
   if (!IsHttpsUrl(url)) {
     return std::unexpected("ссылка должна быть https://");
   }
@@ -75,7 +75,8 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
   }
   // WinHTTP takes the body as non-const; it doesn't write to it.
   auto* data = body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data());
-  if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, data, static_cast<DWORD>(body.size()),
+  if (!WinHttpSendRequest(request.get(), extraHeaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : extraHeaders.c_str(),
+                          extraHeaders.empty() ? 0 : static_cast<DWORD>(-1), data, static_cast<DWORD>(body.size()),
                           static_cast<DWORD>(body.size()), 0) ||
       !WinHttpReceiveResponse(request.get(), nullptr)) {
     return std::unexpected(Failure(std::format("{} не ответил", what)));
@@ -131,9 +132,12 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
 
 }  // namespace
 
-std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent) {
+std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent,
+                                                          std::string_view hwid) {
+  // Only x-hwid: no OS version, no device model - nothing of the machine's.
+  const std::wstring headers = IsHwid(hwid) ? L"x-hwid: " + std::wstring(hwid.begin(), hwid.end()) : std::wstring();
   auto response = HttpsGet(url, userAgent, kMaxSubscriptionBytes, {L"Profile-Update-Interval", L"Profile-Title"},
-                           "сервер подписки");
+                           "сервер подписки", L"GET", {}, headers);
   if (!response) {
     return std::unexpected(response.error());
   }

@@ -46,6 +46,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -104,10 +105,13 @@ constexpr UINT kMenuLogs = 3;
 constexpr UINT kMenuExit = 4;
 constexpr std::size_t kMenuMaxItems = 250;
 
-// What the subscription server sees: Sovereign runs the official sing-box core
-// (no Mieru), so servers that pick a format by User-Agent - packetlab's does -
-// give it the plain sing-box one. The version is the pinned core's.
-constexpr wchar_t kUserAgent[] = L"Sovereign/" SOVEREIGN_VERSION_W L" (sing-box " SOVEREIGN_SINGBOX_VERSION_W L")";
+// What every server the tray talks to sees - subscription panels first: the
+// core and its version, as the official sing-box apps put it, and nothing of
+// Sovereign's own. A client name that only one person uses would tie that
+// person together across every panel; "sing-box 1.x.y" is what panels pick
+// the format by (packetlab's: the plain one, no Mieru; the version for the
+// DNS format). The version is the pinned core's.
+constexpr wchar_t kUserAgent[] = L"sing-box " SOVEREIGN_SINGBOX_VERSION_W;
 
 // After a failed refresh, when to try again (the old config keeps working).
 constexpr std::chrono::minutes kRefreshRetry{30};
@@ -703,6 +707,18 @@ class Worker {
     notes.insert(notes.end(), combined.notes.begin(), combined.notes.end());
     combineNotes_ = std::move(notes);
     if (combined.config) {
+      // The subscription servers through the proxy, ahead of every rule - a
+      // Russian one too, and one the user sends directly: a panel sees the
+      // proxy's address, not the user's. (With the box off a fetch goes
+      // directly; nothing to route it through then.)
+      const auto hosts = sovereign::tray::SubscriptionHosts(settings_.profiles);
+      std::string list;
+      for (const std::string& host : hosts) {
+        list += (list.empty() ? "" : ", ") + host;
+      }
+      if (auto viaProxy = sovereign::tray::ParseRule(list, sovereign::tray::RouteRule::Action::Proxy)) {
+        routing.rules.insert(routing.rules.begin(), std::move(*viaProxy));
+      }
       // The client's rules first in whatever runs (routing.h).
       combined.config = sovereign::tray::ApplyRouting(*combined.config, routing, ruleFiles_);
     }
@@ -937,6 +953,17 @@ class Worker {
     sovereign::tray::SaveConfig(dir, text);
   }
 
+  // A configuration's x-hwid (profiles.h): 128 random bits, nothing of the
+  // machine's. std::random_device is the system's CSPRNG with MSVC (rand_s).
+  static std::string NewHwid() {
+    std::random_device random;
+    std::string hwid;
+    for (int i = 0; i < 4; ++i) {
+      hwid += std::format("{:08x}", random());
+    }
+    return hwid;
+  }
+
   // Fetches configuration `id`'s subscription into its folder. False, with
   // the reason in its runtime error, if nothing usable came.
   bool Refresh(const std::string& id, RefreshReason reason) {
@@ -946,7 +973,11 @@ class Worker {
       return false;
     }
     ProfileRuntime& state = runtime_[id];
-    auto fetched = sovereign::tray::FetchSubscription(Widen(profile->url), kUserAgent);
+    if (!sovereign::tray::IsHwid(profile->hwid)) {
+      profile->hwid = NewHwid();
+      Save();  // the same device to the panel from now on, even if this fetch fails
+    }
+    auto fetched = sovereign::tray::FetchSubscription(Widen(profile->url), kUserAgent, profile->hwid);
     std::string error;
     sovereign::tray::ConfigCheck check;
     if (!fetched) {

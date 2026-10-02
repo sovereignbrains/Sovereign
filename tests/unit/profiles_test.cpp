@@ -12,6 +12,7 @@
 
 #include "check.h"
 #include "profiles.h"
+#include "routing.h"
 #include "share_links.h"
 
 namespace {
@@ -136,6 +137,55 @@ void TestJson() {
       nlohmann::json::parse(R"([{"id":"p1","name":"A","url":""},{"id":"p2","name":"B","url":""}])"), "p2");
   CHECK(legacy.size() == 2 && !legacy[0].enabled && legacy[1].enabled);
 }
+
+// x-hwid: kept as it was made, anything else in tray.json dropped (a new one
+// is made at the next fetch).
+void TestHwid() {
+  const std::string hwid = "0123456789abcdef0123456789abcdef";
+  CHECK(IsHwid(hwid));
+  CHECK(!IsHwid(""));
+  CHECK(!IsHwid(hwid.substr(1)));
+  CHECK(!IsHwid(hwid + "0"));
+  CHECK(!IsHwid("0123456789ABCDEF0123456789ABCDEF"));
+  CHECK(!IsHwid("0123456789abcdef0123456789abcde\n"));
+
+  auto profiles = Three();
+  profiles[0].hwid = hwid;
+  const auto back = ProfilesFromJson(nlohmann::json::parse(ProfilesToJson(profiles).dump()));
+  CHECK(back.size() == 3 && back[0].hwid == hwid && back[1].hwid.empty());
+
+  const auto read = ProfilesFromJson(nlohmann::json::parse(R"([
+    {"id":"p1","name":"A","url":"","hwid":"0123456789abcdef0123456789abcdef"},
+    {"id":"p2","name":"B","url":"","hwid":"x-hwid: injected\r\nEvil: 1"},
+    {"id":"p3","name":"C","url":"","hwid":12}
+  ])"));
+  CHECK(read.size() == 3 && read[0].hwid == hwid && read[1].hwid.empty() && read[2].hwid.empty());
+}
+
+// The hosts routed through the proxy: no port, no user info, no path, each once.
+void TestSubscriptionHosts() {
+  const std::vector<Profile> profiles = {
+      Make("p1", "A", "https://Sub.Example.com:8443/s/token?x=1"),
+      Make("p2", "B"),  // keys of the user's own: no host
+      Make("p3", "C", "https://user:pass@panel.example.ru/sub#frag"),
+      Make("p4", "D", "https://sub.example.com/other"),
+      Make("p5", "E", "https://203.0.113.7:2096/sub"),
+      Make("p6", "F", "https://[2001:db8::1]:443/sub"),
+      Make("p7", "G", "not a link"),
+  };
+  CHECK(SubscriptionHosts(profiles) ==
+        std::vector<std::string>({"sub.example.com", "panel.example.ru", "203.0.113.7", "2001:db8::1"}));
+  CHECK(SubscriptionHosts({}).empty());
+
+  // As the tray makes them a rule (main.cpp): names and addresses told apart.
+  const auto rule = ParseRule("sub.example.com, panel.example.ru, 203.0.113.7, 2001:db8::1", RouteRule::Action::Proxy);
+  CHECK(rule.has_value());
+  if (rule) {
+    CHECK(rule->action == RouteRule::Action::Proxy);
+    CHECK(rule->domains == std::vector<std::string>({"sub.example.com", "panel.example.ru"}));
+    CHECK(rule->ips == std::vector<std::string>({"203.0.113.7/32", "2001:db8::1/128"}));
+  }
+}
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
@@ -145,6 +195,8 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestFind();
     TestServers();
     TestJson();
+    TestHwid();
+    TestSubscriptionHosts();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 1;

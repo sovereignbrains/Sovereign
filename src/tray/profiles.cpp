@@ -135,6 +135,41 @@ bool IsServerEnabled(const Profile& profile, std::string_view tag) {
   return std::find(profile.disabled.begin(), profile.disabled.end(), tag) == profile.disabled.end();
 }
 
+bool IsHwid(std::string_view hwid) {
+  return hwid.size() == 32 && std::all_of(hwid.begin(), hwid.end(), [](char c) {
+           return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+         });
+}
+
+std::vector<std::string> SubscriptionHosts(const std::vector<Profile>& profiles) {
+  std::vector<std::string> hosts;
+  for (const Profile& p : profiles) {
+    const std::string_view url = p.url;
+    const std::size_t scheme = url.find("://");
+    if (scheme == std::string_view::npos) {
+      continue;
+    }
+    std::string_view host = url.substr(scheme + 3);
+    host = host.substr(0, host.find_first_of("/?#"));
+    if (const std::size_t at = host.rfind('@'); at != std::string_view::npos) {
+      host.remove_prefix(at + 1);
+    }
+    if (host.starts_with('[')) {  // an IPv6 literal: [::1]:443
+      const std::size_t close = host.find(']');
+      host = close == std::string_view::npos ? std::string_view() : host.substr(1, close - 1);
+    } else {
+      host = host.substr(0, host.find(':'));
+    }
+    std::string name(host);
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; });
+    if (!name.empty() && std::find(hosts.begin(), hosts.end(), name) == hosts.end()) {
+      hosts.push_back(std::move(name));
+    }
+  }
+  return hosts;
+}
+
 nlohmann::json ProfilesToJson(const std::vector<Profile>& profiles) {
   nlohmann::json list = nlohmann::json::array();
   for (const Profile& p : profiles) {
@@ -147,7 +182,8 @@ nlohmann::json ProfilesToJson(const std::vector<Profile>& profiles) {
                     {"updateHours", p.updateHours},
                     {"autoUpdate", p.autoUpdate},
                     {"userHours", p.userHours},
-                    {"disabled", p.disabled}});
+                    {"disabled", p.disabled},
+                    {"hwid", p.hwid}});
   }
   return list;
 }
@@ -202,6 +238,9 @@ std::vector<Profile> ProfilesFromJson(const nlohmann::json& json, std::string_vi
           p.disabled.push_back(tag.get<std::string>());
         }
       }
+    }
+    if (const auto hwid = text(entry, "hwid"); hwid && IsHwid(*hwid)) {
+      p.hwid = *hwid;  // anything else: a new one at the next fetch
     }
     if (p.name.empty()) {
       p.name = UniqueProfileName(profiles, "Конфиг");

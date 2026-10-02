@@ -28,7 +28,19 @@ struct Profile {
   bool autoUpdate = true;        // refreshed on its interval; off: only by hand
   int userHours = 0;             // the interval the user set; 0 = the server's (updateHours)
   std::vector<std::string> disabled;  // tags of its servers switched off
+  std::string hwid;  // the x-hwid its subscription gets: random, its own (IsHwid); empty until the first fetch
 };
+
+// What a subscription server is told the device is (x-hwid, which panels
+// with a device limit want): random per configuration, never the machine's -
+// two subscriptions can't be tied together by it, and a refresh is the same
+// device to the panel. 32 hex digits, as the random bytes are made by the tray.
+bool IsHwid(std::string_view hwid);
+
+// The hosts of the subscriptions (names or address literals, without port),
+// each once: the tray's rules send them through the proxy, so a panel sees
+// the proxy's address, not the user's.
+std::vector<std::string> SubscriptionHosts(const std::vector<Profile>& profiles);
 
 // How often a subscription is refreshed: the user's interval, else the server's.
 inline int RefreshHours(const Profile& p) { return p.userHours > 0 ? p.userHours : p.updateHours; }
