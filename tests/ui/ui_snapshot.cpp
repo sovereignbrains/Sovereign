@@ -127,7 +127,7 @@ int Snapshots(const std::wstring& dir) {
   const UiContent content = SampleContent();
   const std::vector<std::wstring> logs = SampleLogs();
   constexpr const wchar_t* kNames[sovereign::tray::kUiPageCount] = {L"overview", L"servers", L"subscription",
-                                                                     L"apps",     L"logs",    L"settings"};
+                                                                     L"logs", L"settings"};
   CreateDirectoryW(dir.c_str(), nullptr);
   for (int p = 0; p < sovereign::tray::kUiPageCount; ++p) {
     const std::wstring path = dir + L"\\" + kNames[p] + L".png";
@@ -326,10 +326,9 @@ int LayoutTest(const std::wstring& dir) {
   routed.routing.warp = true;
   routed.routing.warpRegistered = true;
   routed.routing.warpAddress = L"172.16.0.2";
-  const std::array<std::pair<UiPage, const wchar_t*>, 9> pages = {{{UiPage::Overview, L"overview"},
+  const std::array<std::pair<UiPage, const wchar_t*>, 8> pages = {{{UiPage::Overview, L"overview"},
                                                                    {UiPage::Servers, L"servers"},
                                                                    {UiPage::Subscription, L"subscription"},
-                                                                   {UiPage::Apps, L"apps"},
                                                                    {UiPage::Logs, L"logs"},
                                                                    {UiPage::Settings, L"settings"},
                                                                    {UiPage::Profile, L"profile"},

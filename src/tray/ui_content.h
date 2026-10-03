@@ -152,9 +152,9 @@ struct UiContent {
 
 // The window's pages: the overview, and the ones it opens (back with Esc).
 // Profile: one configuration's page, opened from the list on Subscription.
-// Routing: where traffic goes and DNS, opened from its tile.
-enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Apps, Logs, Settings, Profile, Routing, Checks };
-inline constexpr int kUiPageCount = 6;  // the ones Ctrl+1..6 open: all but Profile and Routing
+// Routing: where traffic goes and DNS - the per-app list too.
+enum class UiPage : std::uint8_t { Overview, Servers, Subscription, Logs, Settings, Profile, Routing, Checks };
+inline constexpr int kUiPageCount = 5;  // the ones Ctrl+1..5 open: Overview to Settings
 
 enum class UiCommand : std::uint8_t {
   Toggle,
@@ -173,7 +173,7 @@ enum class UiCommand : std::uint8_t {
   ToggleServer,      // sub: index into its servers
   // The routing's:
   SetRoutingSource,   // index: 0 the client's own, 1 a configuration's
-  SetRoutingProfile,  // index into profiles: its routing
+  ChooseRoutingProfile,  // anchor: the menu of enabled configurations whose routing to use
   ToggleRussiaDirect,
   ToggleBlockAds,
   ToggleBlockQuic,

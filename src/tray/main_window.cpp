@@ -416,14 +416,10 @@ std::wstring RoutingLine(const UiContent& c) {
   if (!c.routing.rules.empty()) {
     line += std::format(L" · правил: {}", c.routing.rules.size());
   }
-  return line;
-}
-
-std::wstring AppsLine(const UiContent& c) {
-  if (c.apps.empty()) {
-    return c.appsInclude ? L"только список — он пуст" : L"всё через прокси";
+  if (!c.apps.empty()) {
+    line += std::format(L" · программы: {} {}", c.appsInclude ? L"только" : L"кроме", c.apps.size());
   }
-  return std::format(L"{} {}", c.appsInclude ? L"только" : L"всё, кроме", c.apps.size());
+  return line;
 }
 
 std::wstring UpdateStatus(const UiContent& c) {
@@ -591,7 +587,6 @@ class Painter {
       case UiPage::Overview: y = Overview(l, c, x0, x1, y, l.viewBottom - kPad); break;
       case UiPage::Servers: y = Servers(l, c, x0, x1, y); break;
       case UiPage::Subscription: y = Subscription(l, c, x0, x1, y); break;
-      case UiPage::Apps: y = Apps(l, c, x0, x1, y); break;
       case UiPage::Logs: y = Logs(l, c, logState, x0, x1, y, height); break;
       case UiPage::Settings: y = Settings(l, c, x0, x1, y); break;
       case UiPage::Profile: y = ProfilePage(l, c, profile, x0, x1, y); break;
@@ -1225,10 +1220,9 @@ class Painter {
       std::wstring state;
       bool dot;
     };
-    const std::array<Entry, 6> entries = {{
+    const std::array<Entry, 5> entries = {{
         {kGlyphSync, L"Конфиги", UiPage::Subscription, L"Конфигурации: " + SubscriptionLine(c), AnyWaiting(c)},
         {kGlyphRoute, L"Маршруты", UiPage::Routing, L"Маршруты и DNS: " + RoutingLine(c), c.routing.listsFailed},
-        {kGlyphProgram, L"Программы", UiPage::Apps, L"Приложения: " + AppsLine(c), false},
         {kGlyphShield, L"Проверка", UiPage::Checks, L"Проверка: " + ChecksLine(c), false},
         {kGlyphLog, L"Журнал", UiPage::Logs,
          c.display == Display::Error ? std::wstring(L"Журнал: есть ошибка") : std::wstring(L"Журнал ядра и трея"),
@@ -1547,43 +1541,33 @@ class Painter {
                   L"работают первыми, что бы ни было в подписках.");
     const float mid = (x0 + x1) / 2;
 
-    // Whose routing.
-    y = Heading(l, L"Источник", x0, x1, y,
-                L"«Свои» — TUN, DNS и маршруты строит Sovereign, из конфигураций берутся только серверы.\n\n"
-                L"«Из подписки» — DNS и маршруты выбранной конфигурации; переключатели и свои правила отсюда "
-                L"всё равно стоят перед её правилами.");
-    Item own = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Свои", nullptr, UiCommand::SetRoutingSource, 0);
-    own.checked = r.own;
-    Item sub = CommandItem(Kind::Segment, {mid + 4, y, x1, y + 36}, L"Из подписки", nullptr,
-                           UiCommand::SetRoutingSource, 1);
-    sub.checked = !r.own;
-    l.items.push_back(std::move(own));
-    l.items.push_back(std::move(sub));
-    y += 36 + 8;
+    // The subscription's routing instead of the client's own: one switch, and
+    // which configuration's when it's on.
+    y = Switches(l,
+                 {Row(L"Правила из подписки",
+                      L"Выключено — TUN, DNS и маршруты строит Sovereign, из подписок берутся только серверы.\n\n"
+                      L"Включено — DNS и маршруты выбранной подписки; переключатели, приложения и свои правила "
+                      L"отсюда всё равно стоят перед её правилами.",
+                      !r.own, UiCommand::SetRoutingSource, {}, r.own ? 1 : 0)},
+                 x0, x1, y);
     if (!r.own) {
-      std::vector<std::size_t> on;
-      for (std::size_t i = 0; i < c.profiles.size(); ++i) {
-        if (c.profiles[i].enabled) {
-          on.push_back(i);
-        }
+      std::wstring chosen;
+      bool any = false;
+      for (const UiProfile& p : c.profiles) {
+        any = any || p.enabled;
+        chosen = p.enabled && p.id == r.sourceProfile ? p.name : chosen;
       }
-      if (on.empty()) {
-        y = Paragraph(l, Kind::Caption, L"Ни одна конфигурация не включена — работают свои маршруты.", x0, x1, y) + 4;
+      if (!any) {
+        y = Paragraph(l, Kind::Caption, L"Ни одна конфигурация не включена — работают свои маршруты.", x0 + 4, x1,
+                      y + 6);
       } else {
-        const float h = static_cast<float>(on.size()) * kRow;
-        l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-        for (std::size_t n = 0; n < on.size(); ++n) {
-          const float top = y + static_cast<float>(n) * kRow;
-          if (n > 0) {
-            l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-          }
-          const UiProfile& p = c.profiles[on[n]];
-          Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kRow - 3}, p.name, nullptr,
-                                    UiCommand::SetRoutingProfile, static_cast<int>(on[n]));
-          choice.checked = p.id == r.sourceProfile;
-          l.items.push_back(std::move(choice));
-        }
-        y += h;
+        Item which = CommandItem(Kind::ValueRow, {x0, y + 8, x1, y + 8 + kRow}, L"Подписка", nullptr,
+                                 UiCommand::ChooseRoutingProfile);
+        which.detail = chosen.empty() ? std::wstring(L"выбрать") : chosen;
+        l.items.push_back(Make(Kind::Card, which.rect));
+        which.rect = {x0 + 4, which.rect.top + 2, x1 - 4, which.rect.bottom - 2};
+        l.items.push_back(std::move(which));
+        y += 8 + kRow;
       }
     }
     y += kGap + 4;
@@ -1681,7 +1665,8 @@ class Painter {
                                   UiCommand::AddRule));
     l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Из подписки…", kGlyphDownload,
                                   UiCommand::ImportRules));
-    return y + kButton;
+    y += kButton + kGap + 4;
+    return Apps(l, c, x0, x1, y);
   }
 
   // The checks: what the internet sees, leaks, the local network, DNS, and -
@@ -1742,10 +1727,11 @@ class Painter {
     return y + h;
   }
 
+  // The per-app list - a section of Routing: which programs go through the proxy.
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = PageTitle(l, L"Приложения", nullptr, x0, x1, y, UiPage::Overview,
-                  L"Какие программы идут через прокси. Имена — как у exe-файла, без пути: правило ловит программу, "
-                  L"где бы она ни лежала.");
+    y = Heading(l, L"Приложения", x0, x1, y,
+                L"Какие программы идут через прокси. Имена — как у exe-файла, без пути: правило ловит программу, "
+                L"где бы она ни лежала.");
     const float mid = (x0 + x1) / 2;
     Item except = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Все, кроме списка", nullptr,
                               UiCommand::SetAppsMode, 0);
@@ -1754,12 +1740,12 @@ class Painter {
     only.checked = c.appsInclude;
     l.items.push_back(std::move(except));
     l.items.push_back(std::move(only));
-    y += 36 + 12;
-    y = Paragraph(l, Kind::Wrap,
+    y += 36 + 6;
+    y = Paragraph(l, Kind::Caption,
                   c.appsInclude ? L"Через прокси идут только программы из списка, остальной трафик — напрямую."
                                 : L"Весь трафик идёт через прокси, кроме программ из списка — они ходят напрямую.",
-                  x0, x1, y) +
-        kGap;
+                  x0 + 4, x1, y) +
+        8;
 
     if (c.apps.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));

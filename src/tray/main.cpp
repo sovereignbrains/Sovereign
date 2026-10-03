@@ -2866,11 +2866,22 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::SetRoutingSource:
       send(What::Source, args.index == 1);
       break;
-    case UiCommand::SetRoutingProfile:
-      if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.profiles.size()) {
-        send(What::SourceProfile, true, 0, 0, view.profiles[static_cast<std::size_t>(args.index)].id);
+    case UiCommand::ChooseRoutingProfile: {
+      std::vector<std::wstring> names;
+      std::vector<std::string> ids;
+      int current = -1;
+      for (const auto& p : view.profiles) {
+        if (p.enabled) {
+          current = p.id == r.sourceProfile ? static_cast<int>(ids.size()) : current;
+          names.push_back(Widen(p.name));
+          ids.push_back(p.id);
+        }
+      }
+      if (const auto picked = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, current)) {
+        send(What::SourceProfile, true, 0, 0, ids[*picked]);
       }
       break;
+    }
     case UiCommand::ToggleRussiaDirect: send(What::RussiaDirect, !r.russiaDirect); break;
     case UiCommand::ToggleBlockAds: send(What::BlockAds, !r.blockAds); break;
     case UiCommand::ToggleBlockQuic: send(What::BlockQuic, !r.blockQuic); break;
@@ -2993,7 +3004,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       StartChecks({sovereign::tray::CheckId::Route}, Narrow(args.text));
       break;
     case UiCommand::SetRoutingSource:
-    case UiCommand::SetRoutingProfile:
+    case UiCommand::ChooseRoutingProfile:
     case UiCommand::ToggleRussiaDirect:
     case UiCommand::ToggleBlockAds:
     case UiCommand::ToggleBlockQuic:
