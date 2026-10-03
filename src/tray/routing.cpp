@@ -30,14 +30,16 @@ constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kGeositeBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/";
 constexpr std::string_view kGeoipBase = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/";
 
-// A blocked name answered "no such domain". sing-box's DNS "reject" answers
-// REFUSED, which Windows' resolver takes for a broken server and asks again
-// for ~11 s before giving up - every blocked ad host stalled whatever needed it.
-void SetNxDomain(Json& rule) {
+// A blocked name answered "no addresses" (NOERROR, no records). Not REFUSED,
+// not NXDOMAIN: Windows asks every adapter's DNS at once and, on a negative
+// answer from the tunnel's, waits for the Wi-Fi's - which strict routing
+// blocks - for ~11 s (measured 03.10.2026, both rcodes alike); an answer with
+// no addresses it takes at once. Every blocked ad host used to stall
+// whatever waited for it.
+void SetNoAddress(Json& rule) {
   rule["action"] = "predefined";
-  rule["rcode"] = "NXDOMAIN";
+  rule["rcode"] = "NOERROR";
 }
-
 std::string Lower(std::string_view text) {
   std::string out(text);
   std::transform(out.begin(), out.end(), out.begin(),
@@ -662,7 +664,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       rule["domain_keyword"] = r.keywords;
     }
     if (r.action == RouteRule::Action::Block) {
-      SetNxDomain(rule);
+      SetNoAddress(rule);
     } else if (r.action == RouteRule::Action::Direct) {
       rule["server"] = kLocalDns;
     } else {
@@ -672,7 +674,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   }
   if (settings.blockAds && lists.contains(std::string(kAds))) {
     Json ads{{"rule_set", kAds}};
-    SetNxDomain(ads);
+    SetNoAddress(ads);
     dnsRules.push_back(std::move(ads));
   }
   if (settings.russiaDirect) {
