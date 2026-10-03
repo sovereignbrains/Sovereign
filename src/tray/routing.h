@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
@@ -64,8 +65,13 @@ struct RoutingSettings {
 // The WARP endpoint's tag in the config.
 inline constexpr std::string_view kWarpTag = "warp";
 
-// Whether the box gets the WARP endpoint: on, and registered.
-inline bool WarpReady(const RoutingSettings& s) { return s.warp && s.warpAccount.has_value(); }
+// Whether the box gets the WARP endpoint: on, registered, and some rule
+// sends sites to it - an endpoint nobody uses only keeps a tunnel up for
+// nothing (and over the proxy it broke every 5 min idle, filling the log).
+inline bool WarpReady(const RoutingSettings& s) {
+  return s.warp && s.warpAccount.has_value() &&
+         std::any_of(s.rules.begin(), s.rules.end(), [](const RouteRule& r) { return r.action == RouteRule::Action::Warp; });
+}
 
 // tray.json's "routing", read defensively (a wrong field keeps its default).
 nlohmann::json RoutingToJson(const RoutingSettings& settings);

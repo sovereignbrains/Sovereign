@@ -361,6 +361,12 @@ void TestWarp() {
   // "Только IPv4" stays what it says, WARP or not.
   CHECK(c["dns"]["strategy"] == "ipv4_only");
 
+  // On, but no site sent to it: no endpoint - a tunnel nobody uses isn't kept up.
+  RoutingSettings unused = s;
+  unused.rules.clear();
+  const json idle = json::parse(ApplyRouting(on.config.value_or("{}"), unused, Files()));
+  CHECK(!idle.contains("endpoints") || idle["endpoints"].empty());
+
   // Directly: no detour.
   s.warpViaProxy = false;
   const json d = json::parse(ApplyRouting(on.config.value_or("{}"), s, Files()));

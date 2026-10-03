@@ -90,6 +90,8 @@ void TestRegistration() {
     CHECK(endpoint["peers"][0]["address"] == "engage.cloudflareclient.com" && endpoint["peers"][0]["port"] == 2408);
     CHECK(endpoint["peers"][0]["reserved"] == nlohmann::ordered_json::array({0x21, 0xEE, 0x10}));
     CHECK(!WarpEndpoint(*account, "warp", "").contains("detour"));
+  // Kept alive: over the proxy an idle tunnel's UDP session was closed every 5 min.
+  CHECK(endpoint["peers"][0]["persistent_keepalive_interval"] == 25);
   }
 
   // What isn't an account.

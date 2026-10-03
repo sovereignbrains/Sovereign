@@ -164,7 +164,11 @@ nlohmann::ordered_json WarpEndpoint(const WarpAccount& account, std::string_view
                     {"port", account.port},
                     {"public_key", account.peerKey},
                     {"allowed_ips", nlohmann::ordered_json::array({"0.0.0.0/0", "::/0"})},
-                    {"reserved", account.reserved}}})}};
+                    {"reserved", account.reserved},
+                    // Over the proxy its UDP is a session on the server, closed after 5 min
+                    // idle (sing-box's udp_timeout): the tunnel broke and reconnected every 5 min
+                    // (seen 03.10.2026). WireGuard's usual keepalive behind NAT keeps it open.
+                    {"persistent_keepalive_interval", kWarpKeepaliveSeconds}}})}};
   if (!detour.empty()) {
     endpoint["detour"] = detour;
   }

@@ -32,6 +32,7 @@ struct WarpAccount {
 inline constexpr std::string_view kWarpRegisterUrl = "https://api.cloudflareclient.com/v0a2158/reg";
 inline constexpr std::string_view kWarpUserAgent = "okhttp/3.12.1";
 inline constexpr std::string_view kWarpClientVersion = "a-6.10-2158";  // CF-Client-Version
+inline constexpr int kWarpKeepaliveSeconds = 25;  // WireGuard's usual behind NAT (WarpEndpoint)
 
 // The registration's body: the public key (base64) and the time the terms
 // were accepted ("2026-10-02T12:00:00.000Z").
