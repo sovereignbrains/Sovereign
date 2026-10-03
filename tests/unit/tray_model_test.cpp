@@ -21,7 +21,13 @@ using namespace std::chrono_literals;
 const TrayModel::Clock::time_point t0{};
 
 Stats Running(std::int64_t down, std::int64_t up, std::int64_t generation = 1) {
-  return Stats{.running = true, .uplinkBytes = up, .downlinkBytes = down, .connections = 2, .generation = generation};
+  Stats stats;
+  stats.running = true;
+  stats.uplinkBytes = up;
+  stats.downlinkBytes = down;
+  stats.connections = 2;
+  stats.generation = generation;
+  return stats;
 }
 
 const Stats kStopped{};
