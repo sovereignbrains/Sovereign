@@ -29,7 +29,7 @@ const Stats kStopped{};
 void TestStartsWhenWantedAndServiceUp() {
   TrayModel m(true);
   CHECK(m.OnPoll(std::nullopt, t0) == Action::None);  // no service yet
-  CHECK(m.GetDisplay() == Display::ServiceDown);
+  CHECK(m.GetDisplay() == Display::Starting);           // not an error for the first seconds
 
   CHECK(m.OnPoll(kStopped, t0 + 1s) == Action::Start);
   CHECK(m.GetDisplay() == Display::Starting);
@@ -72,8 +72,34 @@ void TestServiceRestartRestartsTheBox() {
   m.OnStartResult("", t0);
   m.OnPoll(Running(0, 0), t0 + 1s);
   CHECK(m.OnPoll(std::nullopt, t0 + 2s) == Action::None);  // service restarting
-  CHECK(m.GetDisplay() == Display::ServiceDown);
+  CHECK(m.GetDisplay() == Display::Starting);               // a few seconds: no alarm
   CHECK(m.OnPoll(kStopped, t0 + 3s) == Action::Start);      // back, box gone: start again
+}
+
+// The service away (an update, a restart): "connecting" - or "off" when the
+// user turned it off - for kServiceGrace, "not running" only after that; an
+// answer in between starts the count over.
+void TestServiceDownOnlyAfterGrace() {
+  const auto grace = TrayModel::kServiceGrace;
+  TrayModel m(true);
+  CHECK(m.GetDisplay() == Display::Starting);  // before the first poll
+  m.OnPoll(std::nullopt, t0);
+  m.OnPoll(std::nullopt, t0 + grace - 1s);
+  CHECK(m.GetDisplay() == Display::Starting);
+  m.OnPoll(std::nullopt, t0 + grace);
+  CHECK(m.GetDisplay() == Display::ServiceDown);
+
+  m.OnPoll(kStopped, t0 + grace + 1s);  // back
+  m.OnPoll(std::nullopt, t0 + grace + 2s);
+  CHECK(m.GetDisplay() == Display::Starting);  // away again: counted anew
+  m.OnPoll(std::nullopt, t0 + 2 * grace + 2s);
+  CHECK(m.GetDisplay() == Display::ServiceDown);
+
+  TrayModel off(false);
+  off.OnPoll(std::nullopt, t0);
+  CHECK(off.GetDisplay() == Display::Off);
+  off.OnPoll(std::nullopt, t0 + grace);
+  CHECK(off.GetDisplay() == Display::ServiceDown);
 }
 
 void TestOffStopsOnceAndStaysOff() {
@@ -157,6 +183,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestRates();
     TestFailedStartRetriesAfterBackoff();
     TestServiceRestartRestartsTheBox();
+    TestServiceDownOnlyAfterGrace();
     TestOffStopsOnceAndStaysOff();
     TestOffWhileServiceDownDoesNothing();
     TestAlreadyStartedElsewhereCountsAsOn();

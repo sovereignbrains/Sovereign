@@ -200,7 +200,9 @@ std::wstring FormatLogLine(const sovereign::tray::LogLine& line) {
 
 // What the UI thread draws; the worker publishes a fresh copy after each poll.
 struct View {
-  Display display = Display::ServiceDown;
+  // Before the worker's first poll nothing is known: "connecting", not "the
+  // service isn't running" (TrayModel says that only after kServiceGrace).
+  Display display = Display::Starting;
   bool wantOn = false;
   double down = 0;
   double up = 0;

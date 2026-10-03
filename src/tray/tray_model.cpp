@@ -18,12 +18,18 @@ Action TrayModel::SetWantOn(bool on, Clock::time_point now) {
 Action TrayModel::OnPoll(const std::optional<Stats>& stats, Clock::time_point now) {
   if (!stats) {
     serviceUp_ = false;
+    if (!downSince_) {
+      downSince_ = now;
+    }
+    downLong_ = now - *downSince_ >= kServiceGrace;
     last_.reset();
     lastAt_.reset();
     downRate_ = upRate_ = 0;
     return Action::None;
   }
   serviceUp_ = true;
+  downSince_.reset();
+  downLong_ = false;
 
   // A rate needs two samples of the same running box: a new generation means
   // the counters restarted from zero.
@@ -74,7 +80,10 @@ void TrayModel::OnStopResult(const std::string& error) {
 
 Display TrayModel::GetDisplay() const {
   if (!serviceUp_) {
-    return Display::ServiceDown;
+    if (downLong_) {
+      return Display::ServiceDown;
+    }
+    return wantOn_ ? Display::Starting : Display::Off;  // a few seconds away: an update, a restart
   }
   if (last_ && last_->running) {
     return Display::On;

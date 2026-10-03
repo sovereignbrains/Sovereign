@@ -50,6 +50,11 @@ class TrayModel {
  public:
   using Clock = std::chrono::steady_clock;
   static constexpr std::chrono::seconds kRetryAfter{15};
+  // How long the service may not answer before the tray says it isn't running:
+  // an update or a restart takes it away for a few seconds (the installer
+  // stops it, replaces the files, starts it - the tray often comes up first).
+  // Until then: connecting (or off, if the user turned it off).
+  static constexpr std::chrono::seconds kServiceGrace{15};
 
   explicit TrayModel(bool wantOn) : wantOn_(wantOn) {}
 
@@ -83,6 +88,8 @@ class TrayModel {
 
   bool wantOn_;
   bool serviceUp_ = false;
+  std::optional<Clock::time_point> downSince_;  // the first poll it didn't answer, since it last did
+  bool downLong_ = false;                       // ...and that was kServiceGrace ago or more
   bool startInFlight_ = false;
   std::optional<Clock::time_point> retryAt_;
   std::optional<Stats> last_;
