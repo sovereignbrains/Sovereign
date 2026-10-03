@@ -25,6 +25,14 @@ target_link_libraries(unit-control-concurrency PRIVATE sovereign_service_lib)
 sovereign_copy_asan_runtime(unit-control-concurrency)
 add_test(NAME unit-control-concurrency COMMAND unit-control-concurrency)
 
+# The tray's logic raced by threads (tests/tsan/tray_stress_test.cpp): its
+# results under MSVC and ASan here, data races in the tsan job.
+add_executable(unit-tray-concurrency "${CMAKE_SOURCE_DIR}/tests/tsan/tray_stress_test.cpp" check.h)
+target_include_directories(unit-tray-concurrency PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(unit-tray-concurrency PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-tray-concurrency)
+add_test(NAME unit-tray-concurrency COMMAND unit-tray-concurrency)
+
 add_executable(unit-tray-model tray_model_test.cpp check.h)
 target_link_libraries(unit-tray-model PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-tray-model)

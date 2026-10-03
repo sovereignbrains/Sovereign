@@ -8,7 +8,9 @@
 # What's in it is exactly what is shared between threads in the service:
 # ControlHandler (the pipe thread and the SCM's power-event thread) and LogRing
 # (the core's threads append, the pipe thread reads). Their unit tests run too,
-# and stress_test.cpp makes all of those threads race each other. The Windows
+# and stress_test.cpp makes all of those threads race each other. And the
+# tray's portable logic - TrayModel, the log page parser, the app rules:
+# tray_stress_test.cpp races them the way the tray's threads use them. The Windows
 # jobs hold the code to /W4 /WX; here warnings are shown, not fatal - this
 # build is about data races.
 cmake_minimum_required(VERSION 3.28)
@@ -43,6 +45,24 @@ add_executable(tsan-stress stress_test.cpp)
 target_link_libraries(tsan-stress PRIVATE control_plane)
 add_test(NAME tsan-stress COMMAND tsan-stress)
 
+add_library(tray_logic STATIC
+  "${root}/src/tray/tray_model.cpp"
+  "${root}/src/tray/log_lines.cpp"
+  "${root}/src/tray/app_rules.cpp")
+target_include_directories(tray_logic PUBLIC "${root}/src/tray" "${root}/tests/unit")
+target_link_libraries(tray_logic PUBLIC nlohmann_json::nlohmann_json)
+
+foreach(test IN ITEMS tray_model_test log_lines_test app_rules_test)
+  add_executable(tsan-${test} "${root}/tests/unit/${test}.cpp")
+  target_link_libraries(tsan-${test} PRIVATE tray_logic)
+  add_test(NAME tsan-${test} COMMAND tsan-${test})
+endforeach()
+
+add_executable(tsan-tray-stress tray_stress_test.cpp)
+target_link_libraries(tsan-tray-stress PRIVATE tray_logic)
+add_test(NAME tsan-tray-stress COMMAND tsan-tray-stress)
+
 # Any report fails the test, not just a crash.
-set_tests_properties(tsan-control_test tsan-log_ring_test tsan-stress PROPERTIES
+set_tests_properties(tsan-control_test tsan-log_ring_test tsan-stress
+  tsan-tray_model_test tsan-log_lines_test tsan-app_rules_test tsan-tray-stress PROPERTIES
   ENVIRONMENT "TSAN_OPTIONS=halt_on_error=1 exitcode=66 second_deadlock_stack=1")
