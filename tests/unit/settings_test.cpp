@@ -98,6 +98,34 @@ void TestFrom043(const fs::path& data) {
   CHECK(saved["profiles"][0]["enabled"] == false);
 }
 
+// The relay's key: never in tray.json as typed (DPAPI), back on load; a key
+// that doesn't decrypt (another user's, a copied file) or an odd address
+// leaves no relay rather than a broken one.
+void TestRelay(const fs::path& data) {
+  const std::string key = "abcdefghijkmnpqrstuvwxyz23456789abcdefgh";
+  TraySettings settings = LoadSettings();
+  settings.relayUrl = "https://fetch.example.workers.dev/";
+  settings.relayKey = key;
+  SaveSettings(settings);
+  const std::string text = Read(data / "tray.json");
+  CHECK(text.find(key) == std::string::npos);
+  CHECK(nlohmann::json::parse(text)["relay"]["url"] == "https://fetch.example.workers.dev/");
+  const TraySettings back = LoadSettings();
+  CHECK(back.relayUrl == settings.relayUrl && back.relayKey == key);
+
+  auto json = nlohmann::json::parse(text);
+  json["relay"]["key"] = "bm90IGEgRFBBUEkgYmxvYg==";  // base64, but not DPAPI's
+  Write(data / "tray.json", json.dump());
+  const TraySettings broken = LoadSettings();
+  CHECK(broken.relayUrl.empty() && broken.relayKey.empty());
+  CHECK(broken.profiles.size() == back.profiles.size());  // the rest is read as ever
+
+  settings.relayUrl.clear();
+  settings.relayKey.clear();
+  SaveSettings(settings);
+  CHECK(!nlohmann::json::parse(Read(data / "tray.json")).contains("relay"));
+}
+
 void TestFiles(const fs::path& data) {
   const fs::path a = ProfileDir("pa");
   const fs::path b = ProfileDir("pb");
@@ -159,6 +187,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     const fs::path data = root / "Sovereign";
     TestMigration(data);
     TestFrom043(data);
+    TestRelay(data);
     TestFiles(data);
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

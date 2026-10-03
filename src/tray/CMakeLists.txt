@@ -48,6 +48,8 @@ add_library(sovereign_tray_lib STATIC
   flags.h
   warp.cpp
   warp.h
+  relay.cpp
+  relay.h
   x25519.cpp
   x25519.h
 )
@@ -83,7 +85,7 @@ add_library(sovereign_tray_settings STATIC
   settings.h
 )
 target_include_directories(sovereign_tray_settings PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(sovereign_tray_settings PUBLIC sovereign_tray_lib sovereign_common)
+target_link_libraries(sovereign_tray_settings PUBLIC sovereign_tray_lib sovereign_common crypt32)
 
 # The tray's requests over the network: subscriptions, downloads, the checks -
 # linked by the tray and by tests/unit's diagnose-probe.

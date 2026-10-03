@@ -1,9 +1,13 @@
 #include "settings.h"
 
 #include "log_level.h"
+#include "relay.h"
+#include "share_links.h"
 
 #include <windows.h>
+#include <dpapi.h>
 
+#include <wil/resource.h>
 #include <wil/result.h>
 
 #include <nlohmann/json.hpp>
@@ -135,6 +139,38 @@ void AdoptRootConfig(TraySettings& settings, const nlohmann::json& legacy) {
 
 }  // namespace
 
+namespace {
+
+// A secret for tray.json: encrypted for this Windows user (DPAPI), base64.
+// Another user, or a copy of the file on another machine, can't read it.
+std::string ProtectSecret(std::string_view secret) {
+  DATA_BLOB in{.cbData = static_cast<DWORD>(secret.size()),
+               .pbData = reinterpret_cast<BYTE*>(const_cast<char*>(secret.data()))};
+  DATA_BLOB out{};
+  if (secret.empty() || !CryptProtectData(&in, L"Sovereign", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+    return {};
+  }
+  const wil::unique_hlocal_ptr<BYTE> owned(out.pbData);
+  return EncodeBase64(std::string_view(reinterpret_cast<const char*>(out.pbData), out.cbData));
+}
+
+std::string UnprotectSecret(std::string_view stored) {
+  const auto blob = DecodeBase64(stored);
+  if (!blob || blob->empty()) {
+    return {};
+  }
+  DATA_BLOB in{.cbData = static_cast<DWORD>(blob->size()),
+               .pbData = reinterpret_cast<BYTE*>(const_cast<char*>(blob->data()))};
+  DATA_BLOB out{};
+  if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+    return {};
+  }
+  const wil::unique_hlocal_ptr<BYTE> owned(out.pbData);
+  return {reinterpret_cast<const char*>(out.pbData), out.cbData};
+}
+
+}  // namespace
+
 TraySettings LoadSettings() {
   TraySettings settings;
   const auto text = ReadText(DataDir() / L"tray.json");
@@ -197,6 +233,15 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("logLevel"); v != json.end() && v->is_string() && IsLogLevel(v->get<std::string>())) {
     settings.logLevel = v->get<std::string>();
   }
+  if (const auto v = json.find("relay"); v != json.end() && v->is_object()) {
+    const std::string url = v->value("url", std::string());
+    const std::string key = v->contains("key") && (*v)["key"].is_string() ? UnprotectSecret((*v)["key"].get<std::string>())
+                                                                          : std::string();
+    if (IsRelayUrl(url) && IsRelayKey(key)) {
+      settings.relayUrl = url;
+      settings.relayKey = key;
+    }
+  }
   AdoptRootConfig(settings, profiles == json.end() ? json : nlohmann::json());
   if (const auto v = json.find("routing"); v != json.end()) {
     settings.routing = RoutingFromJson(*v);
@@ -233,6 +278,9 @@ void SaveSettings(const TraySettings& settings) {
   json["logLevel"] = settings.logLevel;
   json["killSwitch"] = settings.killSwitch;
   json["killSwitchLan"] = settings.killSwitchLan;
+  if (!settings.relayUrl.empty() && !settings.relayKey.empty()) {
+    json["relay"] = {{"url", settings.relayUrl}, {"key", ProtectSecret(settings.relayKey)}};
+  }
   // Names came from subscription servers: not UTF-8 must not throw.
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
 }

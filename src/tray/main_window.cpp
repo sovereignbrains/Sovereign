@@ -105,6 +105,7 @@ constexpr UINT kMenuCopyResult = 112;
 constexpr UINT kMenuCopyAll = 113;
 constexpr UINT kMenuToggleExitIp = 114;
 constexpr UINT kMenuCopyValue = 115;
+constexpr UINT kMenuRefreshDirect = 116;
 
 // An icon button's name shows when it's pointed at this long; a "?" at once.
 constexpr UINT_PTR kTipTimer = 1;
@@ -1859,6 +1860,29 @@ class Painter {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
+    // The subscription relay (relay.h): the address and the key, each typed
+    // over its row; the key is never shown.
+    y = Heading(l, L"Подписки без подключения", x0, x1, y,
+                L"Пока подключение работает, подписки скачиваются через него. Когда его нет, напрямую их сервер "
+                L"увидел бы твой настоящий IP — поэтому они скачиваются через пересыльщик: твой Cloudflare Worker "
+                L"(tools/relay в репозитории). Сервер подписки видит адрес Cloudflare.\n\nБез пересыльщика подписка "
+                L"ждёт подключения; скачать напрямую можно из её меню.\n\nПустой адрес — пересыльщик выключен.");
+    {
+      const float h = 2 * kRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      Item url = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Адрес", nullptr,
+                             UiCommand::EditRelayUrl);
+      url.detail = c.relayHost.empty() ? std::wstring(L"не задан") : c.relayHost;
+      l.items.push_back(std::move(url));
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
+      Item key = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Ключ", nullptr,
+                             UiCommand::EditRelayKey);
+      key.detail = c.relaySet ? L"задан" : L"не задан";
+      key.enabled = !c.relayHost.empty();
+      l.items.push_back(std::move(key));
+      y += h + kGap;
+    }
+
     // Version and updates: the button under the text, the window is narrow.
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 110}));
     l.items.push_back(Make(Kind::Text, {x0 + 16, y + 10, x1 - 16, y + 34}, L"Sovereign " + c.version));
@@ -2588,6 +2612,9 @@ struct MainWindow::Impl {
         add(kMenuToggle, profile->enabled ? L"Выключить" : L"Включить");
         if (profile->subscription) {
           add(kMenuRefresh, L"Обновить");
+          if (profile->heldBack) {
+            add(kMenuRefreshDirect, L"Скачать напрямую (сервер увидит IP)…");
+          }
           add(kMenuCopyLink, L"Копировать ссылку");
         }
         add(kMenuRename, L"Переименовать");
@@ -2652,6 +2679,7 @@ struct MainWindow::Impl {
         onCommand(item.kind == Kind::Switch ? UiCommand::ToggleServer : UiCommand::ToggleProfile, args);
         break;
       case kMenuRefresh: onCommand(UiCommand::RefreshProfile, args); break;
+      case kMenuRefreshDirect: onCommand(UiCommand::RefreshDirect, args); break;
       case kMenuCopyLink: onCommand(UiCommand::CopyProfileLink, args); break;
       case kMenuRename:
         if (profile != nullptr) {

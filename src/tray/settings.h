@@ -68,6 +68,11 @@ struct TraySettings {
   // connection is meant to be on, so a drop doesn't let traffic around it.
   bool killSwitch = false;
   bool killSwitchLan = true;  // the local network stays reachable
+  // The subscription relay (relay.h): with no connection up, subscriptions are
+  // fetched through it rather than directly. tray.json keeps the key
+  // encrypted for this Windows user (DPAPI); both empty = none.
+  std::string relayUrl;
+  std::string relayKey;
 };
 
 // An app's remembered exe path, or null; and setting one (replacing).

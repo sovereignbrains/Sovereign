@@ -43,6 +43,11 @@ target_link_libraries(unit-subscription PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-subscription)
 add_test(NAME unit-subscription COMMAND unit-subscription)
 
+add_executable(unit-relay relay_test.cpp check.h)
+target_link_libraries(unit-relay PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-relay)
+add_test(NAME unit-relay COMMAND unit-relay)
+
 add_executable(unit-app-rules app_rules_test.cpp check.h)
 target_link_libraries(unit-app-rules PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-app-rules)
@@ -178,3 +183,8 @@ add_test(NAME unit-go-core COMMAND unit-go-core)
 add_executable(diagnose-probe diagnose_probe.cpp)
 target_link_libraries(diagnose-probe PRIVATE sovereign_tray_net)
 sovereign_copy_asan_runtime(diagnose-probe)
+
+# The subscription relay (tools/relay) through the tray's own fetch: by hand, not a ctest.
+add_executable(relay-probe relay_probe.cpp)
+target_link_libraries(relay-probe PRIVATE sovereign_tray_net)
+sovereign_copy_asan_runtime(relay-probe)

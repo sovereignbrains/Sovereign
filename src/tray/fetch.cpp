@@ -5,6 +5,7 @@
 
 #include <wil/resource.h>
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <initializer_list>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "profiles.h"
+#include "relay.h"
 #include "subscription.h"
 
 namespace sovereign::tray {
@@ -88,9 +90,6 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
                            WINHTTP_HEADER_NAME_BY_INDEX, &response.status, &statusSize, WINHTTP_NO_HEADER_INDEX)) {
     return std::unexpected(Failure("нет кода ответа"));
   }
-  if (response.status != 200) {
-    return response;
-  }
   for (const wchar_t* name : headerNames) {
     // WinHTTP widens the header's bytes one by one (ISO-8859-1): narrowed
     // back the same way, UTF-8 in it (Profile-Title) comes out whole.
@@ -106,6 +105,9 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
       value = std::move(bytes);
     }
     response.headers.push_back(std::move(value));
+  }
+  if (response.status != 200) {
+    return response;
   }
 
   for (;;) {
@@ -132,6 +134,39 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
 
 }  // namespace
 
+namespace {
+
+std::string SubscriptionStatusError(DWORD status) {
+  return status == 404 ? std::string("сервер не знает такую подписку (404) — ссылку сменили?")
+                       : std::format("сервер ответил {}", status);
+}
+
+// What a subscription answer's headers say about it: [interval, title] at `at`.
+void ReadSubscriptionHeaders(const Response& response, std::size_t at, FetchResult& result) {
+  if (response.headers.size() >= at + 2) {
+    if (response.headers[at]) {
+      result.updateInterval = ParseUpdateInterval(*response.headers[at]);
+    }
+    if (response.headers[at + 1]) {
+      result.title = ParseProfileTitle(*response.headers[at + 1]);
+    }
+  }
+}
+
+std::string Utf8(const std::wstring& text) {
+  if (text.empty()) {
+    return {};
+  }
+  const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+  std::string out(static_cast<std::size_t>(std::max(size, 0)), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), size, nullptr, nullptr);
+  return out;
+}
+
+std::wstring Wide(std::string_view text) { return {text.begin(), text.end()}; }  // ASCII: relay URLs, keys, paths
+
+}  // namespace
+
 std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent,
                                                           std::string_view hwid) {
   // Only x-hwid: no OS version, no device model - nothing of the machine's.
@@ -142,19 +177,70 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
     return std::unexpected(response.error());
   }
   if (response->status != 200) {
-    return std::unexpected(response->status == 404
-                               ? std::string("сервер не знает такую подписку (404) — ссылку сменили?")
-                               : std::format("сервер ответил {}", response->status));
+    return std::unexpected(SubscriptionStatusError(response->status));
   }
   FetchResult result;
   result.body = std::move(response->body);
-  if (response->headers.size() == 2) {
-    if (response->headers[0]) {
-      result.updateInterval = ParseUpdateInterval(*response->headers[0]);
+  ReadSubscriptionHeaders(*response, 0, result);
+  return result;
+}
+
+std::expected<FetchResult, std::string> FetchSubscriptionViaRelay(const std::string& relayUrl, const std::string& relayKey,
+                                                                  const std::wstring& url, const std::wstring& userAgent,
+                                                                  std::string_view hwid) {
+  if (!IsRelayUrl(relayUrl) || !IsRelayKey(relayKey)) {
+    return std::unexpected(std::string("пересыльщик настроен неверно (Настройки)"));
+  }
+  if (!IsHttpsUrl(url)) {
+    return std::unexpected(std::string("ссылка должна быть https://"));
+  }
+  const std::string base = RelayBase(relayUrl);
+  const std::wstring key = L"X-Relay-Key: " + Wide(relayKey);
+  auto response = HttpsGet(Wide(base), userAgent, kMaxSubscriptionBytes,
+                           {L"X-Relay-Status", L"X-Relay-Job", L"X-Relay-Size", L"X-Relay-Chunk", L"Profile-Update-Interval",
+                            L"Profile-Title"},
+                           "пересыльщик", L"POST", RelayRequestBody(Utf8(url), Utf8(userAgent), hwid),
+                           key + L"\r\nContent-Type: application/json");
+  if (!response) {
+    return std::unexpected(response.error());
+  }
+  const auto header = [&](std::size_t i) -> std::string_view {
+    return response->headers.size() > i && response->headers[i] ? std::string_view(*response->headers[i]) : std::string_view();
+  };
+  // The subscription server's own answer carries X-Relay-Status; without it
+  // the relay itself refused (a wrong key or address: a bare 404).
+  if (header(0).empty()) {
+    return std::unexpected(response->status == 404
+                               ? std::string("пересыльщик не принял запрос — проверь адрес и ключ (Настройки)")
+                               : std::format("пересыльщик не смог скачать подписку ({})", response->status));
+  }
+  if (response->status != 200) {
+    return std::unexpected(SubscriptionStatusError(response->status));
+  }
+  FetchResult result;
+  ReadSubscriptionHeaders(*response, 4, result);
+  if (header(1).empty()) {
+    result.body = std::move(response->body);
+    return result;
+  }
+  const auto plan = ParseRelayPlan(header(1), header(2), header(3), kMaxSubscriptionBytes);
+  if (!plan) {
+    return std::unexpected(std::string("пересыльщик ответил непонятно"));
+  }
+  // Each piece over a session - a connection - of its own (HttpsGet opens one).
+  result.body.reserve(plan->size);
+  for (std::size_t n = 0; n < plan->count; ++n) {
+    auto piece = HttpsGet(Wide(base + RelayChunkPath(*plan, n)), userAgent, plan->chunk, {}, "пересыльщик", L"GET", {}, key);
+    if (!piece) {
+      return std::unexpected(piece.error());
     }
-    if (response->headers[1]) {
-      result.title = ParseProfileTitle(*response->headers[1]);
+    if (piece->status != 200) {
+      return std::unexpected(std::format("пересыльщик не отдал часть {} из {} ({})", n + 1, plan->count, piece->status));
     }
+    result.body += piece->body;
+  }
+  if (result.body.size() != plan->size) {
+    return std::unexpected(std::string("подписка пришла не целиком"));
   }
   return result;
 }

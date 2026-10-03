@@ -63,6 +63,7 @@ struct UiProfile {
   std::wstring choiceError;
   std::vector<std::wstring> mergeNotes;  // where carrying the edits over met the subscription's changes
   std::vector<UiServer> servers;
+  bool heldBack = false;   // not fetched so its server doesn't see the user's IP: "download directly" offered
 };
 // The routing's page (routing.h).
 struct UiRule {
@@ -141,6 +142,9 @@ struct UiContent {
   std::wstring logLevel;                // what the core writes; empty = the config's
   bool killSwitch = false;              // the setting
   bool killSwitchLan = true;
+  // The subscription relay (relay.h): its host only - the key never reaches the UI.
+  std::wstring relayHost;
+  bool relaySet = false;
   bool killSwitchActive = false;        // the filters are in place
   std::wstring killSwitchError;         // why the service couldn't apply it
   bool autostart = false;               // the tray starts when the user signs in
@@ -202,6 +206,11 @@ enum class UiCommand : std::uint8_t {
   ChooseLogLevel,      // anchor: where to open the menu of levels
   ToggleKillSwitch,
   ToggleKillSwitchLan,
+  EditRelayUrl,       // starts typing the relay's address over its row
+  EditRelayUrlText,   // text: the address ("" clears the relay)
+  EditRelayKey,       // starts typing the relay's key over its row (shown empty)
+  EditRelayKeyText,   // text: the key
+  RefreshDirect,      // index into profiles: fetch it directly - its server sees the user's IP
   SetAppsMode,   // index: 0 all except the list, 1 only the list
   RemoveApp,     // index into apps
   AddRunning,    // anchor: where to open the list of running programs

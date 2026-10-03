@@ -22,6 +22,14 @@ struct FetchResult {
 std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& url, const std::wstring& userAgent,
                                                           std::string_view hwid);
 
+// The same through the subscription relay (relay.h): the subscription's server
+// sees the relay's address (Cloudflare's), never the user's. A big answer is
+// fetched piece by piece, a connection each. The errors never carry the URL
+// or the key.
+std::expected<FetchResult, std::string> FetchSubscriptionViaRelay(const std::string& relayUrl, const std::string& relayKey,
+                                                                  const std::wstring& url, const std::wstring& userAgent,
+                                                                  std::string_view hwid);
+
 // Any other GET over https, same client, the body capped at maxBytes; an
 // error for anything but a 200. Blocking: call it off the UI thread.
 std::expected<std::string, std::string> Download(const std::wstring& url, const std::wstring& userAgent,

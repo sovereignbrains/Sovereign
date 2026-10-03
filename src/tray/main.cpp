@@ -71,6 +71,7 @@
 #include "main_window.h"
 #include "pipe_client.h"
 #include "profiles.h"
+#include "relay.h"
 #include "settings.h"
 #include "share_links.h"
 #include "sha256.h"
@@ -115,6 +116,11 @@ constexpr std::size_t kMenuMaxItems = 250;
 // the format by (packetlab's: the plain one, no Mieru; the version for the
 // DNS format). The version is the pinned core's.
 constexpr wchar_t kUserAgent[] = L"sing-box " SOVEREIGN_SINGBOX_VERSION_W;
+
+// A subscription not fetched so its server doesn't learn the user's address.
+constexpr const char* kHeldBack =
+    "не скачана: подключения нет, а напрямую её сервер увидел бы твой IP. Включи подключение, задай "
+    "пересыльщик в настройках или выбери «Скачать напрямую» в меню конфигурации";
 
 // After a failed refresh, when to try again (the old config keeps working).
 constexpr std::chrono::minutes kRefreshRetry{30};
@@ -240,6 +246,7 @@ struct View {
     std::string choiceError;       // why the last choice about it didn't go through
     std::vector<std::string> mergeNotes;  // where the last carry-over met changes on both sides
     std::vector<ServerView> servers;
+    bool heldBack = false;         // not fetched so its server doesn't see the user's IP
   };
   std::vector<ProfileView> profiles;
   // A balloon to show once: the UI shows it when noticeId changes.
@@ -267,6 +274,8 @@ struct View {
   bool killSwitchLan = true;
   bool killSwitchActive = false;
   std::string killSwitchError;
+  std::string relayUrl;  // the subscription relay's address; never its key
+  bool relayKeySet = false;
 };
 
 // What to do with the config when a newer subscription meets the user's
@@ -327,6 +336,13 @@ struct LocalImport {
 };
 
 // A new per-app setup from the window.
+// The subscription relay's settings, each part on its own: the address
+// ("" = no relay, the key goes too) or the key; nullopt = unchanged.
+struct RelayChange {
+  std::optional<std::string> url;
+  std::optional<std::string> key;
+};
+
 struct AppsChange {
   AppsMode mode = AppsMode::Exclude;
   std::vector<std::string> list;
@@ -362,6 +378,8 @@ struct Shared {
   std::vector<RoutingChange> pendingRouting;   // likewise
   std::optional<std::string> pendingRemove;    // a profile id to remove
   std::optional<std::string> pendingRefresh;   // a profile id to refresh now
+  bool pendingRefreshDirect = false;           // ...directly: the user said so, its server sees their IP
+  std::optional<RelayChange> pendingRelay;
   bool pendingUrlTest = false;
   bool pendingToggleExitIp = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
@@ -380,7 +398,7 @@ struct Shared {
   bool HasRequests() const {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
-           pendingRefresh ||
+           pendingRefresh || pendingRelay ||
            pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingToggleKillSwitch ||
            pendingToggleKillSwitchLan || pendingApps || pendingProtocol ||
            pendingChoice;
@@ -530,6 +548,8 @@ class Worker {
       std::vector<RoutingChange> routing;
       std::optional<std::string> remove;
       std::optional<std::string> refresh;
+      bool refreshDirect = false;
+      std::optional<RelayChange> relay;
       bool urlTest = false;
       bool toggleExitIp = false;
       std::optional<std::string> logLevel;
@@ -547,6 +567,8 @@ class Worker {
         routing = std::exchange(shared.pendingRouting, {});
         remove = std::exchange(shared.pendingRemove, std::nullopt);
         refresh = std::exchange(shared.pendingRefresh, std::nullopt);
+        refreshDirect = std::exchange(shared.pendingRefreshDirect, false);
+        relay = std::exchange(shared.pendingRelay, std::nullopt);
         urlTest = std::exchange(shared.pendingUrlTest, false);
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
@@ -574,8 +596,20 @@ class Worker {
       if (import) {
         AddSubscription(*import);
       }
+      if (relay) {
+        if (relay->url) {
+          settings_.relayUrl = std::move(*relay->url);
+          if (settings_.relayUrl.empty()) {
+            settings_.relayKey.clear();  // no address: no relay at all
+          }
+        }
+        if (relay->key) {
+          settings_.relayKey = std::move(*relay->key);
+        }
+        Save();
+      }
       if (refresh) {
-        Refresh(*refresh, RefreshReason::Asked);
+        Refresh(*refresh, refreshDirect ? RefreshReason::Direct : RefreshReason::Asked);
       }
       RefreshDue();
       if (choice) {
@@ -610,12 +644,19 @@ class Worker {
         Notify(L"Sovereign: подключение выключено", L"Нечего запускать: " + Widen(combineError_), true,
                UiPage::Subscription);
       }
-      model_.SetExpectedConfig(ExpectedConfigHash(config));
+      const std::string expected = ExpectedConfigHash(config);
+      model_.SetExpectedConfig(expected);
       const auto stats = PollStats();
       const Action action = model_.OnPoll(stats, TrayModel::Clock::now());
       Execute(model_, action, config);
       if (action == Action::Start) {
         FallBackIfRoutingRejected();
+      }
+      // The box runs this very config: its subscription hosts go through the proxy.
+      if (stats && stats->running && !expected.empty() && stats->configSha256 == expected) {
+        runningHosts_ = combinedHosts_;
+      } else if (!stats || !stats->running) {
+        runningHosts_.clear();
       }
       UpdateDelays(stats, urlTest);
       ApplySelection(stats);
@@ -656,12 +697,14 @@ class Worker {
     Due,    // its interval passed: a balloon if it failed and it's on
     Asked,  // "Refresh": always a balloon
     Added,  // just added: the caller speaks
+    Direct,  // "download directly": with no connection, the user lets its server see their IP
   };
 
   // What the worker knows about a configuration besides its settings.
   struct ProfileRuntime {
     std::string error;  // the last refresh failed with this
     std::optional<TrayModel::Clock::time_point> lastFailure;
+    bool heldBack = false;  // not fetched at all: no connection, no relay - its server would see the user's IP
     std::string choiceError;              // why the last choice about a waiting version didn't go through
     std::vector<std::string> mergeNotes;  // where the last carry-over met changes on both sides
     std::optional<std::string> seenOriginal;  // the texts below were computed from
@@ -736,6 +779,7 @@ class Worker {
       // proxy's address, not the user's. (With the box off a fetch goes
       // directly; nothing to route it through then.)
       const auto hosts = sovereign::tray::SubscriptionHosts(settings_.profiles);
+      combinedHosts_ = hosts;
       std::string list;
       for (const std::string& host : hosts) {
         list += (list.empty() ? "" : ", ") + host;
@@ -1076,7 +1120,25 @@ class Worker {
       profile->hwid = NewHwid();
       Save();  // the same device to the panel from now on, even if this fetch fails
     }
-    auto fetched = sovereign::tray::FetchSubscription(Widen(profile->url), kUserAgent, profile->hwid);
+    // Who sees the user's address decides how it's fetched:
+    //  * the box runs a config whose rules send this host through the proxy:
+    //    straight from here - it goes through the proxy;
+    //  * else through the relay, if there is one: its server sees Cloudflare;
+    //  * else not at all - unless the user said "directly" for this one.
+    const auto hosts = sovereign::tray::SubscriptionHosts({*profile});
+    const bool viaProxy = model_.GetDisplay() == Display::On && !hosts.empty() &&
+                          std::find(runningHosts_.begin(), runningHosts_.end(), hosts.front()) != runningHosts_.end();
+    std::expected<sovereign::tray::FetchResult, std::string> fetched = std::unexpected(std::string());
+    state.heldBack = false;
+    if (viaProxy || reason == RefreshReason::Direct) {
+      fetched = sovereign::tray::FetchSubscription(Widen(profile->url), kUserAgent, profile->hwid);
+    } else if (sovereign::tray::IsRelayUrl(settings_.relayUrl) && sovereign::tray::IsRelayKey(settings_.relayKey)) {
+      fetched = sovereign::tray::FetchSubscriptionViaRelay(settings_.relayUrl, settings_.relayKey, Widen(profile->url),
+                                                          kUserAgent, profile->hwid);
+    } else {
+      state.heldBack = true;
+      fetched = std::unexpected(std::string(kHeldBack));
+    }
     std::string error;
     sovereign::tray::ConfigCheck check;
     if (!fetched) {
@@ -1092,9 +1154,14 @@ class Worker {
       error = check.error;
     }
     if (!error.empty()) {
-      state.lastFailure = TrayModel::Clock::now();
+      if (!state.heldBack) {  // held back: tried again as soon as there's a way, no back-off
+        state.lastFailure = TrayModel::Clock::now();
+      }
       state.error = error;
-      if (reason == RefreshReason::Asked || (reason == RefreshReason::Due && profile->enabled)) {
+      // Held back on its schedule: quietly - it's fetched once there's a way.
+      const bool quiet = state.heldBack && reason == RefreshReason::Due;
+      if (!quiet && (reason == RefreshReason::Asked || reason == RefreshReason::Direct ||
+                     (reason == RefreshReason::Due && profile->enabled))) {
         Notify(L"Sovereign: «" + Widen(profile->name) + L"» не обновилась",
                Widen(error) + L" (работает прежний конфиг)", true, UiPage::Subscription);
       }
@@ -1155,14 +1222,14 @@ class Worker {
       return true;
     }
     if (arrival == Arrival::Ask) {
-      if (!alreadyWaiting && (profile->enabled || reason == RefreshReason::Asked)) {
+      if (!alreadyWaiting && (profile->enabled || reason == RefreshReason::Asked || reason == RefreshReason::Direct)) {
         Notify(L"Sovereign: новая версия «" + Widen(profile->name) + L"»",
                L"В конфиге есть твои правки, поэтому он не заменён. Нажми, чтобы выбрать, что оставить.", false,
                UiPage::Subscription);
       }
       return true;
     }
-    if (reason == RefreshReason::Asked) {
+    if (reason == RefreshReason::Asked || reason == RefreshReason::Direct) {
       Notify(L"Sovereign: «" + Widen(profile->name) + L"» обновлена",
              std::format(L"выходов в конфиге: {}{}", check.outbounds,
                          arrival == Arrival::Replace ? L"" : L" (без изменений)"),
@@ -1190,6 +1257,16 @@ class Worker {
     profile.name = sovereign::tray::UniqueProfileName(settings_.profiles, sovereign::tray::DefaultProfileName(url));
     settings_.profiles.push_back(profile);
     if (!Refresh(profile.id, RefreshReason::Added)) {
+      if (runtime_[profile.id].heldBack) {
+        // Not fetched on purpose: kept, and fetched once there's a way (or
+        // directly, if the user says so from its menu).
+        Save();
+        Notify(L"Sovereign: подписка добавлена, но не скачана",
+               L"Подключения нет, а напрямую её сервер увидел бы твой IP. Скачается, как только будет подключение или "
+               L"пересыльщик (Настройки); или «Скачать напрямую» в её меню.",
+               true, UiPage::Subscription);
+        return;
+      }
       // Nothing came: no configuration to keep - the link was wrong, or the
       // server is down (then pasting it again later adds it).
       const std::string error = runtime_[profile.id].error;
@@ -1754,7 +1831,8 @@ class Worker {
                                 .waiting = state.waiting,
                                 .choiceError = state.choiceError,
                                 .mergeNotes = state.mergeNotes,
-                                .servers = {}};
+                                .servers = {},
+                                .heldBack = state.heldBack};
         for (const auto& server : state.servers) {
           shown.servers.push_back(
               {.tag = server.tag, .label = server.label, .enabled = sovereign::tray::IsServerEnabled(profile, server.tag)});
@@ -1798,6 +1876,8 @@ class Worker {
       v.logLevel = settings_.logLevel;
       v.killSwitch = settings_.killSwitch;
       v.killSwitchLan = settings_.killSwitchLan;
+      v.relayUrl = settings_.relayUrl;
+      v.relayKeySet = !settings_.relayKey.empty();
       v.killSwitchActive = killSwitchActive_;
       v.killSwitchError = killSwitchError_;
       window = shared.window;
@@ -1829,6 +1909,11 @@ class Worker {
   std::string routingKey_;
   std::string rejectedRouting_;
   std::string rejectedWhy_;
+  // The subscription hosts the tray's rules send through the proxy: in the
+  // config last combined, and in the one the box is confirmed to run (its
+  // hash) - a subscription added since isn't covered by the running box yet.
+  std::vector<std::string> combinedHosts_;
+  std::vector<std::string> runningHosts_;
   std::uint64_t logSince_ = 0;  // box_logs cursor
   std::string loggedError_;     // the model's error last put into the log
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
@@ -2296,11 +2381,21 @@ const std::vector<std::wstring>& RuleActions() {
   return actions;
 }
 
-void RequestRefresh(std::string id) {
+void RequestRefresh(std::string id, bool direct = false) {
   {
     auto& shared = State();
     const std::scoped_lock lock(shared.mutex);
     shared.pendingRefresh = std::move(id);
+    shared.pendingRefreshDirect = direct;
+  }
+  Wake();
+}
+
+void RequestRelay(RelayChange change) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingRelay = std::move(change);
   }
   Wake();
 }
@@ -2602,6 +2697,7 @@ UiContent ContentFrom(const View& v) {
     shown.edited = profile.edited;
     shown.waiting = profile.waiting;
     shown.choiceError = Widen(profile.choiceError);
+    shown.heldBack = profile.heldBack;
     for (const std::string& note : profile.mergeNotes) {
       shown.mergeNotes.push_back(Widen(note));
     }
@@ -2737,6 +2833,8 @@ UiContent ContentFrom(const View& v) {
   c.logLevel = Widen(v.logLevel);
   c.killSwitch = v.killSwitch;
   c.killSwitchLan = v.killSwitchLan;
+  c.relayHost = v.relayUrl.empty() ? std::wstring() : sovereign::tray::UrlHost(Widen(v.relayUrl));
+  c.relaySet = !v.relayUrl.empty() && v.relayKeySet;
   c.killSwitchActive = v.killSwitchActive;
   c.killSwitchError = Widen(v.killSwitchError);
   c.autostart = sovereign::tray::AutostartEnabled();
@@ -2816,6 +2914,14 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::RefreshProfile:
       RequestRefresh(profile.id);
+      break;
+    case UiCommand::RefreshDirect:  // from its menu, offered only when it was held back
+      if (MessageBoxW(owner,
+                      L"Сервер этой подписки увидит твой настоящий IP-адрес. Скачать напрямую?\n\n"
+                      L"Без этого она скачается сама, как только будет подключение или пересыльщик (Настройки).",
+                      L"Sovereign", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
+        RequestRefresh(profile.id, /*direct=*/true);
+      }
       break;
     case UiCommand::ToggleAutoUpdate:
       change(ProfileChange::What::AutoUpdate, !profile.autoUpdate);
@@ -3063,6 +3169,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleProfile:
     case UiCommand::RenameProfile:
     case UiCommand::RefreshProfile:
+    case UiCommand::RefreshDirect:
     case UiCommand::ToggleAutoUpdate:
     case UiCommand::ChooseRefreshPeriod:
     case UiCommand::SetRefreshHours:
@@ -3104,6 +3211,32 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       UpdateWindows();
       break;
+    case UiCommand::EditRelayUrl:  // typed over its row; the key over its own
+    case UiCommand::EditRelayKey:
+      if (g_mainWindow != nullptr) {
+        const bool url = command == UiCommand::EditRelayUrl;
+        g_mainWindow->EditInPlace(command, 0, url ? UiCommand::EditRelayUrlText : UiCommand::EditRelayKeyText,
+                                  url ? Widen(view.relayUrl) : std::wstring(), false);
+      }
+      break;
+    case UiCommand::EditRelayUrlText:
+    case UiCommand::EditRelayKeyText: {
+      const std::string text = Narrow(args.text);
+      const bool url = command == UiCommand::EditRelayUrlText;
+      if (url && text.empty()) {
+        RequestRelay({.url = std::string(), .key = std::nullopt});  // cleared: no relay
+      } else if (url ? !sovereign::tray::IsRelayUrl(text) : !sovereign::tray::IsRelayKey(text)) {
+        if (g_trayIcon != nullptr) {
+          g_trayIcon->Balloon(L"Sovereign", url ? L"Адрес пересыльщика — https://…, без ? и пробелов."
+                                                : L"Ключ — от 16 до 256 знаков, без пробелов.");
+        }
+      } else if (url) {
+        RequestRelay({.url = sovereign::tray::RelayBase(text), .key = std::nullopt});
+      } else {
+        RequestRelay({.url = std::nullopt, .key = text});
+      }
+      break;
+    }
     case UiCommand::ToggleKillSwitch:
     case UiCommand::ToggleKillSwitchLan: {
       {
