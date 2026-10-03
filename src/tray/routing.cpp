@@ -29,6 +29,14 @@ constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kGeositeBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/";
 constexpr std::string_view kGeoipBase = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/";
 
+// A blocked name answered "no such domain". sing-box's DNS "reject" answers
+// REFUSED, which Windows' resolver takes for a broken server and asks again
+// for ~11 s before giving up - every blocked ad host stalled whatever needed it.
+void SetNxDomain(Json& rule) {
+  rule["action"] = "predefined";
+  rule["rcode"] = "NXDOMAIN";
+}
+
 std::string Lower(std::string_view text) {
   std::string out(text);
   std::transform(out.begin(), out.end(), out.begin(),
@@ -615,7 +623,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       rule["domain_keyword"] = r.keywords;
     }
     if (r.action == RouteRule::Action::Block) {
-      rule["action"] = "reject";
+      SetNxDomain(rule);
     } else if (r.action == RouteRule::Action::Direct) {
       rule["server"] = kLocalDns;
     } else {
@@ -624,7 +632,9 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     dnsRules.push_back(std::move(rule));
   }
   if (settings.blockAds && lists.contains(std::string(kAds))) {
-    dnsRules.push_back(Json{{"rule_set", kAds}, {"action", "reject"}});
+    Json ads{{"rule_set", kAds}};
+    SetNxDomain(ads);
+    dnsRules.push_back(std::move(ads));
   }
   if (settings.russiaDirect) {
     dnsRules.push_back(Json{{"domain_suffix", zones}, {"server", kLocalDns}});

@@ -149,6 +149,13 @@ void TestOwn() {
   CHECK(c["route"]["final"] == "proxy");
   CHECK(c["dns"]["strategy"] == "ipv4_only");
   CHECK(c["dns"]["rules"][0]["server"] == "sov-local");  // qwen.ai resolved directly
+  // Blocked names: "no such domain" - REFUSED made Windows retry for ~11 s.
+  int nxdomain = 0;
+  for (const json& rule : c["dns"]["rules"]) {
+    CHECK(rule.value("action", "") != "reject");
+    nxdomain += rule.value("action", "") == "predefined" && rule.value("rcode", "") == "NXDOMAIN" ? 1 : 0;
+  }
+  CHECK(nxdomain == (Files().empty() ? 1 : 2));  // the user's block rule, and the ads list when it's there
   if (!Files().empty()) {
     CHECK(c["route"]["rule_set"].size() == 4);
     CHECK(dump.find("sov-geoip-ru") != std::string::npos);
