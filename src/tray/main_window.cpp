@@ -996,6 +996,38 @@ class Painter {
     return y + h;
   }
 
+  // The user's rules in a card, a row each (a click: its menu). `warp`: only
+  // the ones through WARP - its own card; else the rest, and WARP's too while
+  // WARP is off (its card is hidden then). An empty list says `empty`.
+  static float RuleList(Layout& l, const UiRouting& r, bool warp, const wchar_t* empty, float x0, float x1, float y) {
+    std::vector<std::size_t> shown;
+    for (std::size_t i = 0; i < r.rules.size(); ++i) {
+      if (warp ? r.rules[i].warp : !(r.rules[i].warp && r.warp)) {
+        shown.push_back(i);
+      }
+    }
+    if (shown.empty()) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 48}));
+      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 48}, empty));
+      return y + 48 + 8;
+    }
+    const float h = static_cast<float>(shown.size()) * kProfileRow;
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+    for (std::size_t n = 0; n < shown.size(); ++n) {
+      const UiRule& rule = r.rules[shown[n]];
+      const float top = y + static_cast<float>(n) * kProfileRow;
+      if (n > 0) {
+        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      }
+      Item item = CommandItem(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 4, top + kProfileRow - 3}, rule.text,
+                              kGlyphChevron, UiCommand::RuleMenu, static_cast<int>(shown[n]));
+      item.detail = rule.action;
+      item.checked = true;
+      l.items.push_back(std::move(item));
+    }
+    return y + h + 8;
+  }
+
   float Paragraph(Layout& l, Kind kind, const std::wstring& text, float x0, float x1, float y) const {
     const float indent = kind == Kind::ErrorText ? 28.0f : 0.0f;
     const float h =
@@ -1602,34 +1634,27 @@ class Painter {
       const float top = y + 2 * kRow;
       Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSwitchRow - 2}, L"Только IPv4", nullptr,
                             UiCommand::ToggleIpv4Only);
-      v4.checked = r.ipv4Only && !(r.warp && r.warpIpv6);
-      v4.enabled = !(r.warp && r.warpIpv6);  // IPv6 goes through WARP then
+      v4.checked = r.ipv4Only;
       l.items.push_back(std::move(v4));
       HintAfter(l, L"Только IPv4", body_.get(), x0 + 20, x1 - 80, top + kSwitchRow / 2,
                 L"Адреса IPv6 не выдаются программам — их трафик не уйдёт мимо туннеля.");
       y += h + kGap + 4;
     }
 
-    // WARP: a way out of its own - for chosen sites (rules "через WARP") and IPv6.
+    // WARP: a way out of its own for chosen sites - listed right here.
     y = Heading(l, L"WARP", x0, x1, y,
                 L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
-                L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nКуда его "
-                L"использовать: правила «через WARP» (сайты, которые не пускают с адресов VPN-серверов) и IPv6, "
-                L"если у сервера его нет.\n\nПоверх прокси — WireGuard идёт к Cloudflare через твой сервер: "
+                L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nЧерез WARP идут "
+                L"только сайты из его списка (например, те, что не пускают с адресов VPN-серверов); всё остальное "
+                L"идёт как шло.\n\nПоверх прокси — WireGuard идёт к Cloudflare через твой сервер: "
                 L"провайдер его не видит и не может заблокировать.");
     {
-      std::vector<SwitchRow> rows = {
-          Row(L"WARP", {}, r.warp, UiCommand::ToggleWarp,
-              r.warp ? (r.warpViaProxy ? L"поверх прокси" : L"напрямую") +
-                           (r.warpAddress.empty() ? std::wstring() : L" · " + r.warpAddress)
-                     : std::wstring(r.warpRegistered ? L"выключен" : L"при включении зарегистрирует устройство"))};
-      if (r.warp) {
-        rows.push_back(Row(L"IPv6 через WARP",
-                           L"Сайты по IPv6 открываются через WARP; имена снова получают IPv6-адреса (IPv4 — "
-                           L"первым), «Только IPv4» не действует.",
-                           r.warpIpv6, UiCommand::ToggleWarpIpv6));
-      }
-      y = Switches(l, rows, x0, x1, y);
+      y = Switches(l,
+                   {Row(L"WARP", {}, r.warp, UiCommand::ToggleWarp,
+                        r.warp ? (r.warpViaProxy ? L"поверх прокси" : L"напрямую") +
+                                     (r.warpAddress.empty() ? std::wstring() : L" · " + r.warpAddress)
+                               : std::wstring(r.warpRegistered ? L"выключен" : L"при включении зарегистрирует устройство"))},
+                   x0, x1, y);
       if (r.warp) {
         Item via = CommandItem(Kind::ValueRow, {x0, y + 8, x1, y + 8 + kRow}, L"Подключение", nullptr,
                                UiCommand::ChooseWarpVia);
@@ -1637,7 +1662,12 @@ class Painter {
         l.items.push_back(Make(Kind::Card, via.rect));
         via.rect = {x0 + 4, via.rect.top + 2, x1 - 4, via.rect.bottom - 2};
         l.items.push_back(std::move(via));
-        y += 8 + kRow;
+        y += 8 + kRow + 8;
+        y = RuleList(l, r, /*warp=*/true, L"Пока пусто — добавь сайт, который должен открываться через WARP.", x0,
+                     x1, y);
+        l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Добавить сайт", kGlyphAdd,
+                                      UiCommand::AddWarpSite));
+        y += kButton;
       }
       y += kGap + 4;
     }
@@ -1646,26 +1676,7 @@ class Painter {
     y = Heading(l, L"Свои правила", x0, x1, y,
                 L"Сайты, IP-подсети или программы (.exe) — напрямую, через прокси, через WARP или в блок. Работают раньше "
                 L"всех остальных правил. Клик или правый клик по правилу — изменить или удалить.");
-    if (r.rules.empty()) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 48}));
-      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 48}, L"Пока нет — добавь сайт, подсеть или программу."));
-      y += 48 + 8;
-    } else {
-      const float h = static_cast<float>(r.rules.size()) * kProfileRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      for (std::size_t i = 0; i < r.rules.size(); ++i) {
-        const float top = y + static_cast<float>(i) * kProfileRow;
-        if (i > 0) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-        }
-        Item rule = CommandItem(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 4, top + kProfileRow - 3}, r.rules[i].text,
-                                kGlyphChevron, UiCommand::RuleMenu, static_cast<int>(i));
-        rule.detail = r.rules[i].action;
-        rule.checked = true;
-        l.items.push_back(std::move(rule));
-      }
-      y += h + 8;
-    }
+    y = RuleList(l, r, /*warp=*/false, L"Пока нет — добавь сайт, подсеть или программу.", x0, x1, y);
     l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Добавить", kGlyphAdd,
                                   UiCommand::AddRule));
     l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Из подписки…", kGlyphDownload,

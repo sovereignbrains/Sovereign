@@ -140,7 +140,11 @@ int Snapshots(const std::wstring& dir) {
   routed.routing.localDns = L"Cloudflare (DoH)";
   routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
                           {L"10.9.0.0/16, steam.exe", L"через прокси"},
-                          {L"~tracker", L"блокировать"}};
+                          {L"~tracker", L"блокировать"},
+                          {L"chatgpt.com", L"через WARP", true}};
+  routed.routing.warp = true;
+  routed.routing.warpRegistered = true;
+  routed.routing.warpAddress = L"172.16.0.2";
   routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
   sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1400, 96, dir + L"\\routing.png");
   routed.routing.own = false;
@@ -316,7 +320,12 @@ int LayoutTest(const std::wstring& dir) {
   UiContent content = SampleContent();
   content.checks = SampleChecks();
   UiContent routed = content;
-  routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"}};
+  // WARP on, with a site of its own: its card lists it, "Свои правила" doesn't.
+  routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
+                          {L"chatgpt.com, openai.com", L"через WARP", true}};
+  routed.routing.warp = true;
+  routed.routing.warpRegistered = true;
+  routed.routing.warpAddress = L"172.16.0.2";
   const std::array<std::pair<UiPage, const wchar_t*>, 9> pages = {{{UiPage::Overview, L"overview"},
                                                                    {UiPage::Servers, L"servers"},
                                                                    {UiPage::Subscription, L"subscription"},

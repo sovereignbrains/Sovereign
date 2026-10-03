@@ -54,11 +54,10 @@ struct RoutingSettings {
   std::vector<RouteRule> rules;  // the user's, first of all
 
   // Cloudflare WARP (warp.h): an endpoint the box has while warp is on and
-  // there's an account; rules with Action::Warp go to it, IPv6 too with
-  // warpIpv6 (names get IPv6 addresses again then, IPv4 first).
+  // there's an account; only rules with Action::Warp go to it (IPv6 of
+  // everything through it made WARP the way out for most sites - dropped).
   bool warp = false;
   bool warpViaProxy = true;  // WireGuard to Cloudflare over the proxy (else directly)
-  bool warpIpv6 = false;
   std::optional<WarpAccount> warpAccount;
 };
 

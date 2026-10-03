@@ -66,14 +66,8 @@ std::vector<std::string> Strings(const Json& value) {
   return out;
 }
 
-// The own frame's DNS strategy: IPv4 only, unless IPv6 goes through WARP -
-// then both, IPv4 first; nothing when IPv6 is simply allowed.
-const char* DnsStrategy(const RoutingSettings& s) {
-  if (WarpReady(s) && s.warpIpv6) {
-    return "prefer_ipv4";
-  }
-  return s.ipv4Only ? "ipv4_only" : nullptr;
-}
+// The own frame's DNS strategy: IPv4 only, or nothing when IPv6 is allowed.
+const char* DnsStrategy(const RoutingSettings& s) { return s.ipv4Only ? "ipv4_only" : nullptr; }
 
 const char* ActionName(RouteRule::Action action) {
   switch (action) {
@@ -184,8 +178,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
           {"rules", std::move(rules)},
           {"warp", s.warp},
           {"warpViaProxy", s.warpViaProxy},
-          {"warpIpv6", s.warpIpv6},
-          {"warpAccount", s.warpAccount ? WarpToJson(*s.warpAccount) : nlohmann::json()}};
+              {"warpAccount", s.warpAccount ? WarpToJson(*s.warpAccount) : nlohmann::json()}};
 }
 
 RoutingSettings RoutingFromJson(const nlohmann::json& json) {
@@ -211,7 +204,6 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   flag("ipv4Only", s.ipv4Only);
   flag("warp", s.warp);
   flag("warpViaProxy", s.warpViaProxy);
-  flag("warpIpv6", s.warpIpv6);
   if (const auto it = json.find("warpAccount"); it != json.end()) {
     s.warpAccount = WarpFromJson(*it);
   }
@@ -581,9 +573,6 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   if (settings.blockAds && lists.contains(std::string(kAds))) {
     rules.push_back(Json{{"rule_set", kAds}, {"action", "reject"}});
   }
-  if (!warp.empty() && settings.warpIpv6) {
-    rules.push_back(Json{{"ip_version", 6}, {"outbound", warp}});
-  }
   if (settings.russiaDirect) {
     rules.push_back(Json{{"domain_suffix", zones}, {"outbound", direct}});
     if (!russianNames.empty()) {
@@ -627,7 +616,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     } else if (r.action == RouteRule::Action::Direct) {
       rule["server"] = kLocalDns;
     } else {
-      continue;  // through the proxy: the config's own DNS
+      continue;  // through the proxy or WARP: the config's own DNS
     }
     dnsRules.push_back(std::move(rule));
   }

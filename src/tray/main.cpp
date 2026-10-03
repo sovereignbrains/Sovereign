@@ -310,7 +310,6 @@ struct RoutingChange {
     ImportFrom,     // text: a configuration's id - its rules copied
     Warp,           // on (a device registered first if there's none)
     WarpVia,        // on: over the proxy; off: directly
-    WarpIpv6,       // on
   };
   What what = What::Source;
   bool on = false;
@@ -812,7 +811,6 @@ class Worker {
         r.warp = change.on;
         break;
       case RoutingChange::What::WarpVia: r.warpViaProxy = change.on; break;
-      case RoutingChange::What::WarpIpv6: r.warpIpv6 = change.on; break;
       case RoutingChange::What::RemoteDns:
         r.remoteDns = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 2));
         break;
@@ -2633,7 +2631,6 @@ UiContent ContentFrom(const View& v) {
   c.routing.warp = r.warp;
   c.routing.warpRegistered = r.warpAccount.has_value();
   c.routing.warpViaProxy = r.warpViaProxy;
-  c.routing.warpIpv6 = r.warpIpv6;
   c.routing.warpAddress = r.warpAccount ? Widen(r.warpAccount->address4) : std::wstring();
   c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
                         : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? L"Quad9 (DoH)"
@@ -2643,7 +2640,9 @@ UiContent ContentFrom(const View& v) {
                                                                           : L"Cloudflare (DoH)";
   for (const auto& rule : r.rules) {
     c.routing.rules.push_back(
-        {.text = Widen(sovereign::tray::RuleText(rule)), .action = RuleActions()[static_cast<std::size_t>(rule.action)]});
+        {.text = Widen(sovereign::tray::RuleText(rule)),
+         .action = RuleActions()[static_cast<std::size_t>(rule.action)],
+         .warp = rule.action == sovereign::tray::RouteRule::Action::Warp});
   }
   if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
     c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
@@ -2878,7 +2877,20 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleFinalDirect: send(What::FinalDirect, !r.finalDirect); break;
     case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
     case UiCommand::ToggleWarp: send(What::Warp, !r.warp); break;
-    case UiCommand::ToggleWarpIpv6: send(What::WarpIpv6, !r.warpIpv6); break;
+    case UiCommand::AddWarpSite:  // typed over WARP's button, no menu: it goes through WARP
+      if (g_mainWindow != nullptr) {
+        g_mainWindow->EditInPlace(UiCommand::AddWarpSite, 0, UiCommand::AddWarpSiteText, L"", false);
+      }
+      break;
+    case UiCommand::AddWarpSiteText:
+      if (!sovereign::tray::ParseRule(Narrow(args.text), sovereign::tray::RouteRule::Action::Warp)) {
+        if (g_trayIcon != nullptr) {
+          g_trayIcon->Balloon(L"Sovereign", L"Не понял: нужны сайты (example.com), IP-подсети или программы (.exe).");
+        }
+      } else {
+        send(What::AddRule, false, static_cast<int>(sovereign::tray::RouteRule::Action::Warp), 0, Narrow(args.text));
+      }
+      break;
     case UiCommand::ChooseWarpVia:
       if (const auto picked = PickFromMenu(owner, args.anchor, {L"через прокси", L"напрямую"}, r.warpViaProxy ? 0 : 1)) {
         send(What::WarpVia, *picked == 0);
@@ -2989,7 +3001,8 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:
     case UiCommand::ChooseWarpVia:
-    case UiCommand::ToggleWarpIpv6:
+    case UiCommand::AddWarpSite:
+    case UiCommand::AddWarpSiteText:
     case UiCommand::ChooseRemoteDns:
     case UiCommand::ChooseLocalDns:
     case UiCommand::AddRule:

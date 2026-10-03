@@ -68,6 +68,7 @@ struct UiProfile {
 struct UiRule {
   std::wstring text;    // "qwen.ai, alicdn.com"
   std::wstring action;  // "напрямую" / "через прокси" / "блокировать" / "через WARP"
+  bool warp = false;    // "через WARP": listed in WARP's own card while it's on
 };
 struct UiRouting {
   bool own = true;            // the client's own routing; else a configuration's
@@ -86,7 +87,6 @@ struct UiRouting {
   bool warp = false;          // on (registered, or being registered)
   bool warpRegistered = false;
   bool warpViaProxy = true;
-  bool warpIpv6 = false;
   std::wstring warpAddress;   // the device's address in WARP, once registered
 };
 
@@ -181,7 +181,8 @@ enum class UiCommand : std::uint8_t {
   ToggleIpv4Only,
   ToggleWarp,         // on: registers a WARP device first if there's none
   ChooseWarpVia,      // anchor: over the proxy or directly
-  ToggleWarpIpv6,
+  AddWarpSite,        // starts typing over WARP's button
+  AddWarpSiteText,    // text: sites (or subnets, programs) to send through WARP
   ChooseRemoteDns,    // anchor: where to open the menu
   ChooseLocalDns,     // anchor
   AddRule,            // starts typing over the button
