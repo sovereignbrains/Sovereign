@@ -5,7 +5,6 @@
 
 #include <wil/resource.h>
 
-#include <algorithm>
 #include <array>
 #include <format>
 #include <initializer_list>
@@ -158,7 +157,10 @@ std::string Utf8(const std::wstring& text) {
     return {};
   }
   const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-  std::string out(static_cast<std::size_t>(std::max(size, 0)), '\0');
+  if (size <= 0) {
+    return {};
+  }
+  std::string out(static_cast<std::size_t>(size), '\0');
   WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), size, nullptr, nullptr);
   return out;
 }
