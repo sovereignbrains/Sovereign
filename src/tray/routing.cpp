@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <format>
 #include <set>
 #include <utility>
@@ -113,6 +114,41 @@ std::string MainSelector(const Json& config) {
     }
   }
   return first;
+}
+
+// The servers' own host names (not addresses), and the names their ECH
+// configs are fetched under: sing-box asks the DNS router for both, and
+// through the proxy a server's name would need that very server.
+std::vector<std::string> ServerNames(const Json& config) {
+  std::set<std::string> names;
+  const auto add = [&](const std::string& host) {
+    const bool letters = std::any_of(host.begin(), host.end(), [](char ch) { return std::isalpha(static_cast<unsigned char>(ch)) != 0; });
+    if (letters && host.find(':') == std::string::npos) {
+      names.insert(Lower(host));
+    }
+  };
+  for (const char* list : {"outbounds", "endpoints"}) {
+    if (!config.contains(list) || !config[list].is_array()) {
+      continue;
+    }
+    for (const Json& o : config[list]) {
+      if (!o.is_object()) {
+        continue;
+      }
+      add(Str(o, "server"));
+      if (const auto tls = o.find("tls"); tls != o.end() && tls->is_object()) {
+        if (const auto ech = tls->find("ech"); ech != tls->end() && ech->is_object()) {
+          add(Str(*ech, "query_server_name"));
+        }
+      }
+      if (const auto peers = o.find("peers"); peers != o.end() && peers->is_array()) {
+        for (const Json& peer : *peers) {
+          add(Str(peer, "address"));
+        }
+      }
+    }
+  }
+  return {names.begin(), names.end()};
 }
 
 std::set<std::string> Tags(const Json& list) {
@@ -458,6 +494,14 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   Json& outbounds = config["outbounds"];
   Json& dns = config["dns"];
   Json& route = config["route"];
+  // Naive with "insecure": what a fork's export (Karing) writes - the official
+  // core refuses the whole config for it ("insecure is not supported on naive
+  // outbound"). Without it the server's certificate is checked, as Naive's is.
+  for (Json& o : outbounds) {
+    if (o.is_object() && Str(o, "type") == "naive" && o.contains("tls") && o["tls"].is_object()) {
+      o["tls"].erase("insecure");
+    }
+  }
   for (const char* key : {"rules", "rule_set"}) {
     if (!route.contains(key) || !route[key].is_array()) {
       route[key] = Json::array();
@@ -600,6 +644,12 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
 
   // DNS: Russian and direct names resolved locally, blocked ones not at all.
   std::vector<Json> dnsRules;
+  // The servers' names directly, first of all: through the proxy the selected
+  // AnyTLS-ECH's own ECH config fetch looped ("DNS query loopback") and its
+  // connections failed for a minute after every start.
+  if (const std::vector<std::string> servers = ServerNames(config); !servers.empty()) {
+    dnsRules.push_back(Json{{"domain", servers}, {"server", kLocalDns}});
+  }
   for (const RouteRule& r : settings.rules) {
     if (r.domains.empty() && r.keywords.empty()) {
       continue;

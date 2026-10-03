@@ -148,7 +148,11 @@ void TestOwn() {
   CHECK(rules.back()["protocol"] == "quic");
   CHECK(c["route"]["final"] == "proxy");
   CHECK(c["dns"]["strategy"] == "ipv4_only");
-  CHECK(c["dns"]["rules"][0]["server"] == "sov-local");  // qwen.ai resolved directly
+  // The servers' own names directly, first: through the proxy a server's name
+  // (its ECH config too) would need that very server.
+  CHECK(c["dns"]["rules"][0]["server"] == "sov-local");
+  CHECK(c["dns"]["rules"][0]["domain"] == json::array({"nl.example.com", "nl2.example.com"}));
+  CHECK(c["dns"]["rules"][1]["server"] == "sov-local");  // qwen.ai resolved directly
   // Blocked names: "no such domain" - REFUSED made Windows retry for ~11 s.
   int nxdomain = 0;
   for (const json& rule : c["dns"]["rules"]) {
@@ -294,6 +298,29 @@ int TryReal(int argc, char** argv) {
   return failed == 0 ? 0 : 1;
 }
 
+// Naive with "insecure" (a Karing export): the official core refuses the whole
+// config for it - gone, the rest of its TLS kept, and sing-box check passes.
+void TestNaiveInsecure() {
+  const RoutingSettings s;
+  const std::string naive = BuildConfigFromLinks({"trojan://pw@nl2.example.com:443#NL"}).config.value_or("{}");
+  json withNaive = json::parse(naive);
+  withNaive["outbounds"].push_back(json::parse(
+      R"({"type":"naive","tag":"Naive","server":"cloud.example.com","server_port":443,"username":"u","password":"p",)"
+      R"("tls":{"enabled":true,"server_name":"cloud.example.com","insecure":true}})"));
+  const auto combined = CombineConfigs({{"ключи", withNaive.dump(), {}}}, OwnFrame(s));
+  const std::string text = ApplyRouting(combined.config.value_or("{}"), s, Files());
+  Checked().emplace_back("naive", text);
+  bool found = false;
+  for (const json& o : json::parse(text)["outbounds"]) {
+    if (o.value("type", "") == "naive") {
+      found = true;
+      CHECK(!o["tls"].contains("insecure"));
+      CHECK(o["tls"].value("server_name", "") == "cloud.example.com");
+    }
+  }
+  CHECK(found);
+}
+
 // WARP: its endpoint over the proxy, rules "через WARP" to it and nothing
 // else; off, none of it - and the rules wait.
 void TestWarp() {
@@ -363,6 +390,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestOwn();
     TestProfile();
     TestWarp();
+    TestNaiveInsecure();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

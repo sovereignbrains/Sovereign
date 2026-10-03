@@ -610,7 +610,11 @@ class Worker {
       }
       model_.SetExpectedConfig(ExpectedConfigHash(config));
       const auto stats = PollStats();
-      Execute(model_, model_.OnPoll(stats, TrayModel::Clock::now()), config);
+      const Action action = model_.OnPoll(stats, TrayModel::Clock::now());
+      Execute(model_, action, config);
+      if (action == Action::Start) {
+        FallBackIfRoutingRejected();
+      }
       UpdateDelays(stats, urlTest);
       ApplySelection(stats);
       UpdateExitIp(stats);
@@ -683,6 +687,8 @@ class Worker {
     std::vector<sovereign::tray::ProfileConfig> parts;
     std::vector<std::string> notes;
     std::size_t source = std::string::npos;  // the part whose routing stays, in profile mode
+    std::string sourceKey;                   // that configuration, as it is now (see rejectedRouting_)
+    std::string sourceName;
     for (const Profile& profile : settings_.profiles) {
       if (!profile.enabled) {
         continue;
@@ -695,6 +701,8 @@ class Worker {
       }
       if (profile.id == settings_.routing.sourceProfile) {
         source = parts.size();
+        sourceKey = profile.id + ":" + sovereign::Sha256Hex(*config);
+        sourceName = profile.name;
       }
       parts.push_back({.name = profile.name, .config = *config, .disabled = profile.disabled});
     }
@@ -705,12 +713,16 @@ class Worker {
       if (source == std::string::npos) {
         routing.source = RoutingSettings::Source::Own;
         notes.emplace_back("маршруты выбранной конфигурации недоступны (выключена или удалена) — работают свои");
+      } else if (sourceKey == rejectedRouting_) {
+        routing.source = RoutingSettings::Source::Own;
+        notes.push_back("ядро не приняло маршруты «" + sourceName + "» (" + rejectedWhy_ + ") — работают свои");
       } else {
         std::rotate(parts.begin(), parts.begin() + static_cast<std::ptrdiff_t>(source),
                     parts.begin() + static_cast<std::ptrdiff_t>(source) + 1);
       }
     }
     const bool own = routing.source == RoutingSettings::Source::Own;
+    routingKey_ = own ? std::string() : sourceKey;
     auto combined = sovereign::tray::CombineConfigs(
         parts, own ? std::optional<std::string>(sovereign::tray::OwnFrame(routing)) : std::nullopt);
     combineError_ = combined.error;
@@ -863,6 +875,24 @@ class Worker {
                                                       .apps = settings_.apps,
                                                       .logLevel = settings_.logLevel,
                                                       .cacheFile = cacheFile_});
+  }
+
+  // After a start: when a configuration's own routing was in it and the core
+  // refused the config itself ("parse config" / "create box" - an exported
+  // config of a sing-box fork, with fields the official core doesn't know),
+  // own routing takes over until that configuration changes, and the user
+  // is told - rather than no connection at all. A failure while starting
+  // ("start box") is no reason: that's retried as it is.
+  void FallBackIfRoutingRejected() {
+    const std::string& error = model_.LastError();
+    const bool refused = error.find("parse config") != std::string::npos || error.find("create box") != std::string::npos;
+    if (routingKey_.empty() || !refused || routingKey_ == rejectedRouting_) {
+      return;
+    }
+    rejectedRouting_ = routingKey_;
+    rejectedWhy_ = error.size() > 160 ? error.substr(0, 160) + "…" : error;
+    Notify(L"Sovereign: маршруты подписки не подошли",
+           L"Ядро их не принимает: " + Widen(rejectedWhy_) + L". Работают свои маршруты.", true, UiPage::Routing);
   }
 
   // The selector's options in the combined config and which one the box
@@ -1791,6 +1821,12 @@ class Worker {
   std::int64_t rulesUpdated_ = 0;  // unix seconds of the last list downloaded
   std::string combineError_;             // why there's none
   std::vector<std::string> combineNotes_;
+  // A configuration's routing the core refused (FallBackIfRoutingRejected):
+  // "<id>:<sha256 of its config>" - own routing runs instead until that
+  // config changes. routingKey_: the one the current config was built with.
+  std::string routingKey_;
+  std::string rejectedRouting_;
+  std::string rejectedWhy_;
   std::uint64_t logSince_ = 0;  // box_logs cursor
   std::string loggedError_;     // the model's error last put into the log
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
@@ -3044,7 +3080,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::RemoveApp:
       if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.apps.size()) {
-        AppsChange change{view.appsMode, view.apps};
+        AppsChange change{view.appsMode, view.apps, {}};
         change.list.erase(change.list.begin() + args.index);
         RequestApps(std::move(change));
       }

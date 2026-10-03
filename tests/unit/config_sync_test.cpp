@@ -7,6 +7,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "check.h"
@@ -190,7 +191,10 @@ void TestDeepNestingIsNotRecursedInto() {
   CHECK(!SameConfig(base, mine));  // compared as text
   CHECK(SameConfig(mine, mine));
   CHECK(ClassifyArrival(base, mine, theirs) == Arrival::Ask);
-  CHECK(sovereign::tray::NestingDepth(R"({"a":"[[[{{{\"]]"})") == 1);  // brackets in strings don't count
+  // Brackets in strings don't count. (Not a raw string inside CHECK: MSVC 14.44's
+  // preprocessor misreads one with ']]' among a macro's arguments.)
+  constexpr std::string_view kInString = R"({"a":"[[[{{{\"]]"})";
+  CHECK(sovereign::tray::NestingDepth(kInString) == 1);
 }
 
 }  // namespace
