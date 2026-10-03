@@ -308,6 +308,64 @@ Moved TakeServers(Json& part, const std::string& partName, std::set<std::string>
   return moved;
 }
 
+// Chains (ProfileConfig::via): each part connecting through another gets
+// that part's servers as a URL test of their own, and its own servers -
+// those not already chained within it - that test as their detour. A chain
+// that can't be made drops the part's servers: never directly instead.
+// `tags[i]`: part i's servers in the frame.
+void MakeChains(Json& frame, const std::vector<ProfileConfig>& parts, const std::vector<std::vector<std::string>>& tags,
+                const std::string& replacement, std::vector<std::string>& notes) {
+  std::map<std::string, std::size_t> byId;
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    if (!parts[i].id.empty()) {
+      byId.emplace(parts[i].id, i);
+    }
+  }
+  std::set<std::string> taken = AllTags(frame);
+  std::map<std::size_t, std::string> groups;  // a part chained through -> its URL test's tag
+  std::set<std::string> dropped;
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    if (parts[i].via.empty() || tags[i].empty()) {
+      continue;
+    }
+    const auto target = byId.find(parts[i].via);
+    if (target == byId.end() || target->second == i || !parts[target->second].via.empty() ||
+        tags[target->second].empty()) {
+      dropped.insert(tags[i].begin(), tags[i].end());
+      notes.push_back(parts[i].name +
+                      ": подключается через другую конфигурацию, а та выключена, пуста или сама идёт цепочкой — "
+                      "серверы пропущены, чтобы не подключаться напрямую");
+      continue;
+    }
+    std::string& group = groups[target->second];
+    if (group.empty()) {
+      const std::string& name = parts[target->second].name;
+      group = std::format("«{}»", name);
+      for (int n = 2; taken.contains(group); ++n) {
+        group = std::format("«{}» {}", name, n);
+      }
+      taken.insert(group);
+      if (Json* outbounds = List(frame, "outbounds")) {
+        outbounds->push_back(Json{{"type", "urltest"}, {"tag", group}, {"outbounds", tags[target->second]}});
+      }
+    }
+    const std::set<std::string> mine(tags[i].begin(), tags[i].end());
+    for (const char* name : kLists) {
+      if (Json* list = List(frame, name)) {
+        for (Json& o : *list) {
+          if (mine.contains(Tag(o)) && Str(o, "detour").empty()) {
+            o["detour"] = group;
+          }
+        }
+      }
+    }
+  }
+  if (!dropped.empty()) {
+    Remove(frame, dropped);
+    Repoint(frame, dropped, replacement, 0);
+  }
+}
+
 std::string Label(const Json& o) {
   static const std::map<std::string, std::string, std::less<>> kNames = {
       {"vless", "VLESS"},         {"vmess", "VMess"},       {"trojan", "Trojan"},   {"shadowsocks", "Shadowsocks"},
@@ -347,7 +405,7 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std
     result.error = "ни одна конфигурация не включена";
     return result;
   }
-  if (!ownFrame && parts.size() == 1 && parts[0].disabled.empty()) {
+  if (!ownFrame && parts.size() == 1 && parts[0].disabled.empty() && parts[0].via.empty()) {
     result.config = parts[0].config;
     return result;
   }
@@ -357,7 +415,7 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std
   std::set<std::string> removed;
   std::optional<Json> frame;
   if (ownFrame) {
-    frame = Parse({.name = "Sovereign", .config = *ownFrame, .disabled = {}}, result.error);
+    frame = Parse({.name = "Sovereign", .config = *ownFrame, .disabled = {}, .id = {}, .via = {}}, result.error);
   } else {
     frame = Parse(parts[0], result.error);
     first = 1;
@@ -409,6 +467,10 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std
 
   std::set<std::string> taken = AllTags(*frame);
   const std::set<std::string> frameDns = DnsServerTags(*frame);
+  std::vector<std::vector<std::string>> partTags(parts.size());  // each part's servers in the frame (chains)
+  if (first == 1) {
+    partTags[0] = ServerTags(*frame);
+  }
   for (std::size_t i = first; i < parts.size(); ++i) {
     std::string error;
     auto part = Parse(parts[i], error);
@@ -419,6 +481,7 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std
     std::set<std::string> off(parts[i].disabled.begin(), parts[i].disabled.end());
     Remove(*part, off);
     Moved moved = TakeServers(*part, parts[i].name, taken, frameDns);
+    partTags[i] = moved.tags;
     // A key added to the frame moves its other values: endpoints first, the
     // reference to outbounds after.
     if (!moved.endpoints.empty() && (!frame->contains("endpoints") || !(*frame)["endpoints"].is_array())) {
@@ -446,6 +509,8 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std
       }
     }
   }
+
+  MakeChains(*frame, parts, partTags, replacement, result.notes);
 
   if (ServerTags(*frame).empty()) {
     result.error = "все серверы выключены";

@@ -29,6 +29,9 @@ struct Profile {
   int userHours = 0;             // the interval the user set; 0 = the server's (updateHours)
   std::vector<std::string> disabled;  // tags of its servers switched off
   std::string hwid;  // the x-hwid its subscription gets: random, its own (IsHwid); empty until the first fetch
+  // The configuration its servers connect through (combine.h's chains): its
+  // servers see that one's address, not the user's. Empty: directly.
+  std::string via;
 };
 
 // What a subscription server is told the device is (x-hwid, which panels

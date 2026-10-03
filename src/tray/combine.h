@@ -20,10 +20,20 @@
 namespace sovereign::tray {
 
 // One configuration's part.
+//
+// `via`: the id of another part its servers connect through - a chain, so
+// this part's servers see the other's address, never the user's. The other
+// part's servers go into a URL test of their own ("«<its name>»", not
+// offered in the selector), and every server of this part that isn't
+// already chained within the part gets it as its detour. A chain that can't
+// be made - that part is off, missing, chained itself, or this one - drops
+// this part's servers with a note rather than let them connect directly.
 struct ProfileConfig {
   std::string name;                   // for its servers' tags that clash with ones before: "NL · <name>"
   std::string config;                 // its config.json
   std::vector<std::string> disabled;  // tags of its servers switched off
+  std::string id{};                   // what another part's `via` names it by
+  std::string via{};                  // the part to connect through; empty: directly
 };
 
 struct CombinedConfig {

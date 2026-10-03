@@ -247,6 +247,7 @@ struct View {
     std::vector<std::string> mergeNotes;  // where the last carry-over met changes on both sides
     std::vector<ServerView> servers;
     bool heldBack = false;         // not fetched so its server doesn't see the user's IP
+    std::string via;               // the configuration its servers connect through; "" = directly
   };
   std::vector<ProfileView> profiles;
   // A balloon to show once: the UI shows it when noticeId changes.
@@ -295,6 +296,7 @@ struct ProfileChange {
     AutoUpdate,  // on
     Hours,       // hours: the refresh interval; 0 = the server's
     Server,      // text: a server's tag, on
+    Via,         // text: the configuration to connect through; "" = directly
   };
   std::string id;
   What what = What::Enabled;
@@ -749,7 +751,8 @@ class Worker {
         sourceKey = profile.id + ":" + sovereign::Sha256Hex(*config);
         sourceName = profile.name;
       }
-      parts.push_back({.name = profile.name, .config = *config, .disabled = profile.disabled});
+      parts.push_back(
+          {.name = profile.name, .config = *config, .disabled = profile.disabled, .id = profile.id, .via = profile.via});
     }
     // The frame: the client's own, or the chosen configuration's (first) -
     // the own one when that isn't on.
@@ -1363,6 +1366,12 @@ class Worker {
       case ProfileChange::What::Server:
         sovereign::tray::SetServerEnabled(*profile, change.text, change.on);
         break;
+      case ProfileChange::What::Via:
+        if (change.text.empty() || (change.text != profile->id && sovereign::tray::IsProfileId(change.text))) {
+          profile->via = change.text;
+          delays_.clear();  // its servers measure through another path now
+        }
+        break;
     }
     Save();
   }
@@ -1832,7 +1841,8 @@ class Worker {
                                 .choiceError = state.choiceError,
                                 .mergeNotes = state.mergeNotes,
                                 .servers = {},
-                                .heldBack = state.heldBack};
+                                .heldBack = state.heldBack,
+                                .via = profile.via};
         for (const auto& server : state.servers) {
           shown.servers.push_back(
               {.tag = server.tag, .label = server.label, .enabled = sovereign::tray::IsServerEnabled(profile, server.tag)});
@@ -2698,6 +2708,12 @@ UiContent ContentFrom(const View& v) {
     shown.waiting = profile.waiting;
     shown.choiceError = Widen(profile.choiceError);
     shown.heldBack = profile.heldBack;
+    if (!profile.via.empty()) {
+      const auto through = std::find_if(v.profiles.begin(), v.profiles.end(),
+                                        [&](const View::ProfileView& p) { return p.id == profile.via; });
+      shown.via = through != v.profiles.end() ? Widen(through->name) : std::wstring(L"удалённая конфигурация");
+      shown.viaBroken = through == v.profiles.end() || !through->enabled || !through->via.empty();
+    }
     for (const std::string& note : profile.mergeNotes) {
       shown.mergeNotes.push_back(Widen(note));
     }
@@ -2899,7 +2915,7 @@ void ShowMainWindow(UiPage page) {
 // window that owns the icon; menus and dialogs belong to args.owner if set.
 // A command about one configuration, from its row or its page.
 void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiArgs& args,
-                      const View::ProfileView& profile) {
+                      const View::ProfileView& profile, const View& view) {
   const auto change = [&](ProfileChange::What what, bool on, std::string text = {}) {
     RequestProfileChange({.id = profile.id, .what = what, .on = on, .text = std::move(text), .hours = 0});
   };
@@ -2915,6 +2931,23 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::RefreshProfile:
       RequestRefresh(profile.id);
       break;
+    case UiCommand::ChooseVia: {  // directly, or through another configuration that isn't a chain itself
+      std::vector<std::wstring> names = {L"Напрямую"};
+      std::vector<std::string> ids = {std::string()};
+      int current = profile.via.empty() ? 0 : -1;
+      for (const auto& other : view.profiles) {
+        if (other.id == profile.id || !other.via.empty()) {
+          continue;
+        }
+        current = other.id == profile.via ? static_cast<int>(ids.size()) : current;
+        names.push_back(Widen(other.name) + (other.enabled ? L"" : L" (выключена)"));
+        ids.push_back(other.id);
+      }
+      if (const auto picked = PickFromMenu(owner, args.anchor, names, current)) {
+        change(ProfileChange::What::Via, false, ids[*picked]);
+      }
+      break;
+    }
     case UiCommand::RefreshDirect:  // from its menu, offered only when it was held back
       if (MessageBoxW(owner,
                       L"Сервер этой подписки увидит твой настоящий IP-адрес. Скачать напрямую?\n\n"
@@ -3170,6 +3203,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::RenameProfile:
     case UiCommand::RefreshProfile:
     case UiCommand::RefreshDirect:
+    case UiCommand::ChooseVia:
     case UiCommand::ToggleAutoUpdate:
     case UiCommand::ChooseRefreshPeriod:
     case UiCommand::SetRefreshHours:
@@ -3181,7 +3215,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::CarryOverEdits:
     case UiCommand::RevertConfig:
       if (args.index >= 0 && static_cast<std::size_t>(args.index) < view.profiles.size()) {
-        OnProfileCommand(owner, command, args, view.profiles[static_cast<std::size_t>(args.index)]);
+        OnProfileCommand(owner, command, args, view.profiles[static_cast<std::size_t>(args.index)], view);
       }
       break;
     case UiCommand::SetAppsMode:

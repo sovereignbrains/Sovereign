@@ -64,6 +64,8 @@ struct UiProfile {
   std::vector<std::wstring> mergeNotes;  // where carrying the edits over met the subscription's changes
   std::vector<UiServer> servers;
   bool heldBack = false;   // not fetched so its server doesn't see the user's IP: "download directly" offered
+  std::wstring via;        // the configuration its servers connect through (its name); empty: directly
+  bool viaBroken = false;  // that one is off, gone or chained itself: these servers don't run
 };
 // The routing's page (routing.h).
 struct UiRule {
@@ -211,6 +213,7 @@ enum class UiCommand : std::uint8_t {
   EditRelayKey,       // starts typing the relay's key over its row (shown empty)
   EditRelayKeyText,   // text: the key
   RefreshDirect,      // index into profiles: fetch it directly - its server sees the user's IP
+  ChooseVia,          // index into profiles, anchor: the menu of configurations to connect through
   SetAppsMode,   // index: 0 all except the list, 1 only the list
   RemoveApp,     // index into apps
   AddRunning,    // anchor: where to open the list of running programs

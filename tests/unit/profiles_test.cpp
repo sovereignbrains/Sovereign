@@ -162,6 +162,24 @@ void TestHwid() {
   CHECK(read.size() == 3 && read[0].hwid == hwid && read[1].hwid.empty() && read[2].hwid.empty());
 }
 
+// A chain (via): kept as it was set; itself or not an id - read as directly.
+// One naming a configuration that's gone stays: the combine drops its
+// servers rather than let them connect directly.
+void TestVia() {
+  auto profiles = Three();
+  profiles[1].via = profiles[0].id;
+  const auto back = ProfilesFromJson(nlohmann::json::parse(ProfilesToJson(profiles).dump()));
+  CHECK(back.size() == 3 && back[1].via == profiles[0].id && back[0].via.empty());
+
+  const auto read = ProfilesFromJson(nlohmann::json::parse(R"([
+    {"id":"p1","name":"A","url":"","via":"p1"},
+    {"id":"p2","name":"B","url":"","via":"../etc"},
+    {"id":"p3","name":"C","url":"","via":"gone9"},
+    {"id":"p4","name":"D","url":"","via":7}
+  ])"));
+  CHECK(read.size() == 4 && read[0].via.empty() && read[1].via.empty() && read[2].via == "gone9" && read[3].via.empty());
+}
+
 // The hosts routed through the proxy: no port, no user info, no path, each once.
 void TestSubscriptionHosts() {
   const std::vector<Profile> profiles = {
@@ -196,6 +214,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestServers();
     TestJson();
     TestHwid();
+    TestVia();
     TestSubscriptionHosts();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

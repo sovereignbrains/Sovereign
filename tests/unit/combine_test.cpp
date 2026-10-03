@@ -156,6 +156,46 @@ void TestChain() {
   CHECK(ListServers("not json").empty());
 }
 
+// A configuration connecting through another (ProfileConfig::via): the other's
+// servers as a URL test of their own, every server of this one through it -
+// its server sees the other's address, not the user's. A chain that can't be
+// made drops this one's servers: never directly instead.
+void TestThrough() {
+  const auto combined = CombineConfigs({{.name = "A", .config = Frame(), .disabled = {}, .id = "a", .via = {}},
+                                        {.name = "Ключи", .config = Keys(), .disabled = {"SS"}, .id = "k", .via = "a"}});
+  const json c = Parsed(combined);
+  Checked().emplace_back("through", combined.config.value_or("{}"));
+  CHECK(combined.notes.empty());
+  CHECK(Tagged(c, "«A»")["type"] == "urltest");
+  CHECK(Members(c, "«A»") == std::vector<std::string>({"NL", "FI"}));
+  CHECK(Tagged(c, "NL · Ключи")["detour"] == "«A»" && Tagged(c, "DE")["detour"] == "«A»");
+  CHECK(!Tagged(c, "NL").contains("detour") && !Tagged(c, "FI").contains("detour"));  // A's own: directly
+  // The chained servers are offered as ever; the chain's own group isn't.
+  CHECK(Members(c, "proxy") == std::vector<std::string>({"auto", "NL", "FI", "NL · Ключи", "DE"}));
+
+  // Through one that isn't on (or doesn't exist): its servers dropped, a note.
+  const auto off = CombineConfigs({{.name = "A", .config = Frame(), .disabled = {}, .id = "a", .via = {}},
+                                   {.name = "Ключи", .config = Keys(), .disabled = {}, .id = "k", .via = "gone"}});
+  const json o = Parsed(off);
+  Checked().emplace_back("through-off", off.config.value_or("{}"));
+  CHECK(Tagged(o, "DE").is_null() && Tagged(o, "NL · Ключи").is_null() && Tagged(o, "SS").is_null());
+  CHECK(off.notes.size() == 1);
+  CHECK(Members(o, "proxy") == std::vector<std::string>({"auto", "NL", "FI"}));
+
+  // No chains of chains: C through B, which goes through A - C dropped, B kept.
+  const auto twice = CombineConfigs({{.name = "A", .config = Frame(), .disabled = {}, .id = "a", .via = {}},
+                                     {.name = "B", .config = Keys(), .disabled = {"SS", "DE"}, .id = "b", .via = "a"},
+                                     {.name = "C", .config = Keys(), .disabled = {"SS", "NL"}, .id = "c", .via = "b"}});
+  const json t = Parsed(twice);
+  CHECK(Tagged(t, "NL · B")["detour"] == "«A»");
+  CHECK(Tagged(t, "DE · C").is_null() && Tagged(t, "DE").is_null());
+  CHECK(twice.notes.size() == 1);
+
+  // Through itself: dropped too. Alone it would have nothing left.
+  const auto self = CombineConfigs({{.name = "A", .config = Frame(), .disabled = {}, .id = "a", .via = "a"}});
+  CHECK(!self.config.has_value());
+}
+
 void TestTwo() {
   const auto combined = CombineConfigs({{"A", Frame(), {}}, {"Ключи", Keys(), {"SS"}}});
   const json c = Parsed(combined);
@@ -283,6 +323,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestServerOff();
     TestChain();
     TestTwo();
+    TestThrough();
     TestNoSelector();
     if (argc == 3 && std::string_view(argv[1]) == "--check" && CheckWithSingBox(argv[2]) != 0) {
       return 1;

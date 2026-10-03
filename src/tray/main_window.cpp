@@ -1461,6 +1461,26 @@ class Painter {
     }
     y += kButton + kGap + 4;
 
+    // A chain (combine.h): its servers connect through another configuration's.
+    {
+      Item via = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Подключаться через", nullptr,
+                             UiCommand::ChooseVia, index);
+      via.detail = p.via.empty() ? std::wstring(L"напрямую") : p.via;
+      l.items.push_back(Make(Kind::Card, via.rect));
+      via.rect = {x0 + 4, via.rect.top + 2, x1 - 4, via.rect.bottom - 2};
+      l.items.push_back(std::move(via));
+      HintAfter(l, L"Подключаться через", body_.get(), x0 + 20, x1 - 120, y + kRow / 2,
+                L"Напрямую — серверы этой конфигурации видят твой настоящий IP. Через другую твою конфигурацию — "
+                L"они видят адрес её сервера, а не твой: для сервисов, которым не хочется показывать себя.\n\n"
+                L"Если та конфигурация выключена или удалена, серверы этой не подключаются вовсе — не напрямую.");
+      y += kRow + 6;
+      if (p.viaBroken) {
+        y = Paragraph(l, Kind::ErrorText, L"«" + p.via + L"» выключена или удалена — серверы этой конфигурации не работают.",
+                      x0, x1, y) + 6;
+      }
+      y += kGap;
+    }
+
     // Its servers: a switch each.
     const auto off = std::count_if(p.servers.begin(), p.servers.end(), [](const UiServer& s) { return !s.enabled; });
     y = Heading(l,

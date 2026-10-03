@@ -183,7 +183,8 @@ nlohmann::json ProfilesToJson(const std::vector<Profile>& profiles) {
                     {"autoUpdate", p.autoUpdate},
                     {"userHours", p.userHours},
                     {"disabled", p.disabled},
-                    {"hwid", p.hwid}});
+                    {"hwid", p.hwid},
+                    {"via", p.via}});
   }
   return list;
 }
@@ -241,6 +242,9 @@ std::vector<Profile> ProfilesFromJson(const nlohmann::json& json, std::string_vi
     }
     if (const auto hwid = text(entry, "hwid"); hwid && IsHwid(*hwid)) {
       p.hwid = *hwid;  // anything else: a new one at the next fetch
+    }
+    if (const auto via = text(entry, "via"); via && IsProfileId(*via) && *via != p.id) {
+      p.via = *via;  // one that's gone by now is left to the combine: its servers dropped, not direct
     }
     if (p.name.empty()) {
       p.name = UniqueProfileName(profiles, "Конфиг");
