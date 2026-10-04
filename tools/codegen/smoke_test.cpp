@@ -1,7 +1,7 @@
 #include <cassert>
 #include <iostream>
 
-#include "../../src/generated/anytls_outbound.gen.h"
+#include "../../src/generated/outbounds.gen.h"
 
 int main() {
   sovereign::codegen::option::AnyTLSOutboundOptions opts;

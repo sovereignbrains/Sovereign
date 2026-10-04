@@ -18,13 +18,17 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "check.h"
+#include "outbounds.gen.h"
 #include "share_links.h"
 
 namespace {
@@ -253,7 +257,7 @@ void TestClashYaml() {
 
   const json hy2 = Tagged(config, "HY2");
   CHECK(hy2["server_port"] == 443);
-  CHECK(hy2["server_ports"] == json::array({"20000:30000"}));
+  CHECK(hy2["server_ports"] == "20000:30000");  // a list of one: the item, as sing-box writes it
   CHECK(hy2["obfs"]["password"] == "ob");
   CHECK(hy2["tls"]["insecure"] == true);
 
@@ -275,7 +279,7 @@ void TestClashYaml() {
   const json warp = Tagged(config, "WARP");
   CHECK(config.contains("endpoints") && config["endpoints"].size() == 1);
   CHECK(warp["address"] == json::array({"172.16.0.2/32", "2606:4700:110:8a36::2/128"}));
-  CHECK(warp["peers"][0]["reserved"] == json::array({1, 2, 3}));
+  CHECK(warp["peers"][0]["reserved"] == "AQID");  // []uint8 {1, 2, 3}: base64, as Go writes it
   CHECK(warp["peers"][0]["public_key"] == WgKey('b'));
   CHECK(warp["mtu"] == 1280);
   const json& group = config["outbounds"][1];
@@ -475,11 +479,11 @@ void TestSchemes() {
   CHECK(wg["type"] == "wireguard");
   CHECK(wg["private_key"] == WgKey('a'));
   CHECK(wg["address"] == json::array({"172.16.0.2/32", "2606:4700::2/128"}));
-  CHECK(wg["peers"][0]["reserved"] == json::array({1, 2, 3}));
+  CHECK(wg["peers"][0]["reserved"] == "AQID");
   CHECK(wg["peers"][0]["allowed_ips"] == json::array({"0.0.0.0/0", "::/0"}));
   const json hiddify = Outbound("wg://162.159.192.1:2408?pk=" + Percent(WgKey('a')) + "&local_address=10.0.0.2&peer_pk=" +
                                 Percent(WgKey('b')));
-  CHECK(hiddify["address"] == json::array({"10.0.0.2/32"}));
+  CHECK(hiddify["address"] == "10.0.0.2/32");
   CHECK(!ParseShareLink("wireguard://key@1.2.3.4:51820").outbound);  // no peer key, no address
 
   const json ssh = Outbound("ssh://root:pw@s.example.com#SSH");
@@ -510,6 +514,101 @@ void TestSchemes() {
   Config("schemes", items, links.size());
 }
 
+int RunSingBox(const std::string& singBox, const std::wstring& arguments) {
+  std::wstring command = L"\"" + std::filesystem::path(singBox).wstring() + L"\" " + arguments;
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  DWORD code = 1;
+  if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
+    WaitForSingleObject(process.hProcess, INFINITE);
+    GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+  }
+  return static_cast<int>(code);
+}
+
+namespace opt = sovereign::codegen::option;
+
+template <typename Options>
+json ReadAndWrite(const json& fields) {
+  return json(fields.get<Options>());
+}
+
+// sing-box's own output read into the generated struct and written back: it
+// must come out the same - the generated reading (unions too) checked against
+// the real thing, not only the writing.
+std::optional<json> ThroughGenerated(const json& outbound) {
+  using Convert = json (*)(const json&);
+  static const std::map<std::string, Convert, std::less<>> kTypes = {
+      {"vless", ReadAndWrite<opt::VLESSOutboundOptions>},
+      {"vmess", ReadAndWrite<opt::VMessOutboundOptions>},
+      {"trojan", ReadAndWrite<opt::TrojanOutboundOptions>},
+      {"shadowsocks", ReadAndWrite<opt::ShadowsocksOutboundOptions>},
+      {"hysteria2", ReadAndWrite<opt::Hysteria2OutboundOptions>},
+      {"hysteria", ReadAndWrite<opt::HysteriaOutboundOptions>},
+      {"tuic", ReadAndWrite<opt::TUICOutboundOptions>},
+      {"anytls", ReadAndWrite<opt::AnyTLSOutboundOptions>},
+      {"socks", ReadAndWrite<opt::SOCKSOutboundOptions>},
+      {"http", ReadAndWrite<opt::HTTPOutboundOptions>},
+      {"naive", ReadAndWrite<opt::NaiveOutboundOptions>},
+      {"ssh", ReadAndWrite<opt::SSHOutboundOptions>},
+      {"snell", ReadAndWrite<opt::SnellOutboundOptions>},
+      {"wireguard", ReadAndWrite<opt::WireGuardEndpointOptions>},
+  };
+  const auto it = kTypes.find(outbound.value("type", ""));
+  if (it == kTypes.end()) {
+    return std::nullopt;
+  }
+  json fields = outbound;
+  fields.erase("type");
+  fields.erase("tag");
+  json out = it->second(fields);
+  return out;
+}
+
+// Our servers as sing-box writes them: `sing-box format` reads the config
+// into its own option types and writes it back. Anything it would write
+// differently - a field it doesn't know, a value in another shape - is a
+// difference here. The frame's selector/URL test/direct aren't from links;
+// "singbox-bare" keeps the user's own outbounds as they came.
+int CompareWithFormat(const std::string& name, const json& ours, const json& formatted) {
+  if (name == "singbox-bare") {
+    return 0;
+  }
+  int differences = 0;
+  for (const char* key : {"outbounds", "endpoints"}) {
+    if (!ours.contains(key)) {
+      continue;
+    }
+    const json& mine = ours[key];
+    const json& theirs = formatted.contains(key) ? formatted[key] : json::array();
+    for (std::size_t i = 0; i < mine.size(); ++i) {
+      const std::string type = mine[i].value("type", "");
+      if (type == "selector" || type == "urltest" || type == "direct") {
+        continue;
+      }
+      if (i >= theirs.size() || mine[i] != theirs[i]) {
+        std::cout << "  " << name << " " << key << "[" << i << "]\n    ours:     " << mine[i].dump()
+                  << "\n    sing-box: " << (i < theirs.size() ? theirs[i].dump() : "-") << "\n";
+        ++differences;
+        continue;
+      }
+      json fields = theirs[i];
+      fields.erase("type");
+      fields.erase("tag");
+      const auto read = ThroughGenerated(theirs[i]);
+      if (!read || *read != fields) {
+        std::cout << "  " << name << " " << key << "[" << i << "] read back\n    sing-box:  " << fields.dump()
+                  << "\n    generated: " << (read ? read->dump() : "no generated type for " + type) << "\n";
+        ++differences;
+      }
+    }
+  }
+  return differences;
+}
+
 // What sing-box itself says about the configs made above.
 int CheckWithSingBox(const std::string& singBox) {
   const auto dir = std::filesystem::temp_directory_path() / "sovereign-import-check";
@@ -518,21 +617,19 @@ int CheckWithSingBox(const std::string& singBox) {
   for (const auto& [name, config] : Built()) {
     const auto path = dir / (name + ".json");
     std::ofstream(path, std::ios::binary) << config;
-    std::wstring command = L"\"" + std::filesystem::path(singBox).wstring() + L"\" check -c \"" + path.wstring() + L"\"";
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    DWORD code = 1;
-    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
-      WaitForSingleObject(process.hProcess, INFINITE);
-      GetExitCodeProcess(process.hProcess, &code);
-      CloseHandle(process.hThread);
-      CloseHandle(process.hProcess);
+    const int code = RunSingBox(singBox, L"check -c \"" + path.wstring() + L"\"");
+    const auto formattedPath = dir / (name + ".formatted.json");
+    std::ofstream(formattedPath, std::ios::binary) << config;
+    int differences = -1;
+    if (RunSingBox(singBox, L"format -w -c \"" + formattedPath.wstring() + L"\"") == 0) {
+      std::ifstream in(formattedPath, std::ios::binary);
+      const json formatted = json::parse(in, nullptr, /*allow_exceptions=*/false);
+      differences = formatted.is_object() ? CompareWithFormat(name, json::parse(config), formatted) : -1;
     }
-    std::cout << (code == 0 ? "ok     " : "FAILED ") << name << "\n";
-    if (code != 0) {
-      ++failed;
-    }
+    const bool ok = code == 0 && differences == 0;
+    std::cout << (ok ? "ok     " : "FAILED ") << name << (differences != 0 ? " (not as sing-box writes it)" : "")
+              << "\n";
+    failed += ok ? 0 : 1;
   }
   return failed;
 }

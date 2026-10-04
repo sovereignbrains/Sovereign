@@ -1,6 +1,7 @@
 #include "share_links.h"
 
 #include "import_formats.h"
+#include "outbounds.gen.h"
 
 #include <nlohmann/json.hpp>
 
@@ -10,7 +11,10 @@
 #include <cstdint>
 #include <format>
 #include <initializer_list>
+#include <optional>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 namespace sovereign::tray {
 
@@ -237,38 +241,50 @@ std::pair<std::string, std::string> Credentials(const Uri& uri) {
   return {raw.substr(0, colon), raw.substr(colon + 1)};
 }
 
-// The TLS block the V2Ray-style parameters describe; null when there's none.
-Json Tls(const std::string& security, const Uri& uri, const std::string& sni, const std::string& alpn,
-         const std::string& fingerprint, bool insecure) {
+namespace opt = sovereign::codegen::option;
+
+// What a link becomes: sing-box's own option struct for its type, generated
+// from sing-box's sources (src/generated/outbounds.gen.h) - a field sing-box
+// doesn't have doesn't compile, and every value is written the way sing-box
+// writes it (a list of one as the item, an empty value not at all).
+template <typename Options>
+Json Written(std::string_view type, const Options& options) {
+  Json out = Json::object();
+  out["type"] = type;
+  const nlohmann::json fields = options;
+  for (auto it = fields.begin(); it != fields.end(); ++it) {
+    out[it.key()] = Json(it.value());
+  }
+  return out;
+}
+
+// The TLS block the V2Ray-style parameters describe; none when there's none.
+std::optional<opt::OutboundTLSOptions> Tls(const std::string& security, const Uri& uri, const std::string& sni,
+                                           const std::string& alpn, const std::string& fingerprint, bool insecure) {
   if (security != "tls" && security != "reality" && security != "xtls") {
-    return nullptr;
+    return std::nullopt;
   }
-  Json tls = Json::object();
-  tls["enabled"] = true;
-  if (!sni.empty()) {
-    tls["server_name"] = sni;
-  }
-  if (insecure) {
-    tls["insecure"] = true;
-  }
-  if (const auto list = SplitList(alpn, ','); !list.empty()) {
-    tls["alpn"] = list;
-  }
+  opt::OutboundTLSOptions tls;
+  tls.enabled = true;
+  tls.serverName = sni;
+  tls.insecure = insecure;
+  tls.alpn = SplitList(alpn, ',');
   std::string fp = fingerprint;
   if (security == "reality") {
     if (fp.empty()) {
       fp = "chrome";  // REALITY runs over uTLS in sing-box
     }
-    Json reality = Json::object();
-    reality["enabled"] = true;
-    reality["public_key"] = uri.Get("pbk");
-    if (const std::string sid = uri.Get("sid"); !sid.empty()) {
-      reality["short_id"] = sid;
-    }
-    tls["reality"] = std::move(reality);
+    opt::OutboundRealityOptions reality;
+    reality.enabled = true;
+    reality.publicKey = uri.Get("pbk");
+    reality.shortID = uri.Get("sid");
+    tls.reality = std::move(reality);
   }
   if (!fp.empty() && fp != "none") {
-    tls["utls"] = Json{{"enabled", true}, {"fingerprint", fp}};
+    opt::OutboundUTLSOptions utls;
+    utls.enabled = true;
+    utls.fingerprint = fp;
+    tls.utls = std::move(utls);
   }
   return tls;
 }
@@ -280,71 +296,61 @@ bool Insecure(const Uri& uri) {
 
 // The transport for a V2Ray `type`/`net`; an error for the ones sing-box
 // doesn't have.
-std::pair<Json, std::string> Transport(std::string type, const std::string& host, std::string path,
-                                       const std::string& serviceName, const std::string& headerType) {
+std::pair<std::optional<opt::V2RayTransportOptions>, std::string> Transport(std::string type, const std::string& host,
+                                                                           std::string path,
+                                                                           const std::string& serviceName,
+                                                                           const std::string& headerType) {
   type = LowerCopy(type);
   if (type.empty() || type == "tcp" || type == "raw") {
-    if (LowerCopy(headerType) == "http") {
-      Json http = {{"type", "http"}};
-      if (const auto hosts = SplitList(host, ','); !hosts.empty()) {
-        http["host"] = hosts;
-      }
-      if (!path.empty()) {
-        http["path"] = path;
-      }
-      return {http, {}};
+    if (LowerCopy(headerType) != "http") {
+      return {std::nullopt, {}};
     }
-    return {nullptr, {}};
+    type = "http";  // TCP with an HTTP header: sing-box's HTTP transport
   }
+  opt::V2RayTransportOptions transport;
   if (type == "ws" || type == "websocket") {
-    Json ws = {{"type", "ws"}};
+    transport.type = "ws";
     // "/path?ed=2048": early data, which sing-box takes as options.
     if (const std::size_t q = path.find("?ed="); q != std::string::npos) {
       const auto early = ParseInt(std::string_view(path).substr(q + 4));
       path.resize(q);
       if (early && *early > 0) {
-        ws["max_early_data"] = *early;
-        ws["early_data_header_name"] = "Sec-WebSocket-Protocol";
+        transport.websocketOptions.maxEarlyData = static_cast<std::uint32_t>(*early);
+        transport.websocketOptions.earlyDataHeaderName = "Sec-WebSocket-Protocol";
       }
     }
-    ws["path"] = path.empty() ? "/" : path;
+    transport.websocketOptions.path = path.empty() ? "/" : path;
     if (!host.empty()) {
-      ws["headers"] = Json{{"Host", host}};
+      transport.websocketOptions.headers["Host"] = std::vector<std::string>{host};
     }
-    return {ws, {}};
+    return {transport, {}};
   }
   if (type == "grpc" || type == "gun") {
-    Json grpc = {{"type", "grpc"}};
-    if (!serviceName.empty()) {
-      grpc["service_name"] = serviceName;
-    }
-    return {grpc, {}};
+    transport.type = "grpc";
+    transport.grpcOptions.serviceName = serviceName;
+    return {transport, {}};
   }
   if (type == "http" || type == "h2") {
-    Json http = {{"type", "http"}};
-    if (const auto hosts = SplitList(host, ','); !hosts.empty()) {
-      http["host"] = hosts;
-    }
-    if (!path.empty()) {
-      http["path"] = path;
-    }
-    return {http, {}};
+    transport.type = "http";
+    transport.httpOptions.host = SplitList(host, ',');
+    transport.httpOptions.path = path;
+    return {transport, {}};
   }
   if (type == "httpupgrade") {
-    Json upgrade = {{"type", "httpupgrade"}};
-    if (!host.empty()) {
-      upgrade["host"] = host;
-    }
-    upgrade["path"] = path.empty() ? "/" : path;
-    return {upgrade, {}};
+    transport.type = "httpupgrade";
+    transport.httpUpgradeOptions.host = host;
+    transport.httpUpgradeOptions.path = path.empty() ? "/" : path;
+    return {transport, {}};
   }
   if (type == "quic") {
-    return {Json{{"type", "quic"}}, {}};
+    transport.type = "quic";
+    return {transport, {}};
   }
-  return {nullptr, "транспорт " + type + " sing-box не поддерживает"};
+  return {std::nullopt, "транспорт " + type + " sing-box не поддерживает"};
 }
 
-bool SetServer(Json& out, const Uri& uri, std::string& error, int defaultPort = 0) {
+template <typename Options>
+bool SetServer(Options& out, const Uri& uri, std::string& error, int defaultPort = 0) {
   auto port = ParsePort(uri.port);
   if (!port && uri.port.empty() && defaultPort != 0) {
     port = defaultPort;
@@ -353,55 +359,50 @@ bool SetServer(Json& out, const Uri& uri, std::string& error, int defaultPort = 
     error = "нет адреса или порта сервера";
     return false;
   }
-  out["server"] = uri.host;
-  out["server_port"] = *port;
+  out.server = uri.host;
+  out.serverPort = static_cast<std::uint16_t>(*port);
   return true;
 }
 
-void AddTransportAndTls(Json& out, const Uri& uri, const std::string& defaultSecurity, std::string& error) {
+template <typename Options>
+void AddTransportAndTls(Options& out, const Uri& uri, const std::string& defaultSecurity, std::string& error) {
   const std::string security = LowerCopy(uri.Get("security", defaultSecurity));
-  const std::string host = uri.Get("host");
-  const Json tls = Tls(security, uri, uri.Get("sni", uri.Get("peer")), uri.Get("alpn"), uri.Get("fp"), Insecure(uri));
-  if (!tls.is_null()) {
-    out["tls"] = tls;
-  }
+  out.tls = Tls(security, uri, uri.Get("sni", uri.Get("peer")), uri.Get("alpn"), uri.Get("fp"), Insecure(uri));
   auto [transport, transportError] =
-      Transport(uri.Get("type", "tcp"), host, uri.Get("path"), uri.Get("servicename"), uri.Get("headertype"));
+      Transport(uri.Get("type", "tcp"), uri.Get("host"), uri.Get("path"), uri.Get("servicename"), uri.Get("headertype"));
   if (!transportError.empty()) {
     error = std::move(transportError);
     return;
   }
-  if (!transport.is_null()) {
-    out["transport"] = std::move(transport);
-  }
+  out.transport = std::move(transport);
 }
 
 std::string Vless(const Uri& uri, Json& out) {
+  opt::VLESSOutboundOptions vless;
   std::string error;
-  out["type"] = "vless";
-  if (!SetServer(out, uri, error)) {
+  if (!SetServer(vless, uri, error)) {
     return error;
   }
-  out["uuid"] = PercentDecode(uri.userinfo);
-  if (const std::string flow = uri.Get("flow"); !flow.empty()) {
-    out["flow"] = flow;
-  }
-  AddTransportAndTls(out, uri, "none", error);
-  out["packet_encoding"] = "xudp";
-  if (PercentDecode(uri.userinfo).empty()) {
+  vless.uuid = PercentDecode(uri.userinfo);
+  vless.flow = uri.Get("flow");
+  AddTransportAndTls(vless, uri, "none", error);
+  vless.packetEncoding = "xudp";
+  if (vless.uuid.empty()) {
     return "нет UUID";
   }
+  out = Written("vless", vless);
   return error;
 }
 
 std::string Trojan(const Uri& uri, Json& out) {
+  opt::TrojanOutboundOptions trojan;
   std::string error;
-  out["type"] = "trojan";
-  if (!SetServer(out, uri, error)) {
+  if (!SetServer(trojan, uri, error)) {
     return error;
   }
-  out["password"] = PercentDecode(uri.userinfo);
-  AddTransportAndTls(out, uri, "tls", error);
+  trojan.password = PercentDecode(uri.userinfo);
+  AddTransportAndTls(trojan, uri, "tls", error);
+  out = Written("trojan", trojan);
   return error;
 }
 
@@ -409,21 +410,22 @@ std::string Trojan(const Uri& uri, Json& out) {
 std::string Vmess(const Uri& uri, Json& out) {
   const auto decoded = DecodeBase64(uri.body);
   const auto json = decoded ? nlohmann::json::parse(*decoded, nullptr, false) : nlohmann::json();
+  opt::VMessOutboundOptions vmess;
   if (!json.is_object()) {
     std::string error;
-    out["type"] = "vmess";
-    if (!SetServer(out, uri, error)) {
+    if (!SetServer(vmess, uri, error)) {
       return error;
     }
-    out["uuid"] = PercentDecode(uri.userinfo);
-    out["security"] = uri.Get("encryption", "auto");
+    vmess.uuid = PercentDecode(uri.userinfo);
+    vmess.security = uri.Get("encryption", "auto");
     if (const auto alterId = ParseInt(uri.Get("aid")); alterId && *alterId > 0) {
-      out["alter_id"] = *alterId;
+      vmess.alterId = *alterId;
     }
-    AddTransportAndTls(out, uri, "none", error);
-    if (error.empty() && PercentDecode(uri.userinfo).empty()) {
+    AddTransportAndTls(vmess, uri, "none", error);
+    if (error.empty() && vmess.uuid.empty()) {
       return "нет UUID";
     }
+    out = Written("vmess", vmess);
     return error;
   }
   const auto str = [&](const char* key) -> std::string {
@@ -439,38 +441,33 @@ std::string Vmess(const Uri& uri, Json& out) {
     }
     return {};
   };
-  out["type"] = "vmess";
   Uri server;
   server.host = str("add");
   server.port = str("port");
   std::string error;
-  if (!SetServer(out, server, error)) {
+  if (!SetServer(vmess, server, error)) {
     return error;
   }
-  out["uuid"] = str("id");
+  vmess.uuid = str("id");
   const std::string scy = str("scy");
-  out["security"] = scy.empty() ? "auto" : scy;
+  vmess.security = scy.empty() ? "auto" : scy;
   if (const auto alterId = ParseInt(str("aid")); alterId && *alterId > 0) {
-    out["alter_id"] = *alterId;
+    vmess.alterId = *alterId;
   }
   const std::string net = str("net");
-  const Json tls = Tls(LowerCopy(str("tls")), server, str("sni"), str("alpn"), str("fp"), false);
-  if (!tls.is_null()) {
-    out["tls"] = tls;
-  }
+  vmess.tls = Tls(LowerCopy(str("tls")), server, str("sni"), str("alpn"), str("fp"), false);
   auto [transport, transportError] =
       Transport(net, str("host"), str("path"), LowerCopy(net) == "grpc" ? str("path") : std::string(), str("type"));
   if (!transportError.empty()) {
     return transportError;
   }
-  if (!transport.is_null()) {
-    out["transport"] = std::move(transport);
+  vmess.transport = std::move(transport);
+  if (vmess.uuid.empty()) {
+    return "нет UUID";
   }
+  out = Written("vmess", vmess);
   if (const std::string ps = str("ps"); !ps.empty()) {
     out["tag"] = ps;  // the name - taken out again by the caller
-  }
-  if (str("id").empty()) {
-    return "нет UUID";
   }
   return {};
 }
@@ -506,13 +503,13 @@ std::string Shadowsocks(const Uri& uri, Json& out) {
   if (colon == std::string::npos || colon == 0) {
     return "нет метода шифрования или пароля";
   }
-  out["type"] = "shadowsocks";
+  opt::ShadowsocksOutboundOptions ss;
   std::string error;
-  if (!SetServer(out, server, error)) {
+  if (!SetServer(ss, server, error)) {
     return error;
   }
-  out["method"] = LowerCopy(credentials.substr(0, colon));
-  out["password"] = credentials.substr(colon + 1);
+  ss.method = LowerCopy(credentials.substr(0, colon));
+  ss.password = credentials.substr(colon + 1);
   if (const std::string plugin = uri.Get("plugin"); !plugin.empty()) {
     const std::size_t semi = plugin.find(';');
     std::string name = plugin.substr(0, semi);
@@ -522,11 +519,12 @@ std::string Shadowsocks(const Uri& uri, Json& out) {
     if (name != "obfs-local" && name != "v2ray-plugin") {
       return "плагин " + name + " sing-box не поддерживает";
     }
-    out["plugin"] = name;
+    ss.plugin = name;
     if (semi != std::string::npos) {
-      out["plugin_opts"] = plugin.substr(semi + 1);
+      ss.pluginOptions = plugin.substr(semi + 1);
     }
   }
+  out = Written("shadowsocks", ss);
   return {};
 }
 
@@ -547,64 +545,59 @@ std::vector<std::string> PortRanges(std::string_view text) {
 
 // server_port, or server_ports for port hopping ("443,20000-30000" in the
 // port or in mport).
-std::string SetHoppingServer(Json& out, const Uri& uri) {
+template <typename Options>
+std::string SetHoppingServer(Options& out, const Uri& uri) {
   if (uri.host.empty()) {
     return "нет адреса сервера";
   }
-  out["server"] = uri.host;
+  out.server = uri.host;
   const std::string ports = uri.Get("mport");
-  if (const auto single = ParsePort(uri.port); single && ports.empty()) {
-    out["server_port"] = *single;
-  } else {
+  const auto single = ParsePort(uri.port);
+  if (single) {
+    out.serverPort = static_cast<std::uint16_t>(*single);
+  }
+  if (!single || !ports.empty()) {
     const auto ranges = PortRanges(ports.empty() ? uri.port : ports);
     if (ranges.empty()) {
       return "нет порта сервера";
     }
-    if (single) {
-      out["server_port"] = *single;
-    }
-    out["server_ports"] = ranges;
+    out.serverPorts = ranges;
   }
   return {};
 }
 
 // The TLS of the QUIC protocols: always on.
-Json QuicTls(const Uri& uri, std::vector<std::string> defaultAlpn) {
-  Json tls = Json::object();
-  tls["enabled"] = true;
-  if (const std::string sni = uri.Any({"sni", "peer"}); !sni.empty()) {
-    tls["server_name"] = sni;
-  }
-  if (Insecure(uri)) {
-    tls["insecure"] = true;
-  }
+opt::OutboundTLSOptions QuicTls(const Uri& uri, std::vector<std::string> defaultAlpn) {
+  opt::OutboundTLSOptions tls;
+  tls.enabled = true;
+  tls.serverName = uri.Any({"sni", "peer"});
+  tls.insecure = Insecure(uri);
   auto alpn = SplitList(uri.Get("alpn"), ',');
-  if (alpn.empty()) {
-    alpn = std::move(defaultAlpn);
-  }
-  if (!alpn.empty()) {
-    tls["alpn"] = alpn;
-  }
+  tls.alpn = alpn.empty() ? std::move(defaultAlpn) : std::move(alpn);
   return tls;
 }
 
 std::string Hysteria2(const Uri& uri, Json& out) {
-  out["type"] = "hysteria2";
-  if (std::string error = SetHoppingServer(out, uri); !error.empty()) {
+  opt::Hysteria2OutboundOptions hy2;
+  if (std::string error = SetHoppingServer(hy2, uri); !error.empty()) {
     return error;
   }
-  out["password"] = PercentDecode(uri.userinfo);
+  hy2.password = PercentDecode(uri.userinfo);
   if (const std::string obfs = uri.Get("obfs"); !obfs.empty() && obfs != "none") {
-    out["obfs"] = Json{{"type", obfs}, {"password", uri.Get("obfs-password")}};
+    opt::Hysteria2Obfs o;
+    o.type = obfs;
+    o.password = uri.Get("obfs-password");
+    hy2.obfs = std::move(o);
   }
-  out["tls"] = QuicTls(uri, {});
+  hy2.tls = QuicTls(uri, {});
+  out = Written("hysteria2", hy2);
   return {};
 }
 
 // Hysteria 1: hysteria://host:port?auth=...&upmbps=...&downmbps=...&obfsParam=...
 std::string Hysteria(const Uri& uri, Json& out) {
-  out["type"] = "hysteria";
-  if (std::string error = SetHoppingServer(out, uri); !error.empty()) {
+  opt::HysteriaOutboundOptions hy;
+  if (std::string error = SetHoppingServer(hy, uri); !error.empty()) {
     return error;
   }
   if (const std::string protocol = LowerCopy(uri.Get("protocol")); !protocol.empty() && protocol != "udp") {
@@ -612,130 +605,107 @@ std::string Hysteria(const Uri& uri, Json& out) {
   }
   // The bandwidth is how fast Hysteria sends: it can't be left out. The
   // defaults are modest - too high a rate loses packets.
-  out["up_mbps"] = LeadingInt(uri.Any({"upmbps", "up"})).value_or(10);
-  out["down_mbps"] = LeadingInt(uri.Any({"downmbps", "down"})).value_or(50);
-  if (const std::string auth = uri.Any({"auth", "auth_str", "auth-str"}); !auth.empty()) {
-    out["auth_str"] = auth;
-  } else if (!uri.userinfo.empty()) {
-    out["auth_str"] = PercentDecode(uri.userinfo);
+  hy.upMbps = LeadingInt(uri.Any({"upmbps", "up"})).value_or(10);
+  hy.downMbps = LeadingInt(uri.Any({"downmbps", "down"})).value_or(50);
+  hy.authString = uri.Any({"auth", "auth_str", "auth-str"});
+  if (hy.authString.empty()) {
+    hy.authString = PercentDecode(uri.userinfo);
   }
-  if (const std::string obfs = uri.Any({"obfsparam", "obfs-password", "obfs"}); !obfs.empty() && obfs != "xplus") {
-    out["obfs"] = obfs;
+  if (const std::string obfs = uri.Any({"obfsparam", "obfs-password", "obfs"}); obfs != "xplus") {
+    hy.obfs = obfs;
   }
-  out["tls"] = QuicTls(uri, {"hysteria"});
+  hy.tls = QuicTls(uri, {"hysteria"});
+  out = Written("hysteria", hy);
   return {};
 }
 
 std::string Tuic(const Uri& uri, Json& out) {
-  out["type"] = "tuic";
+  opt::TUICOutboundOptions tuic;
   std::string error;
-  if (!SetServer(out, uri, error)) {
+  if (!SetServer(tuic, uri, error)) {
     return error;
   }
   const std::string credentials = PercentDecode(uri.userinfo);
   const std::size_t colon = credentials.find(':');
-  out["uuid"] = credentials.substr(0, colon);
+  tuic.uuid = credentials.substr(0, colon);
   if (colon != std::string::npos) {
-    out["password"] = credentials.substr(colon + 1);
+    tuic.password = credentials.substr(colon + 1);
   }
-  if (const std::string cc = uri.Any({"congestion_control", "congestion-control", "congestion-controller"});
-      !cc.empty()) {
-    out["congestion_control"] = cc;
-  }
-  if (const std::string mode = uri.Any({"udp_relay_mode", "udp-relay-mode"}); !mode.empty()) {
-    out["udp_relay_mode"] = mode;
-  }
-  Json tls = QuicTls(uri, {"h3"});
-  if (uri.Flag("disable_sni") || uri.Flag("disable-sni")) {
-    tls["disable_sni"] = true;
-  }
-  out["tls"] = std::move(tls);
+  tuic.congestionControl = uri.Any({"congestion_control", "congestion-control", "congestion-controller"});
+  tuic.udpRelayMode = uri.Any({"udp_relay_mode", "udp-relay-mode"});
+  tuic.tls = QuicTls(uri, {"h3"});
+  tuic.tls->disableSNI = uri.Flag("disable_sni") || uri.Flag("disable-sni");
   if (colon == 0 || credentials.empty()) {
     return "нет UUID";
   }
+  out = Written("tuic", tuic);
   return {};
 }
 
 std::string AnyTls(const Uri& uri, Json& out) {
-  out["type"] = "anytls";
+  opt::AnyTLSOutboundOptions anytls;
   std::string error;
-  if (!SetServer(out, uri, error)) {
+  if (!SetServer(anytls, uri, error)) {
     return error;
   }
-  out["password"] = PercentDecode(uri.userinfo);
-  out["tls"] = Tls(LowerCopy(uri.Get("security", "tls")), uri, uri.Any({"sni", "peer"}), uri.Get("alpn"),
+  anytls.password = PercentDecode(uri.userinfo);
+  anytls.tls = Tls(LowerCopy(uri.Get("security", "tls")), uri, uri.Any({"sni", "peer"}), uri.Get("alpn"),
                    uri.Get("fp"), Insecure(uri));
-  if (out["tls"].is_null()) {
+  if (!anytls.tls) {
     return "AnyTLS без TLS не работает";
   }
-  if (PercentDecode(uri.userinfo).empty()) {
+  if (anytls.password.empty()) {
     return "нет пароля";
   }
+  out = Written("anytls", anytls);
   return {};
 }
 
 // socks://, socks5://, socks4://, socks4a://; the credentials plain or base64.
 std::string Socks(const Uri& uri, Json& out) {
-  out["type"] = "socks";
+  opt::SOCKSOutboundOptions socks;
   std::string error;
-  if (!SetServer(out, uri, error, 1080)) {
+  if (!SetServer(socks, uri, error, 1080)) {
     return error;
   }
   if (uri.scheme == "socks4" || uri.scheme == "socks4a") {
-    out["version"] = uri.scheme.substr(5);
+    socks.version = uri.scheme.substr(5);
   }
-  const auto [user, password] = Credentials(uri);
-  if (!user.empty()) {
-    out["username"] = user;
-  }
-  if (!password.empty()) {
-    out["password"] = password;
-  }
+  std::tie(socks.username, socks.password) = Credentials(uri);
+  out = Written("socks", socks);
   return {};
 }
 
 // An HTTP proxy (from Clash and Xray; a pasted http(s):// link is a subscription).
 std::string HttpProxy(const Uri& uri, Json& out) {
-  out["type"] = "http";
+  opt::HTTPOutboundOptions http;
   std::string error;
-  if (!SetServer(out, uri, error, uri.scheme == "https" ? 443 : 80)) {
+  if (!SetServer(http, uri, error, uri.scheme == "https" ? 443 : 80)) {
     return error;
   }
-  const auto [user, password] = Credentials(uri);
-  if (!user.empty()) {
-    out["username"] = user;
-  }
-  if (!password.empty()) {
-    out["password"] = password;
-  }
+  std::tie(http.username, http.password) = Credentials(uri);
   if (uri.scheme == "https") {
-    out["tls"] = Tls("tls", uri, uri.Any({"sni", "peer"}), uri.Get("alpn"), uri.Get("fp"), Insecure(uri));
+    http.tls = Tls("tls", uri, uri.Any({"sni", "peer"}), uri.Get("alpn"), uri.Get("fp"), Insecure(uri));
   }
+  out = Written("http", http);
   return {};
 }
 
 // naive+https://user:pass@host:port, naive+quic://... - always TLS, the
 // host's name for SNI.
 std::string Naive(const Uri& uri, Json& out) {
-  out["type"] = "naive";
+  opt::NaiveOutboundOptions naive;
   std::string error;
-  if (!SetServer(out, uri, error, 443)) {
+  if (!SetServer(naive, uri, error, 443)) {
     return error;
   }
-  const auto [user, password] = Credentials(uri);
-  if (!user.empty()) {
-    out["username"] = user;
-  }
-  if (!password.empty()) {
-    out["password"] = password;
-  }
-  if (uri.scheme == "naive+quic") {
-    out["quic"] = true;
-  }
-  Json tls = Json::object();
-  tls["enabled"] = true;
-  tls["server_name"] = uri.Any({"sni", "peer"}).empty() ? uri.host : uri.Any({"sni", "peer"});
-  out["tls"] = std::move(tls);
+  std::tie(naive.username, naive.password) = Credentials(uri);
+  naive.quic = uri.scheme == "naive+quic";
+  opt::OutboundTLSOptions tls;
+  tls.enabled = true;
+  tls.serverName = uri.Any({"sni", "peer"}).empty() ? uri.host : uri.Any({"sni", "peer"});
+  naive.tls = std::move(tls);
+  out = Written("naive", naive);
   return {};
 }
 
@@ -755,20 +725,18 @@ std::vector<std::string> Prefixes(std::string_view text) {
 }
 
 // "1,2,3" or base64 of three bytes: WireGuard's reserved bytes (Cloudflare WARP).
-std::optional<std::vector<int>> Reserved(std::string_view text) {
-  std::vector<int> bytes;
+std::optional<std::string> Reserved(std::string_view text) {
+  std::string bytes;
   if (text.find(',') != std::string_view::npos) {
     for (const std::string& part : SplitList(text, ',')) {
       const auto value = ParseInt(part);
       if (!value || *value < 0 || *value > 255) {
         return std::nullopt;
       }
-      bytes.push_back(*value);
+      bytes.push_back(static_cast<char>(*value));
     }
   } else if (const auto decoded = DecodeBase64(text)) {
-    for (const char c : *decoded) {
-      bytes.push_back(static_cast<std::uint8_t>(c));
-    }
+    bytes = *decoded;
   }
   if (bytes.size() != 3) {
     return std::nullopt;
@@ -779,106 +747,97 @@ std::optional<std::vector<int>> Reserved(std::string_view text) {
 // wireguard://privatekey@host:port?publickey=...&address=... (v2rayN), or
 // wg:// with Hiddify's names. A sing-box endpoint, not an outbound.
 std::string WireGuard(const Uri& uri, Json& out) {
-  out["type"] = "wireguard";
   const auto port = ParsePort(uri.port);
   if (uri.host.empty() || !port) {
     return "нет адреса или порта сервера";
   }
-  std::string privateKey = PercentDecode(uri.userinfo);
-  if (privateKey.empty()) {
-    privateKey = uri.Any({"privatekey", "private_key", "pk", "secretkey"});
+  opt::WireGuardEndpointOptions wg;
+  wg.privateKey = PercentDecode(uri.userinfo);
+  if (wg.privateKey.empty()) {
+    wg.privateKey = uri.Any({"privatekey", "private_key", "pk", "secretkey"});
   }
-  const std::string publicKey = uri.Any({"publickey", "public_key", "peer_pk", "peer_public_key", "pbk"});
-  const auto address = Prefixes(uri.Any({"address", "ip", "local_address", "localaddress"}));
-  if (privateKey.empty() || publicKey.empty()) {
+  opt::WireGuardPeer peer;
+  peer.publicKey = uri.Any({"publickey", "public_key", "peer_pk", "peer_public_key", "pbk"});
+  wg.address = Prefixes(uri.Any({"address", "ip", "local_address", "localaddress"}));
+  if (wg.privateKey.empty() || peer.publicKey.empty()) {
     return "нет ключей WireGuard";
   }
-  if (address.empty()) {
+  if (wg.address.values.empty()) {
     return "нет адреса интерфейса WireGuard";
   }
-  out["address"] = address;
-  out["private_key"] = privateKey;
   if (const auto mtu = ParseInt(uri.Get("mtu")); mtu && *mtu >= 576 && *mtu <= 65535) {
-    out["mtu"] = *mtu;
+    wg.mtu = static_cast<std::uint32_t>(*mtu);
   }
-  Json peer = Json::object();
-  peer["address"] = uri.host;
-  peer["port"] = *port;
-  peer["public_key"] = publicKey;
-  if (const std::string psk = uri.Any({"presharedkey", "pre_shared_key", "psk", "preshared_key"}); !psk.empty()) {
-    peer["pre_shared_key"] = psk;
-  }
+  peer.address = uri.host;
+  peer.port = static_cast<std::uint16_t>(*port);
+  peer.preSharedKey = uri.Any({"presharedkey", "pre_shared_key", "psk", "preshared_key"});
   auto allowed = Prefixes(uri.Any({"allowedips", "allowed_ips"}));
-  peer["allowed_ips"] = allowed.empty() ? std::vector<std::string>{"0.0.0.0/0", "::/0"} : allowed;
+  peer.allowedIPs = allowed.empty() ? std::vector<std::string>{"0.0.0.0/0", "::/0"} : std::move(allowed);
   if (const std::string reserved = uri.Get("reserved"); !reserved.empty()) {
     const auto bytes = Reserved(reserved);
     if (!bytes) {
       return "не разобрать reserved";
     }
-    peer["reserved"] = *bytes;
+    peer.reserved = EncodeBase64(*bytes);  // []uint8: base64 in Go's JSON
   }
   if (const auto keepalive = ParseInt(uri.Any({"keepalive", "persistent_keepalive_interval"}));
       keepalive && *keepalive > 0 && *keepalive <= 65535) {
-    peer["persistent_keepalive_interval"] = *keepalive;
+    peer.persistentKeepaliveInterval = static_cast<std::uint16_t>(*keepalive);
   }
-  out["peers"] = Json::array({std::move(peer)});
+  wg.peers.push_back(std::move(peer));
+  out = Written("wireguard", wg);
   return {};
 }
 
 std::string Ssh(const Uri& uri, Json& out) {
-  out["type"] = "ssh";
+  opt::SSHOutboundOptions ssh;
   std::string error;
-  if (!SetServer(out, uri, error, 22)) {
+  if (!SetServer(ssh, uri, error, 22)) {
     return error;
   }
   const auto [user, password] = Credentials(uri);
-  out["user"] = user.empty() ? "root" : user;
-  if (!password.empty()) {
-    out["password"] = password;
-  }
+  ssh.user = user.empty() ? "root" : user;
+  ssh.password = password;
   if (const std::string key = uri.Any({"pk", "private_key", "privatekey"}); !key.empty()) {
-    out["private_key"] = key;
+    ssh.privateKey = std::vector<std::string>{key};
   }
-  if (const std::string hostKey = uri.Any({"hk", "host_key", "hostkey"}); !hostKey.empty()) {
-    out["host_key"] = SplitList(hostKey, ',');
-  }
-  if (password.empty() && !out.contains("private_key")) {
+  ssh.hostKey = SplitList(uri.Any({"hk", "host_key", "hostkey"}), ',');
+  if (password.empty() && ssh.privateKey.values.empty()) {
     return "нет пароля или ключа SSH";
   }
+  out = Written("ssh", ssh);
   return {};
 }
 
 // snell://psk@host:port?version=4&obfs=http&obfs-host=... (Clash's fields);
 // sing-box has versions 4 and 6.
 std::string Snell(const Uri& uri, Json& out) {
-  out["type"] = "snell";
+  opt::SnellOutboundOptions snell;
   std::string error;
-  if (!SetServer(out, uri, error)) {
+  if (!SetServer(snell, uri, error)) {
     return error;
   }
   const int version = ParseInt(uri.Get("version")).value_or(4);
   if (version != 4 && version != 6) {
     return std::format("Snell v{} sing-box не поддерживает (только 4 и 6)", version);
   }
-  out["version"] = version;
-  std::string psk = PercentDecode(uri.userinfo);
-  if (psk.empty()) {
-    psk = uri.Get("psk");
+  snell.version = version;
+  snell.psk = PercentDecode(uri.userinfo);
+  if (snell.psk.empty()) {
+    snell.psk = uri.Get("psk");
   }
-  if (psk.empty()) {
+  if (snell.psk.empty()) {
     return "нет PSK";
   }
-  out["psk"] = psk;
   if (version == 4) {
     if (const std::string obfs = LowerCopy(uri.Get("obfs")); !obfs.empty() && obfs != "none") {
-      out["obfs_mode"] = obfs;
-      if (const std::string host = uri.Get("obfs-host"); !host.empty()) {
-        out["obfs_host"] = host;
-      }
+      snell.obfsOptions.obfsMode = obfs;
+      snell.obfsOptions.obfsHost = uri.Get("obfs-host");
     }
-  } else if (const std::string mode = uri.Get("mode"); !mode.empty()) {
-    out["mode"] = mode;
+  } else {
+    snell.v6Options.mode = uri.Get("mode");
   }
+  out = Written("snell", snell);
   return {};
 }
 
@@ -1252,8 +1211,9 @@ ParsedLink ParseShareLink(std::string_view link) {
   if (parsed.name.empty()) {
     const std::string server = out.contains("peers") ? uri->host : out.value("server", std::string());
     parsed.name = server.find(':') != std::string::npos ? "[" + server + "]" : server;
-    if (out.contains("server_port")) {
-      parsed.name += ":" + std::to_string(out["server_port"].get<int>());
+    // server_port 0: ranges only (port hopping) - the link's own text then.
+    if (const int port = out.value("server_port", 0); port != 0) {
+      parsed.name += ":" + std::to_string(port);
     } else if (!uri->port.empty()) {
       parsed.name += ":" + uri->port;
     }

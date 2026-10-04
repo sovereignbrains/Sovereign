@@ -9,6 +9,34 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The generated option structs (src/generated) against the pinned sing-box:
+  # regenerated here from its sources, they must come out as committed. A field
+  # renamed, added or removed upstream fails this job - not a user's config.
+  codegen-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/codegen/go.mod
+          cache-dependency-path: tools/codegen/go.sum
+
+      - name: Fetch pinned sing-box
+        shell: pwsh
+        run: |
+          $tag = (Get-Content tools/codegen/sing-box.version)[0]
+          git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
+
+      - name: Regenerate
+        shell: pwsh
+        run: pwsh tools/codegen/generate.ps1
+
+      - name: No drift
+        shell: bash
+        run: |
+          git add -N src/generated
+          git diff --exit-code --stat src/generated || { echo "::error::src/generated differs from what the pinned sing-box generates - run tools/codegen/generate.ps1 and commit"; git diff src/generated | head -200; exit 1; }
+
   build:
     runs-on: windows-latest
     steps:

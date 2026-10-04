@@ -6,7 +6,7 @@ A native Windows client for [sing-box](https://github.com/SagerNet/sing-box), wr
 
 Third-party sing-box clients have a reputation for being thin, sloppy wrappers. Sovereign's answer is evidence in CI:
 
-- **The config model is generated, not handwritten.** C++ option structs come from the pinned sing-box sources by `tools/codegen` (real Go type-checking, not regex), and every serializer is tested against JSON that sing-box's own marshaler produced.
+- **Servers are written from generated types, not by hand.** Every outbound and WireGuard endpoint the client writes (share links, subscriptions, WARP) is a C++ option struct generated from the pinned sing-box sources by `tools/codegen` (real Go type-checking, not regex; sing-box's discriminated unions read from its own schema). CI regenerates them and fails on any drift from upstream, and the import tests require our servers to come out of `sing-box format` unchanged - and to read back through the generated structs the same. The routing frame around them (DNS, rules, TUN) is still assembled by hand.
 - **What goes on the wire is compared with the reference, byte for byte.** A conformance harness captures the TLS ClientHello Sovereign's core sends and the one the official sing-box release sends, and diffs them outside the fields that are random by design.
 - **Clean C++.** RAII only, no `new`/`delete`, warnings as errors, MSVC `/analyze`, clang-tidy, AddressSanitizer.
 

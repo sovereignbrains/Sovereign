@@ -63,7 +63,7 @@
 #include <vector>
 
 #include "adapters/outbound_envelope.h"
-#include "anytls_outbound.gen.h"
+#include "outbounds.gen.h"
 #include "client_hello.h"
 #include "control.h"
 #include "core.h"

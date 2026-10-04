@@ -88,7 +88,7 @@ void TestRegistration() {
     CHECK(endpoint["type"] == "wireguard" && endpoint["tag"] == "warp" && endpoint["detour"] == "proxy");
     CHECK(endpoint["address"].size() == 2 && endpoint["address"][0] == "172.16.0.2/32");
     CHECK(endpoint["peers"][0]["address"] == "engage.cloudflareclient.com" && endpoint["peers"][0]["port"] == 2408);
-    CHECK(endpoint["peers"][0]["reserved"] == nlohmann::ordered_json::array({0x21, 0xEE, 0x10}));
+    CHECK(endpoint["peers"][0]["reserved"] == "Ie4Q");  // {0x21, 0xEE, 0x10}: []uint8 in base64, as Go writes it
     CHECK(!WarpEndpoint(*account, "warp", "").contains("detour"));
   // Kept alive: over the proxy an idle tunnel's UDP session was closed every 5 min.
   CHECK(endpoint["peers"][0]["persistent_keepalive_interval"] == 25);

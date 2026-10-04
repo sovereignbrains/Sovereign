@@ -2,8 +2,12 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <string>
 #include <utility>
+#include <vector>
 
+#include "outbounds.gen.h"
 #include "share_links.h"
 
 namespace sovereign::tray {
@@ -148,29 +152,36 @@ std::optional<WarpAccount> WarpFromJson(const nlohmann::json& json) {
   return account;
 }
 
+// sing-box's own WireGuard endpoint options, generated from its sources
+// (src/generated/outbounds.gen.h): written the way sing-box writes them.
 nlohmann::ordered_json WarpEndpoint(const WarpAccount& account, std::string_view tag, std::string_view detour) {
-  nlohmann::ordered_json addresses = nlohmann::ordered_json::array({account.address4 + "/32"});
+  sovereign::codegen::option::WireGuardEndpointOptions wg;
+  wg.detour = detour;
+  wg.mtu = 1280;
+  wg.address.values = {account.address4 + "/32"};
   if (!account.address6.empty()) {
-    addresses.push_back(account.address6 + "/128");
+    wg.address.values.push_back(account.address6 + "/128");
   }
-  nlohmann::ordered_json endpoint = {
-      {"type", "wireguard"},
-      {"tag", tag},
-      {"mtu", 1280},
-      {"address", std::move(addresses)},
-      {"private_key", account.privateKey},
-      {"peers", nlohmann::ordered_json::array({nlohmann::ordered_json{
-                    {"address", account.host},
-                    {"port", account.port},
-                    {"public_key", account.peerKey},
-                    {"allowed_ips", nlohmann::ordered_json::array({"0.0.0.0/0", "::/0"})},
-                    {"reserved", account.reserved},
-                    // Over the proxy its UDP is a session on the server, closed after 5 min
-                    // idle (sing-box's udp_timeout): the tunnel broke and reconnected every 5 min
-                    // (seen 03.10.2026). WireGuard's usual keepalive behind NAT keeps it open.
-                    {"persistent_keepalive_interval", kWarpKeepaliveSeconds}}})}};
-  if (!detour.empty()) {
-    endpoint["detour"] = detour;
+  wg.privateKey = account.privateKey;
+  sovereign::codegen::option::WireGuardPeer peer;
+  peer.address = account.host;
+  peer.port = static_cast<std::uint16_t>(account.port);
+  peer.publicKey = account.peerKey;
+  peer.allowedIPs = std::vector<std::string>{"0.0.0.0/0", "::/0"};
+  std::string reserved;
+  for (const int byte : account.reserved) {
+    reserved.push_back(static_cast<char>(byte));
+  }
+  peer.reserved = EncodeBase64(reserved);  // []uint8: base64 in Go's JSON
+  // Over the proxy its UDP is a session on the server, closed after 5 min
+  // idle (sing-box's udp_timeout): the tunnel broke and reconnected every 5 min
+  // (seen 03.10.2026). WireGuard's usual keepalive behind NAT keeps it open.
+  peer.persistentKeepaliveInterval = kWarpKeepaliveSeconds;
+  wg.peers.push_back(std::move(peer));
+  nlohmann::ordered_json endpoint = {{"type", "wireguard"}, {"tag", tag}};
+  const Json fields = wg;
+  for (auto it = fields.begin(); it != fields.end(); ++it) {
+    endpoint[it.key()] = nlohmann::ordered_json(it.value());
   }
   return endpoint;
 }

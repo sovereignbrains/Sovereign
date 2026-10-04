@@ -17,11 +17,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/constant"
 	"go/types"
 	"log"
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -39,6 +42,26 @@ type field struct {
 	// one), read through adapters::GetInteger - Go's range and literal rules
 	// instead of nlohmann's silent conversions.
 	IntType string
+	// Variant: a union's variant struct (json:"-" in Go) - merged into the
+	// object only when the discriminator picks it, never written by itself.
+	Variant bool
+}
+
+// unionCase is one variant of a discriminated union: the discriminator's
+// value (a C++ literal) and the member holding that variant's fields - none
+// when the variant has no fields of its own (salamander obfs).
+type unionCase struct {
+	Value  string
+	typ    types.Type
+	Member string
+}
+
+// unionInfo is what a type's DescribeSchema says about it through
+// schema.DiscriminatedUnion: the discriminator's JSON key and the variants.
+type unionInfo struct {
+	Key   string
+	Field string
+	Cases []unionCase
 }
 
 var integerTypes = map[string]bool{
@@ -58,7 +81,7 @@ func integerOf(cppType string) string {
 func main() {
 	src := flag.String("src", "", "path to the sing-box repo root (contains go.mod)")
 	pkgPath := flag.String("pkg", "./option", "package pattern to load, relative to -src")
-	typeName := flag.String("type", "", "struct name to generate, e.g. AnyTLSOutboundOptions")
+	typeName := flag.String("type", "", "struct name(s) to generate, comma-separated, e.g. AnyTLSOutboundOptions,VLESSOutboundOptions")
 	out := flag.String("out", "", "output C++ header path ('-' for stdout)")
 	namespace := flag.String("namespace", "sovereign::codegen::option", "C++ namespace for the generated type")
 	flag.Parse()
@@ -85,20 +108,31 @@ func main() {
 	}
 	pkg := pkgs[0]
 
-	obj := pkg.Types.Scope().Lookup(*typeName)
-	if obj == nil {
-		log.Fatalf("type %s not found in package %s", *typeName, pkg.PkgPath)
+	// Several types share one header: the structs they reach (the TLS options,
+	// the dialer's) are emitted once - two headers each with their own copy
+	// couldn't be used together.
+	g := &generator{pkg: pkg.Types, info: pkg.TypesInfo, structs: map[string][]field{}, busy: map[string]bool{},
+		unions: map[string]*unionInfo{}, schemas: describeSchemas(pkg.Syntax)}
+	for _, name := range strings.Split(*typeName, ",") {
+		obj := pkg.Types.Scope().Lookup(name)
+		if obj == nil {
+			log.Fatalf("type %s not found in package %s", name, pkg.PkgPath)
+		}
+		named, ok := obj.Type().(*types.Named)
+		if !ok {
+			log.Fatalf("%s is not a named type", name)
+		}
+		if _, ok := named.Underlying().(*types.Struct); !ok {
+			log.Fatalf("%s is not a struct", name)
+		}
+		if !hasCustomJSONMethods(named) {
+			g.ensure(named)
+		} else if u := g.findUnion(named); u != nil {
+			g.ensureUnion(named, u)
+		} else {
+			log.Fatalf("%s marshals itself and its schema isn't a discriminated union", name)
+		}
 	}
-	named, ok := obj.Type().(*types.Named)
-	if !ok {
-		log.Fatalf("%s is not a named type", *typeName)
-	}
-	if _, ok := named.Underlying().(*types.Struct); !ok {
-		log.Fatalf("%s is not a struct", *typeName)
-	}
-
-	g := &generator{pkg: pkg.Types, structs: map[string][]field{}, busy: map[string]bool{}}
-	g.ensure(named)
 
 	src2 := g.renderHeader(*namespace, *typeName, pkg.PkgPath)
 
@@ -125,9 +159,165 @@ func main() {
 // C++ member - none in the option package does today.
 type generator struct {
 	pkg     *types.Package
+	info    *types.Info
 	structs map[string][]field
 	order   []string
 	busy    map[string]bool
+	unions  map[string]*unionInfo
+	schemas map[string]*ast.FuncDecl
+}
+
+// describeSchemas finds every DescribeSchema method of the package, by the
+// name of its receiver's type.
+func describeSchemas(files []*ast.File) map[string]*ast.FuncDecl {
+	out := map[string]*ast.FuncDecl{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Name.Name != "DescribeSchema" || len(fn.Recv.List) != 1 {
+				continue
+			}
+			recv := fn.Recv.List[0].Type
+			if star, isStar := recv.(*ast.StarExpr); isStar {
+				recv = star.X
+			}
+			if id, isIdent := recv.(*ast.Ident); isIdent {
+				out[id.Name] = fn
+			}
+		}
+	}
+	return out
+}
+
+// findUnion reads named's DescribeSchema for a schema.DiscriminatedUnion
+// call: (builder, "<key>", required, []schema.UnionVariant{{Value: <const>,
+// StructType: reflect.TypeFor[T]()}, ...}, ...). Nil when there's none, or
+// when a value isn't a constant - then the type stays an adapter's job.
+func (g *generator) findUnion(named *types.Named) *unionInfo {
+	decl := g.schemas[named.Obj().Name()]
+	if decl == nil || decl.Body == nil {
+		return nil
+	}
+	var call *ast.CallExpr
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		if call != nil {
+			return false
+		}
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "DiscriminatedUnion" {
+			return true
+		}
+		if id, isIdent := sel.X.(*ast.Ident); isIdent {
+			if pn, isPkg := g.info.Uses[id].(*types.PkgName); isPkg && pn.Imported().Path() == "github.com/sagernet/sing-box/schema" {
+				call = c
+			}
+		}
+		return call == nil
+	})
+	if call == nil || len(call.Args) < 4 {
+		return nil
+	}
+	keyValue := g.info.Types[call.Args[1]].Value
+	variants, ok := call.Args[3].(*ast.CompositeLit)
+	if keyValue == nil || keyValue.Kind() != constant.String || !ok {
+		return nil
+	}
+	u := &unionInfo{Key: constant.StringVal(keyValue)}
+	for _, elt := range variants.Elts {
+		lit, isLit := elt.(*ast.CompositeLit)
+		if !isLit {
+			return nil
+		}
+		var c unionCase
+		for _, e := range lit.Elts {
+			kv, isKV := e.(*ast.KeyValueExpr)
+			key, isIdent := kv.Key.(*ast.Ident)
+			if !isKV || !isIdent {
+				return nil
+			}
+			switch key.Name {
+			case "Value":
+				v := g.info.Types[kv.Value].Value
+				if v == nil {
+					return nil
+				}
+				switch v.Kind() {
+				case constant.String:
+					c.Value = strconv.Quote(constant.StringVal(v))
+				case constant.Int:
+					c.Value = v.ExactString()
+				default:
+					return nil
+				}
+			case "StructType":
+				// reflect.TypeFor[T]()
+				tc, isCall := kv.Value.(*ast.CallExpr)
+				if !isCall {
+					return nil
+				}
+				idx, isIndex := tc.Fun.(*ast.IndexExpr)
+				if !isIndex {
+					return nil
+				}
+				c.typ = g.info.Types[idx.Index].Type
+			}
+		}
+		if c.Value == "" {
+			return nil
+		}
+		u.Cases = append(u.Cases, c)
+	}
+	return u
+}
+
+// ensureUnion generates a union once: its shared fields (the discriminator
+// among them) as usual, plus a member for each variant struct - the json:"-"
+// field of that type, as Go keeps it.
+func (g *generator) ensureUnion(named *types.Named, u *unionInfo) string {
+	name := named.Obj().Name()
+	if _, done := g.structs[name]; done || g.busy[name] {
+		return name
+	}
+	g.busy[name] = true
+	st := named.Underlying().(*types.Struct)
+	fields := g.flattenFields(st, map[string]bool{})
+	for _, f := range fields {
+		if f.JSONName == u.Key {
+			u.Field = f.CppName
+		}
+	}
+	if u.Field == "" {
+		log.Fatalf("%s: discriminator %q is not one of its fields", name, u.Key)
+	}
+	for i := range u.Cases {
+		c := &u.Cases[i]
+		if c.typ == nil {
+			continue
+		}
+		for j := 0; j < st.NumFields(); j++ {
+			v := st.Field(j)
+			jsonTag, _ := reflect.StructTag(st.Tag(j)).Lookup("json")
+			variant, isNamed := v.Type().(*types.Named)
+			if jsonTag != "-" || !isNamed || !types.Identical(v.Type(), c.typ) {
+				continue
+			}
+			c.Member = goToCppFieldName(v.Name())
+			fields = append(fields, field{CppName: c.Member, CppType: g.ensure(variant), Variant: true})
+			break
+		}
+		if c.Member == "" {
+			log.Fatalf("%s: no json:\"-\" field holds variant %s", name, c.typ)
+		}
+	}
+	delete(g.busy, name)
+	g.structs[name] = fields
+	g.unions[name] = u
+	g.order = append(g.order, name)
+	return name
 }
 
 // ensure generates named (a struct of g.pkg) once and returns its C++ name.
@@ -163,6 +353,18 @@ func hasCustomJSONMethods(t types.Type) bool {
 		return true
 	}
 	return check(types.NewPointer(t))
+}
+
+// hasTextMethods: encoding.TextMarshaler/TextUnmarshaler - JSON then holds
+// whatever text the method makes, not the underlying value.
+func hasTextMethods(t types.Type) bool {
+	for _, typ := range []types.Type{t, types.NewPointer(t)} {
+		ms := types.NewMethodSet(typ)
+		if ms.Lookup(nil, "MarshalText") != nil || ms.Lookup(nil, "UnmarshalText") != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *generator) flattenFields(st *types.Struct, seen map[string]bool) []field {
@@ -268,6 +470,21 @@ func (g *generator) mapType(t types.Type) (cppType string, needAdapter bool, not
 		if b, isBasic := sl.Elem().(*types.Basic); isBasic && b.Kind() == types.Uint8 {
 			return "std::string", false, "[]byte, kept as its base64 JSON text"
 		}
+		// Any other slice: a JSON array (nil and empty alike are "empty" to omitempty).
+		elemCpp, elemAdapt, elemNote := g.mapType(sl.Elem())
+		if !elemAdapt {
+			return "std::vector<" + elemCpp + ">", false, elemNote
+		}
+		return "nlohmann::json", true, "[]" + sl.Elem().String() + ": " + elemNote
+	}
+	// A map with string keys: a JSON object (badoption.HTTPHeader is one).
+	if m, ok := t.Underlying().(*types.Map); ok && !hasCustomJSONMethods(t) {
+		if k, isBasic := m.Key().Underlying().(*types.Basic); isBasic && k.Kind() == types.String {
+			elemCpp, elemAdapt, elemNote := g.mapType(m.Elem())
+			if !elemAdapt {
+				return "std::map<std::string, " + elemCpp + ">", false, elemNote
+			}
+		}
 	}
 	if basic, ok := t.(*types.Basic); ok {
 		switch basic.Kind() {
@@ -330,11 +547,32 @@ func (g *generator) mapType(t types.Type) (cppType string, needAdapter bool, not
 				return "nlohmann::json", true, "Listable[" + targs.At(0).String() + "]: " + elemNote
 			}
 		}
+		// net/netip's addresses and prefixes marshal as their text form.
+		if pkgPath == "net/netip" {
+			switch named.Obj().Name() {
+			case "Addr", "Prefix", "AddrPort":
+				return "std::string", false, "netip." + named.Obj().Name() + " as its text"
+			}
+		}
 		// A plain struct of the package being generated: generated too.
 		if g.pkg != nil && pkgPath == g.pkg.Path() && !hasCustomJSONMethods(named) {
 			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
 				return g.ensure(named), false, ""
 			}
+		}
+		// A union sing-box describes in its schema (DescribeSchema ->
+		// schema.DiscriminatedUnion): the shared fields plus the one variant
+		// the discriminator picks, merged into one object - generated as such.
+		if g.pkg != nil && pkgPath == g.pkg.Path() {
+			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
+				if u := g.findUnion(named); u != nil {
+					return g.ensureUnion(named, u), false, ""
+				}
+			}
+		}
+		// A named string/number/bool without methods of its own: what it's made of.
+		if _, isBasic := named.Underlying().(*types.Basic); isBasic && !hasCustomJSONMethods(named) && !hasTextMethods(named) {
+			return g.mapType(named.Underlying())
 		}
 		return "nlohmann::json", true, "unmapped named type " + pkgPath + "." + named.Obj().Name() + " — needs a handwritten adapter"
 	}
@@ -413,8 +651,15 @@ func (g *generator) renderHeader(namespace, typeName string, sourcePkg string) s
 	fmt.Fprintf(&b, "// but are not yet typed.\n")
 	b.WriteString("#pragma once\n\n")
 	b.WriteString("#include <cstdint>\n")
+	if usesType(all, "std::map<") {
+		b.WriteString("#include <map>\n")
+	}
 	b.WriteString("#include <optional>\n")
-	b.WriteString("#include <string>\n\n")
+	b.WriteString("#include <string>\n")
+	if usesType(all, "std::vector<") {
+		b.WriteString("#include <vector>\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("#include <nlohmann/json.hpp>\n")
 	if usesType(all, "sovereign::adapters::Listable<") {
 		b.WriteString("#include <adapters/listable.h>\n")
@@ -447,7 +692,7 @@ func (g *generator) renderHeader(namespace, typeName string, sourcePkg string) s
 	// Dependencies first: g.order is the order ensure() finished them in.
 	for _, name := range g.order {
 		b.WriteString("\n")
-		renderStruct(&b, name, g.structs[name])
+		g.renderStruct(&b, name)
 	}
 	b.WriteString("\n")
 
@@ -457,7 +702,9 @@ func (g *generator) renderHeader(namespace, typeName string, sourcePkg string) s
 	return b.String()
 }
 
-func renderStruct(b *strings.Builder, typeName string, fields []field) {
+func (g *generator) renderStruct(b *strings.Builder, typeName string) {
+	fields := g.structs[typeName]
+	union := g.unions[typeName]
 	fmt.Fprintf(b, "struct %s {\n", typeName)
 	names := make([]string, len(fields))
 	for i, f := range fields {
@@ -476,14 +723,36 @@ func renderStruct(b *strings.Builder, typeName string, fields []field) {
 	}
 	b.WriteString("};\n\n")
 
-	fmt.Fprintf(b, "inline void to_json(nlohmann::json& j, const %s& v) {\n", typeName)
+	// A struct with no fields of its own (V2RayQUICOptions): nothing reads v or j.
+	empty := true
+	for _, f := range fields {
+		empty = empty && f.Variant
+	}
+	vName, jName := "v", "j"
+	if empty && union == nil {
+		vName, jName = "/*v*/", "/*j*/"
+	}
+	fmt.Fprintf(b, "inline void to_json(nlohmann::json& j, const %s& %s) {\n", typeName, vName)
 	b.WriteString("  j = nlohmann::json::object();\n")
 	for _, f := range fields {
-		if f.OmitEmpty {
+		if f.Variant {
+			continue
+		}
+		// omitempty never drops a struct in Go (isEmptyValue has no struct case).
+		if _, isStruct := g.structs[f.CppType]; f.OmitEmpty && !isStruct {
 			fmt.Fprintf(b, "  if (!sovereign::adapters::IsEmptyValue(v.%s)) { j[%q] = v.%s; }\n",
 				f.CppName, f.JSONName, f.CppName)
 		} else {
 			fmt.Fprintf(b, "  j[%q] = v.%s;\n", f.JSONName, f.CppName)
+		}
+	}
+	// A union: the variant the discriminator picks, merged in (badjson.MarshallObjects).
+	// Go refuses an unknown one; here it's just the shared fields.
+	if union != nil {
+		for _, c := range union.Cases {
+			if c.Member != "" {
+				fmt.Fprintf(b, "  if (v.%s == %s) { j.update(nlohmann::json(v.%s)); }\n", union.Field, c.Value, c.Member)
+			}
 		}
 	}
 	b.WriteString("}\n\n")
@@ -492,13 +761,24 @@ func renderStruct(b *strings.Builder, typeName string, fields []field) {
 	// never requires a key - a missing one leaves the zero value (omitempty only
 	// shapes the output). Reading non-omitempty fields with at() made a config
 	// without, say, server_port unparsable here while sing-box takes it.
-	fmt.Fprintf(b, "inline void from_json(const nlohmann::json& j, %s& v) {\n", typeName)
+	fmt.Fprintf(b, "inline void from_json(const nlohmann::json& %s, %s& %s) {\n", jName, typeName, vName)
 	for _, f := range fields {
+		if f.Variant {
+			continue
+		}
 		read := fmt.Sprintf("v.%s = j.at(%q).get<decltype(v.%s)>();", f.CppName, f.JSONName, f.CppName)
 		if f.IntType != "" {
 			read = fmt.Sprintf("v.%s = sovereign::adapters::GetInteger<%s>(j.at(%q));", f.CppName, f.IntType, f.JSONName)
 		}
 		fmt.Fprintf(b, "  if (j.contains(%q)) { %s }\n", f.JSONName, read)
+	}
+	// A union's variant comes from the same object (badjson.UnmarshallExcluded).
+	if union != nil {
+		for _, c := range union.Cases {
+			if c.Member != "" {
+				fmt.Fprintf(b, "  if (v.%s == %s) { from_json(j, v.%s); }\n", union.Field, c.Value, c.Member)
+			}
+		}
 	}
 	b.WriteString("}\n")
 }

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -32,6 +34,16 @@ inline bool IsEmptyValue(const nlohmann::json& v) { return v.is_null(); }
 template <typename T>
 bool IsEmptyValue(const std::optional<T>& v) {
   return !v.has_value();
+}
+
+// Slices and maps: empty when they have no elements (nil or not).
+template <typename T>
+bool IsEmptyValue(const std::vector<T>& v) {
+  return v.empty();
+}
+template <typename K, typename V>
+bool IsEmptyValue(const std::map<K, V>& v) {
+  return v.empty();
 }
 
 }  // namespace sovereign::adapters

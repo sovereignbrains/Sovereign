@@ -132,7 +132,7 @@ void TestHysteria2AndTuic() {
   CHECK(hy["obfs"]["type"] == "salamander");
   CHECK(hy["tls"]["insecure"] == true);
   const json hop = Outbound("hysteria2://p@h.example.com:443?mport=20000-30000");
-  CHECK(hop["server_ports"] == json::array({"20000:30000"}));
+  CHECK(hop["server_ports"] == "20000:30000");  // a list of one: the item, as sing-box writes it
   const json multi = Outbound("hysteria2://p@h.example.com:443,5000-6000");
   CHECK(multi["server_ports"] == json::array({"443:443", "5000:6000"}));
 
@@ -140,7 +140,7 @@ void TestHysteria2AndTuic() {
   CHECK(tuic["uuid"] == "11111111-2222-3333-4444-555555555555");
   CHECK(tuic["password"] == "pw");
   CHECK(tuic["congestion_control"] == "bbr");
-  CHECK(tuic["tls"]["alpn"] == json::array({"h3"}));
+  CHECK(tuic["tls"]["alpn"] == "h3");
 }
 
 // However the keys come, each comes out whole.

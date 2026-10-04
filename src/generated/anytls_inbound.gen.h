@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <adapters/listable.h>
@@ -200,7 +201,7 @@ struct InboundRealityOptions {
 inline void to_json(nlohmann::json& j, const InboundRealityOptions& v) {
   j = nlohmann::json::object();
   if (!sovereign::adapters::IsEmptyValue(v.enabled)) { j["enabled"] = v.enabled; }
-  if (!sovereign::adapters::IsEmptyValue(v.handshake)) { j["handshake"] = v.handshake; }
+  j["handshake"] = v.handshake;
   if (!sovereign::adapters::IsEmptyValue(v.privateKey)) { j["private_key"] = v.privateKey; }
   if (!sovereign::adapters::IsEmptyValue(v.shortID)) { j["short_id"] = v.shortID; }
   if (!sovereign::adapters::IsEmptyValue(v.maxTimeDifference)) { j["max_time_difference"] = v.maxTimeDifference; }
@@ -293,6 +294,22 @@ inline void from_json(const nlohmann::json& j, InboundTLSOptions& v) {
   if (j.contains("reality")) { v.reality = j.at("reality").get<decltype(v.reality)>(); }
 }
 
+struct AnyTLSUser {
+  std::string name{};
+  std::string password{};
+};
+
+inline void to_json(nlohmann::json& j, const AnyTLSUser& v) {
+  j = nlohmann::json::object();
+  if (!sovereign::adapters::IsEmptyValue(v.name)) { j["name"] = v.name; }
+  if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
+}
+
+inline void from_json(const nlohmann::json& j, AnyTLSUser& v) {
+  if (j.contains("name")) { v.name = j.at("name").get<decltype(v.name)>(); }
+  if (j.contains("password")) { v.password = j.at("password").get<decltype(v.password)>(); }
+}
+
 struct AnyTLSInboundOptions {
   std::optional<std::string> listen{};
   std::uint16_t listenPort{};
@@ -316,7 +333,7 @@ struct AnyTLSInboundOptions {
   nlohmann::json domainStrategy{};  // unmapped named type github.com/sagernet/sing-box/option.DomainStrategy — needs a handwritten adapter
   bool udpDisableDomainUnmapping{};
   std::optional<InboundTLSOptions> tls{};
-  nlohmann::json users{};  // unmapped Go type []github.com/sagernet/sing-box/option.AnyTLSUser — needs a handwritten adapter
+  std::vector<AnyTLSUser> users{};
   sovereign::adapters::Listable<std::string> paddingScheme{};
 };
 

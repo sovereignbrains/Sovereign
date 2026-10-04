@@ -12,7 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include "adapters/outbound_envelope.h"
-#include "anytls_outbound.gen.h"
+#include "outbounds.gen.h"
 
 namespace {
 
