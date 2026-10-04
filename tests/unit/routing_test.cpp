@@ -68,6 +68,17 @@ std::map<std::string, std::string>& Files() {
   return files;
 }
 
+// The DNS rules that ask a server, in order.
+std::vector<json> Asked(const json& dns) {
+  std::vector<json> out;
+  for (const json& rule : dns["rules"]) {
+    if (rule.value("action", "") == "evaluate") {
+      out.push_back(rule);
+    }
+  }
+  return out;
+}
+
 void TestJsonAndParse() {
   RoutingSettings s;
   s.source = RoutingSettings::Source::Profile;
@@ -150,14 +161,19 @@ void TestOwn() {
   CHECK(c["dns"]["strategy"] == "ipv4_only");
   // The servers' own names directly, first: through the proxy a server's name
   // (its ECH config too) would need that very server.
-  CHECK(c["dns"]["rules"][0]["server"] == "sov-local");
-  CHECK(c["dns"]["rules"][0]["domain"] == json::array({"nl.example.com", "nl2.example.com"}));
-  CHECK(c["dns"]["rules"][1]["server"] == "sov-local");  // qwen.ai resolved directly
+  const std::vector<json> asked = Asked(c["dns"]);
+  CHECK(asked.size() >= 3 && asked[0]["server"] == "sov-local");
+  CHECK(asked[0]["domain"] == json::array({"nl.example.com", "nl2.example.com"}));
+  CHECK(asked[1]["server"] == "sov-local");  // qwen.ai resolved directly
+  CHECK(asked.back()["server"] == "remote" && asked.back().size() == 2);  // everything else
   // Blocked names: "no addresses" - REFUSED and NXDOMAIN both made Windows wait ~11 s.
   int noAddress = 0;
   for (const json& rule : c["dns"]["rules"]) {
     CHECK(rule.value("action", "") != "reject");
-    noAddress += rule.value("action", "") == "predefined" && rule.value("rcode", "") == "NOERROR" && !rule.contains("answer") ? 1 : 0;
+    noAddress += rule.value("action", "") == "predefined" && rule.value("rcode", "") == "NOERROR" && !rule.contains("answer") &&
+                         !rule.contains("match_response")
+                     ? 1
+                     : 0;
   }
   CHECK(noAddress == (Files().empty() ? 1 : 2));  // the user's block rule, and the ads list when it's there
   if (!Files().empty()) {
@@ -198,7 +214,9 @@ void TestProfile() {
   CHECK(rules.dump().find("qwen.ai") > rules.dump().find("xn--p1ai"));
   CHECK(c["route"]["final"] == "proxy");     // its own
   CHECK(!c["dns"].contains("strategy"));     // its own
-  CHECK(c["dns"]["rules"].back()["domain_suffix"] == json::array({"qwen.ai"}));  // its DNS rules after ours
+  const std::vector<json> asked = Asked(c["dns"]);
+  CHECK(asked.size() >= 2 && asked[asked.size() - 2]["domain_suffix"] == json::array({"qwen.ai"}));  // its DNS rules after ours
+  CHECK(asked.back()["server"] == "remote");                                                         // its final
   bool local = false;
   for (const json& server : c["dns"]["servers"]) {
     local = local || server["tag"] == "sov-local";
@@ -216,6 +234,56 @@ void TestProfile() {
   }
   CHECK(direct && bare["dns"]["servers"].size() == 1);
   CHECK(ApplyRouting("not json", s, {}) == "not json");
+}
+
+// Typos: NXDOMAIN made Windows wait ~11 s for the Wi-Fi's DNS. Each server
+// asked, then NXDOMAIN -> no addresses, then its answer under the same
+// condition (a failed query fails, never falls to the next server).
+void TestTypos() {
+  RoutingSettings s;
+  s.source = RoutingSettings::Source::Profile;
+  const json c = json::parse(ApplyRouting(kSubscription, s, Files()));
+  const json& rules = c["dns"]["rules"];
+  for (std::size_t i = 0; i < rules.size(); ++i) {
+    const json& ask = rules[i];
+    if (ask["action"] != "evaluate") {
+      CHECK(ask["action"] == "predefined" && !ask.contains("match_response"));  // a blocked name
+      continue;
+    }
+    CHECK(ask.contains("server") && i + 2 < rules.size());
+    if (i + 2 >= rules.size()) {
+      break;
+    }
+    CHECK(rules[i + 1] ==
+          json({{"match_response", true}, {"response_rcode", "NXDOMAIN"}, {"action", "predefined"}, {"rcode", "NOERROR"}}));
+    json condition = ask;
+    condition.erase("server");
+    condition["action"] = "respond";
+    CHECK(rules[i + 2] == condition);
+    i += 2;
+  }
+  CHECK(rules.back() == json({{"action", "respond"}}));
+
+  // Rules sing-box reads the old way can't sit next to evaluate: left as they are.
+  const std::string old = R"({"dns": {"servers": [{"type": "local", "tag": "local"}],
+                                      "rules": [{"ip_cidr": ["10.0.0.0/8"], "server": "local"}]},
+                              "outbounds": [{"type": "direct", "tag": "direct"}],
+                              "route": {"default_domain_resolver": "local"}})";
+  const json o = json::parse(ApplyRouting(old, s, {}));
+  Checked().emplace_back("typos-old-style", o.dump());
+  CHECK(Asked(o["dns"]).empty() && o["dns"]["rules"].back()["ip_cidr"] == json::array({"10.0.0.0/8"}));
+
+  // Fakeip routes stay routes; the rest is asked.
+  const std::string fake = R"({"dns": {"servers": [{"type": "local", "tag": "local"},
+                                                   {"type": "fakeip", "tag": "fake", "inet4_range": "198.18.0.0/15"}],
+                                       "rules": [{"domain_suffix": ["fake.example"], "server": "fake"}],
+                                       "final": "local"},
+                               "outbounds": [{"type": "direct", "tag": "direct"}],
+                               "route": {"default_domain_resolver": "local"}})";
+  const json f = json::parse(ApplyRouting(fake, s, {}));
+  Checked().emplace_back("typos-fakeip", f.dump());
+  CHECK(f["dns"]["rules"].dump().find(R"("server":"fake")") != std::string::npos);
+  CHECK(Asked(f["dns"]).size() == 2 && Asked(f["dns"]).back()["server"] == "local");
 }
 
 int Run(const std::wstring& command) {
@@ -395,6 +463,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestImport();
     TestOwn();
     TestProfile();
+    TestTypos();
     TestWarp();
     TestNaiveInsecure();
     if (check) {

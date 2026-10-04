@@ -189,6 +189,92 @@ void Prepend(Json& list, std::vector<Json> items, std::size_t at) {
   list = std::move(out);
 }
 
+// A DNS rule sing-box reads the old way (an address filter, a strategy) - it
+// can't sit next to evaluate; nor one already using answers, nor another's
+// rule set (it may hold addresses: a filter again).
+bool OldStyleDnsRule(const Json& rule) {
+  static constexpr std::array kKeys = {"ip_cidr",        "ip_is_private",   "ip_accept_any", "rule_set_ip_cidr_accept_empty",
+                                       "rule_set_ipcidr_accept_empty", "match_response", "response_rcode",
+                                       "response_answer", "response_ns",     "response_extra", "race", "strategy"};
+  if (!rule.is_object()) {
+    return true;
+  }
+  for (const char* key : kKeys) {
+    if (rule.contains(key)) {
+      return true;
+    }
+  }
+  if (const std::string action = Str(rule, "action"); action == "evaluate" || action == "respond") {
+    return true;
+  }
+  if (rule.contains("rule_set")) {
+    for (const std::string& set : Strings(rule.at("rule_set"))) {
+      if (set != kGeositeRu && set != kGeositeGovRu && set != kAds) {
+        return true;
+      }
+    }
+  }
+  if (rule.contains("rules")) {
+    for (const Json& sub : rule.at("rules")) {
+      if (OldStyleDnsRule(sub)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Typos answered "no addresses" too: their NXDOMAIN kept Windows waiting
+// ~11 s just as a blocked name's did (see SetNoAddress). Only the answer tells
+// a typo, so a rule sending names to a server becomes three: ask it
+// (evaluate), NXDOMAIN -> no addresses, else its answer (respond under the
+// same condition: a failed query fails, as the route's did, instead of falling
+// to later rules). The final server gets the three at the end. Fakeip routes
+// stay - evaluate can't use them, and they never answer NXDOMAIN.
+void AnswerTyposAtOnce(Json& dns) {
+  static constexpr std::array kActionKeys = {"action",        "server",  "disable_cache", "disable_optimistic_cache",
+                                             "rewrite_ttl",   "timeout", "client_subnet", "remove_client_subnet",
+                                             "speculative"};
+  Json& rules = dns["rules"];
+  std::set<std::string> fakeip;
+  std::string final = Str(dns, "final");
+  for (const Json& server : dns["servers"]) {
+    if (Str(server, "type") == "fakeip") {
+      fakeip.insert(Str(server, "tag"));
+    }
+    if (final.empty()) {
+      final = Str(server, "tag");
+    }
+  }
+  if (final.empty() || fakeip.contains(final) || std::ranges::any_of(rules, OldStyleDnsRule)) {
+    return;
+  }
+  Json out = Json::array();
+  const auto ask = [&out](Json evaluate) {
+    Json respond = evaluate;
+    for (const char* key : kActionKeys) {
+      respond.erase(key);
+    }
+    respond["action"] = "respond";
+    evaluate["action"] = "evaluate";
+    Json typo{{"match_response", true}, {"response_rcode", "NXDOMAIN"}};
+    SetNoAddress(typo);
+    out.push_back(std::move(evaluate));
+    out.push_back(std::move(typo));
+    out.push_back(std::move(respond));
+  };
+  for (Json& rule : rules) {
+    if (const std::string action = Str(rule, "action");
+        (action.empty() || action == "route") && !fakeip.contains(Str(rule, "server"))) {
+      ask(std::move(rule));
+    } else {
+      out.push_back(std::move(rule));
+    }
+  }
+  ask(Json{{"server", final}});
+  rules = std::move(out);
+}
+
 }  // namespace
 
 nlohmann::json RoutingToJson(const RoutingSettings& s) {
@@ -684,6 +770,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
   }
   Prepend(dns["rules"], std::move(dnsRules), 0);
+  AnswerTyposAtOnce(dns);
   if (dns["rules"].empty()) {
     dns.erase("rules");
   }
