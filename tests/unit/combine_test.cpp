@@ -225,6 +225,26 @@ void TestTwo() {
   CHECK(Tagged(swapped, "stls").is_null());
 }
 
+// A configuration named after its only server (a key's is): a clash
+// numbered - "NL 2", not "NL · NL"; and the tray finds a server again in
+// any of the names a clash gives it.
+void TestNamedAfterServer() {
+  const json c = Parsed(CombineConfigs({{"A", Frame(), {}}, {"NL", Keys(), {"SS"}}}));
+  CHECK(!Tagged(c, "NL 2").is_null() && Tagged(c, "NL 2")["server"] == "nl2.example.com");
+  CHECK(Tagged(c, "NL · NL").is_null());
+
+  CHECK(IsRenamedTag("NL", "NL", "Ключи"));
+  CHECK(IsRenamedTag("NL · Ключи", "NL", "Ключи"));
+  CHECK(IsRenamedTag("NL · Ключи 3", "NL", "Ключи"));
+  CHECK(IsRenamedTag("NL 2", "NL", "NL"));
+  CHECK(IsRenamedTag("NL 2", "NL", ""));
+  CHECK(!IsRenamedTag("NL 2", "NL", "Ключи"));       // another configuration's
+  CHECK(!IsRenamedTag("NL · Другие", "NL", "Ключи"));
+  CHECK(!IsRenamedTag("NLX", "NL", "NL"));
+  CHECK(!IsRenamedTag("NL 1", "NL", "NL"));
+  CHECK(!IsRenamedTag("NL 2a", "NL", "NL"));
+}
+
 void TestNoSelector() {
   // A hand-written config: one server and the route straight to it.
   const std::string single = R"({"dns":{"servers":[{"type":"local","tag":"own-dns"}]},)"
@@ -325,6 +345,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestTwo();
     TestThrough();
     TestNoSelector();
+    TestNamedAfterServer();
     if (argc == 3 && std::string_view(argv[1]) == "--check" && CheckWithSingBox(argv[2]) != 0) {
       return 1;
     }

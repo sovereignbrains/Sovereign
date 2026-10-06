@@ -1154,6 +1154,53 @@ ImportItems RecognizeImport(std::string_view text) {
   return items;
 }
 
+std::string DescribeImport(const ImportItems& items) {
+  // 1 ключ, 2 ключа, 5 ключей, 21 ключ.
+  const auto count = [](std::size_t n, const char* one, const char* few, const char* many) {
+    const std::size_t tens = n % 100;
+    const std::size_t units = n % 10;
+    const char* word = tens >= 11 && tens <= 14 ? many : units == 1 ? one : units >= 2 && units <= 4 ? few : many;
+    return std::format("{} {}", n, word);
+  };
+  if (items.urls.size() == 1) {
+    // The host only: from "https://user@host:port/path?token" -> "host".
+    std::string_view rest = items.urls[0];
+    rest.remove_prefix(std::min(rest.size(), rest.find("://") == std::string_view::npos ? 0 : rest.find("://") + 3));
+    rest = rest.substr(0, rest.find_first_of("/?#"));
+    if (const std::size_t at = rest.rfind('@'); at != std::string_view::npos) {
+      rest.remove_prefix(at + 1);
+    }
+    if (!rest.starts_with('[')) {
+      rest = rest.substr(0, rest.find(':'));
+    }
+    return rest.empty() ? std::string("подписку") : "подписку с " + LowerCopy(rest);
+  }
+  if (items.urls.size() > 1) {
+    return count(items.urls.size(), "подписку", "подписки", "подписок");
+  }
+  if (items.json) {
+    return "конфиг sing-box";
+  }
+  if (items.links.size() == 1 && items.outbounds.empty()) {
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 13> kNames = {{
+        {"vless", "VLESS"}, {"vmess", "VMess"}, {"trojan", "Trojan"}, {"ss", "Shadowsocks"},
+        {"hysteria2", "Hysteria2"}, {"hy2", "Hysteria2"}, {"hysteria", "Hysteria"}, {"tuic", "TUIC"},
+        {"anytls", "AnyTLS"}, {"wireguard", "WireGuard"}, {"wg", "WireGuard"}, {"ssh", "SSH"}, {"snell", "Snell"},
+    }};
+    const std::string scheme = LowerCopy(std::string_view(items.links[0]).substr(0, items.links[0].find("://")));
+    for (const auto& [name, shown] : kNames) {
+      if (scheme == name) {
+        return "ключ " + std::string(shown);
+      }
+    }
+    return "ключ";
+  }
+  if (const std::size_t servers = items.links.size() + items.outbounds.size(); servers > 0) {
+    return count(servers, "ключ", "ключа", "ключей");
+  }
+  return {};
+}
+
 ParsedLink ParseShareLink(std::string_view link) {
   ParsedLink parsed;
   const auto uri = SplitUri(link);

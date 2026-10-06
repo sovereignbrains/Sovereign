@@ -2369,6 +2369,33 @@ bool CopyText(HWND owner, const std::wstring& text) {
   return copied;
 }
 
+// What the clipboard holds that could become a configuration, described
+// (share_links.h DescribeImport) - read again only when the clipboard
+// changes, and only asked for while there's no configuration at all.
+std::wstring ClipboardOffer() {
+  static DWORD seen = 0;
+  static std::wstring offer;
+  const DWORD now = GetClipboardSequenceNumber();
+  if (now == seen) {
+    return offer;
+  }
+  seen = now;
+  offer.clear();
+  if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(nullptr)) {
+    return offer;
+  }
+  std::wstring text;
+  if (HANDLE data = GetClipboardData(CF_UNICODETEXT); data != nullptr) {
+    if (const auto* locked = static_cast<const wchar_t*>(GlobalLock(data)); locked != nullptr) {
+      text.assign(locked, wcsnlen(locked, std::size_t{1} << 20U));  // a megabyte of text is enough to look at
+      GlobalUnlock(data);
+    }
+  }
+  CloseClipboard();
+  offer = Widen(sovereign::tray::DescribeImport(sovereign::tray::RecognizeImport(Narrow(text))));
+  return offer;
+}
+
 // The countries the servers really come out in (their measured exits), each
 // once, by name - what a service can be sent through.
 std::vector<std::string> KnownExitCountries(const View& view) {
@@ -2422,7 +2449,7 @@ void WriteSupportReport(HWND owner, const View::ProfileView& profile, const View
   // "<tag> · <configuration>" where two configurations named servers alike.
   for (ReportServer& s : in.servers) {
     for (std::size_t i = 0; i < view.protocols.size(); ++i) {
-      if (view.protocols[i] != s.name && view.protocols[i] != s.name + " · " + profile.name) {
+      if (!sovereign::tray::IsRenamedTag(view.protocols[i], s.name, profile.name)) {
         continue;
       }
       if (i < view.delays.size() && view.delays[i]) {
@@ -2889,6 +2916,9 @@ sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater 
 // What the window shows, from the worker's view.
 UiContent ContentFrom(const View& v) {
   UiContent c;
+  if (v.profiles.empty()) {
+    c.clipboardOffer = ClipboardOffer();
+  }
   c.display = v.display;
   c.on = v.wantOn;
   c.down = v.down;
@@ -2962,7 +2992,7 @@ UiContent ContentFrom(const View& v) {
       std::size_t failed = 0;
       for (const View::ServerView& server : profile.servers) {
         for (std::size_t i = 0; server.enabled && i < v.protocols.size() && i < v.delays.size(); ++i) {
-          if ((v.protocols[i] == server.tag || v.protocols[i] == server.tag + " · " + profile.name) && v.delays[i]) {
+          if (sovereign::tray::IsRenamedTag(v.protocols[i], server.tag, profile.name) && v.delays[i]) {
             measured += v.delays[i]->state != sovereign::tray::Delay::State::Pending ? 1 : 0;
             failed += v.delays[i]->state == sovereign::tray::Delay::State::Failed ? 1 : 0;
             break;

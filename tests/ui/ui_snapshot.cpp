@@ -136,6 +136,16 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(content, static_cast<UiPage>(p), logs, 400, 620, 96, path);
   }
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\overview-150.png");
+  // The first screen: nothing yet - what the clipboard holds offered, or the ways to bring one.
+  UiContent first = content;
+  first.profiles.clear();
+  first.trouble.clear();
+  first.on = false;
+  first.display = sovereign::tray::Display::Off;
+  first.clipboardOffer = L"подписку с packetlab.tech";
+  sovereign::tray::RenderMainWindowSnapshot(first, UiPage::Overview, logs, 400, 700, 96, dir + L"\\first-offer.png");
+  first.clipboardOffer.clear();
+  sovereign::tray::RenderMainWindowSnapshot(first, UiPage::Overview, logs, 400, 700, 96, dir + L"\\first-empty.png");
   // A subscription in trouble: the line and its support report on the main screen.
   UiContent troubled = content;
   troubled.trouble = L"«packetlab.tech»: не отвечает ни один сервер";

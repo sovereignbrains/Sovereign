@@ -47,6 +47,12 @@ struct ImportItems {
 };
 ImportItems RecognizeImport(std::string_view text);
 
+// What an import would add, said to the user before they add it - the first
+// screen offers what's on the clipboard: "подписку с packetlab.tech", "2
+// подписки", "ключ VLESS", "3 ключа", "конфиг sing-box"; empty if nothing.
+// Only a link's host: never its path or token.
+std::string DescribeImport(const ImportItems& items);
+
 // One share link as a sing-box outbound (JSON text, no "tag"; a WireGuard
 // link gives an endpoint) and the name it carries - or why it can't be one.
 struct ParsedLink {

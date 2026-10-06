@@ -188,6 +188,25 @@ void TestRecognize() {
   CHECK(RecognizeImport("").Empty());
 }
 
+// What the first screen says the clipboard holds - a link's host, never its token.
+void TestDescribeImport() {
+  using sovereign::tray::DescribeImport;
+  CHECK(DescribeImport(RecognizeImport("https://packetlab.tech/sub/0123456789abcdef0123456789abcdef")) ==
+        "подписку с packetlab.tech");
+  CHECK(DescribeImport(RecognizeImport("https://user@Panel.Example.com:8443/api/sub?token=s3cr3t#x")) ==
+        "подписку с panel.example.com");
+  CHECK(DescribeImport(RecognizeImport("https://a.example.com/s\nhttps://b.example.com/s")) == "2 подписки");
+  CHECK(DescribeImport(RecognizeImport(std::string(kVless))) == "ключ VLESS");
+  CHECK(DescribeImport(RecognizeImport(std::string(kHy2))) == "ключ Hysteria2");
+  CHECK(DescribeImport(RecognizeImport(std::string(kVless) + "\n" + std::string(kTrojan) + "\n" + std::string(kSs))) ==
+        "3 ключа");
+  CHECK(DescribeImport(RecognizeImport(R"({"outbounds":[{"type":"direct"}]})")) == "конфиг sing-box");
+  CHECK(DescribeImport(RecognizeImport("просто текст")).empty());
+  const std::string five = std::string(kVless) + "\n" + std::string(kTrojan) + "\n" + std::string(kSs) + "\n" +
+                           std::string(kHy2) + "\n" + std::string(kTuic);
+  CHECK(DescribeImport(RecognizeImport(five)) == "5 ключей");
+}
+
 void TestBuildConfig() {
   const auto built = BuildConfigFromLinks({std::string(kVless), std::string(kTrojan), "vless://id@host:1?type=xhttp", std::string(kVless)});
   CHECK(built.servers == 3);
@@ -221,6 +240,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestExtraction();
     TestRecognize();
     TestBuildConfig();
+    TestDescribeImport();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 1;

@@ -49,6 +49,11 @@ struct CombinedConfig {
 CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts,
                               const std::optional<std::string>& ownFrame = std::nullopt);
 
+// Whether `combined` is the server `tag` of the part named `partName` as
+// CombineConfigs left it: the tag itself, "<tag> · <name>", "<tag> · <name> N",
+// or "<tag> N" when the name is the tag (or empty).
+bool IsRenamedTag(std::string_view combined, std::string_view tag, std::string_view partName);
+
 // A server of a config, as the window lists it.
 struct ServerInfo {
   std::string tag;

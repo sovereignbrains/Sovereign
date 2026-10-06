@@ -1079,14 +1079,28 @@ class Painter {
     }
 
     // Nothing to connect with yet: the way to fix that comes first.
+    // The first screen: what the clipboard holds is offered as it is ("Добавить
+    // подписку с packetlab.tech"); else how to bring one - pasted, a QR code on
+    // the screen, a file.
     if (c.profiles.empty()) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 108}));
-      l.items.push_back(Make(Kind::Text, {x0 + 16, y + 12, x1 - 16, y + 36}, L"Нет конфигурации"));
+      const bool offer = !c.clipboardOffer.empty();
+      const std::wstring hint = offer ? L"В буфере обмена есть " + c.clipboardOffer + L"."
+                                      : L"Скопируй ссылку подписки, ключ или конфиг — клиент найдёт его в буфере сам.";
+      const float hintH = TextHeight(hint, captionWrap_.get(), x1 - x0 - 32);
+      const float h = 12 + 26 + hintH + 12 + kButton + 8 + kButton + 14;
+      const float mid = (x0 + x1) / 2;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      l.items.push_back(Make(Kind::Text, {x0 + 16, y + 12, x1 - 16, y + 38}, L"Добавь подписку"));
+      float top = Paragraph(l, Kind::Caption, hint, x0 + 16, x1 - 16, y + 38) + 12;
+      l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, top, x1 - 16, top + kButton},
+                                    offer ? L"Добавить " + c.clipboardOffer : std::wstring(L"Вставить из буфера"),
+                                    kGlyphPaste, UiCommand::PasteSubscription));
+      top += kButton + 8;
+      l.items.push_back(CommandItem(Kind::Button, {x0 + 16, top, mid - 4, top + kButton}, L"QR-код с экрана",
+                                    kGlyphQrCode, UiCommand::ScanScreen));
       l.items.push_back(
-          Make(Kind::Muted, {x0 + 16, y + 36, x1 - 16, y + 56}, L"Скопируй ссылку, ключи, конфиг или QR-код."));
-      l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, y + 64, x1 - 16, y + 64 + kButton},
-                                    L"Вставить из буфера", kGlyphPaste, UiCommand::PasteSubscription));
-      y += 108 + kGap;
+          CommandItem(Kind::Button, {mid + 4, top, x1 - 16, top + kButton}, L"Из файла…", kGlyphFile, UiCommand::ImportFile));
+      y += h + kGap;
     }
 
     // The switch.

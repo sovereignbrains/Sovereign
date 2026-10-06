@@ -122,6 +122,9 @@ struct UiContent {
   // сервер"; empty while all is fine. troubleProfile: its index in profiles.
   std::wstring trouble;
   int troubleProfile = -1;
+  // No configuration yet: what the clipboard holds that could be one
+  // (DescribeImport: "подписку с packetlab.tech"); empty if nothing.
+  std::wstring clipboardOffer;
   bool troubleSupport = false;  // its panel gave a support link
 
   // Every configuration; the ones on run together (combine.h).

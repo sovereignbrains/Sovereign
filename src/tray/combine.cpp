@@ -255,9 +255,13 @@ Moved TakeServers(Json& part, const std::string& partName, std::set<std::string>
         }
         std::string fresh = tag;
         if (taken.contains(fresh)) {
-          fresh = std::format("{} · {}", tag, partName);
-          for (int n = 2; taken.contains(fresh); ++n) {
-            fresh = std::format("{} · {} {}", tag, partName, n);
+          // "NL · <configuration>"; a configuration named after its only
+          // server (a key's) would say the name twice - "AnyTLS-REALITY ·
+          // AnyTLS-REALITY" - so then it's numbered: "AnyTLS-REALITY 2".
+          const bool same = partName.empty() || partName == tag;
+          fresh = same ? std::format("{} 2", tag) : std::format("{} · {}", tag, partName);
+          for (int n = same ? 3 : 2; taken.contains(fresh); ++n) {
+            fresh = same ? std::format("{} {}", tag, n) : std::format("{} · {} {}", tag, partName, n);
           }
         }
         taken.insert(fresh);
@@ -398,6 +402,31 @@ std::string Label(const Json& o) {
 }
 
 }  // namespace
+
+bool IsRenamedTag(std::string_view combined, std::string_view tag, std::string_view partName) {
+  if (combined == tag) {
+    return true;
+  }
+  // A number at the end: " N", N >= 2.
+  const auto numbered = [](std::string_view rest) {
+    return rest.size() >= 2 && rest.front() == ' ' &&
+           std::all_of(rest.begin() + 1, rest.end(), [](char c) { return c >= '0' && c <= '9'; }) && rest != " 0" &&
+           rest != " 1";
+  };
+  if (!combined.starts_with(tag)) {
+    return false;
+  }
+  std::string_view rest = combined.substr(tag.size());
+  if (partName.empty() || partName == tag) {
+    return numbered(rest);
+  }
+  const std::string named = std::format(" · {}", partName);
+  if (!rest.starts_with(named)) {
+    return false;
+  }
+  rest.remove_prefix(named.size());
+  return rest.empty() || numbered(rest);
+}
 
 CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std::optional<std::string>& ownFrame) {
   CombinedConfig result;
