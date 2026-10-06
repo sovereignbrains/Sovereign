@@ -410,17 +410,21 @@ std::wstring ChecksLine(const UiContent& c) {
 
 // The routing's line on the overview.
 std::wstring RoutingLine(const UiContent& c) {
-  std::wstring line = c.routing.own ? L"свои" : L"из подписки";
+  std::vector<std::wstring> parts;
   if (c.routing.russiaDirect) {
-    line += L" · РФ напрямую";
+    parts.emplace_back(L"РФ напрямую");
   }
   if (!c.routing.rules.empty()) {
-    line += std::format(L" · правил: {}", c.routing.rules.size());
+    parts.push_back(std::format(L"правил: {}", c.routing.rules.size()));
   }
   if (!c.apps.empty()) {
-    line += std::format(L" · программы: {} {}", c.appsInclude ? L"только" : L"кроме", c.apps.size());
+    parts.push_back(std::format(L"программы: {} {}", c.appsInclude ? L"только" : L"кроме", c.apps.size()));
   }
-  return line;
+  std::wstring line;
+  for (const std::wstring& part : parts) {
+    line += (line.empty() ? L"" : L" · ") + part;
+  }
+  return line.empty() ? std::wstring(L"всё через прокси") : line;
 }
 
 std::wstring UpdateStatus(const UiContent& c) {
@@ -1553,45 +1557,14 @@ class Painter {
   }
 
   // Where traffic goes and how names resolve (routing.h), a section a card:
-  // whose routing, the traffic's switches (and the lists they use), DNS,
+  // the traffic's switches (and the lists they use), DNS, WARP,
   // the user's rules - first, whatever the source.
   float Routing(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const UiRouting& r = c.routing;
     y = PageTitle(l, L"Маршруты и DNS", nullptr, x0, x1, y, UiPage::Overview,
-                  L"Куда идёт трафик и через какой DNS узнаются адреса. Свои правила и переключатели здесь "
-                  L"работают первыми, что бы ни было в подписках.");
+                  L"Куда идёт трафик и через какой DNS узнаются адреса. Всё это решает Sovereign: из подписок "
+                  L"берутся только серверы, их правила и DNS не используются.");
     const float mid = (x0 + x1) / 2;
-
-    // The subscription's routing instead of the client's own: one switch, and
-    // which configuration's when it's on.
-    y = Switches(l,
-                 {Row(L"Правила из подписки",
-                      L"Выключено — TUN, DNS и маршруты строит Sovereign, из подписок берутся только серверы.\n\n"
-                      L"Включено — DNS и маршруты выбранной подписки; переключатели, приложения и свои правила "
-                      L"отсюда всё равно стоят перед её правилами.",
-                      !r.own, UiCommand::SetRoutingSource, {}, r.own ? 1 : 0)},
-                 x0, x1, y);
-    if (!r.own) {
-      std::wstring chosen;
-      bool any = false;
-      for (const UiProfile& p : c.profiles) {
-        any = any || p.enabled;
-        chosen = p.enabled && p.id == r.sourceProfile ? p.name : chosen;
-      }
-      if (!any) {
-        y = Paragraph(l, Kind::Caption, L"Ни одна конфигурация не включена — работают свои маршруты.", x0 + 4, x1,
-                      y + 6);
-      } else {
-        Item which = CommandItem(Kind::ValueRow, {x0, y + 8, x1, y + 8 + kRow}, L"Подписка", nullptr,
-                                 UiCommand::ChooseRoutingProfile);
-        which.detail = chosen.empty() ? std::wstring(L"выбрать") : chosen;
-        l.items.push_back(Make(Kind::Card, which.rect));
-        which.rect = {x0 + 4, which.rect.top + 2, x1 - 4, which.rect.bottom - 2};
-        l.items.push_back(std::move(which));
-        y += 8 + kRow;
-      }
-    }
-    y += kGap + 4;
 
     // The traffic: the switches, and how the lists they use are doing.
     y = Heading(l, L"Трафик", x0, x1, y,
@@ -1606,20 +1579,17 @@ class Painter {
             r.blockAds, UiCommand::ToggleBlockAds),
         Row(L"Блокировать QUIC", L"Браузеры перейдут с QUIC (HTTP/3 по UDP) на TCP — через прокси так стабильнее.",
             r.blockQuic, UiCommand::ToggleBlockQuic),
+        Row(L"Остальное напрямую", L"Через прокси пойдёт только то, что в правилах; всё прочее — напрямую.",
+            r.finalDirect, UiCommand::ToggleFinalDirect),
     };
-    if (r.own) {
-      toggles.push_back(Row(L"Остальное напрямую",
-                            L"Через прокси пойдёт только то, что в правилах; всё прочее — напрямую.", r.finalDirect,
-                            UiCommand::ToggleFinalDirect));
-    }
     y = Switches(l, toggles, x0, x1, y);
     if (!r.lists.empty()) {
       y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0 + 4, x1, y + 6);
     }
     y += kGap + 4;
 
-    // DNS: the client's own, in own mode - its two resolvers and IPv4 in one card.
-    if (r.own) {
+    // DNS: the client's own - its two resolvers and IPv4 in one card.
+    {
       y = Heading(l, L"DNS", x0, x1, y,
                   L"Через прокси — все имена, кроме прямых. Напрямую — российские и твои прямые адреса и адреса "
                   L"самих серверов.\n\nЗашифрованный DNS (DoH) прячет их от провайдера; если перестанет "

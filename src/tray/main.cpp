@@ -308,8 +308,6 @@ struct ProfileChange {
 // A change to the routing from its page (routing.h).
 struct RoutingChange {
   enum class What : std::uint8_t {
-    Source,         // on: a configuration's routing; off: the client's own
-    SourceProfile,  // text: that configuration's id
     RussiaDirect,   // on
     BlockAds,       // on
     BlockQuic,      // on
@@ -324,7 +322,7 @@ struct RoutingChange {
     Warp,           // on (a device registered first if there's none)
     WarpVia,        // on: over the proxy; off: directly
   };
-  What what = What::Source;
+  What what = What::RussiaDirect;
   bool on = false;
   int value = 0;
   int index = 0;
@@ -651,9 +649,6 @@ class Worker {
       const auto stats = PollStats();
       const Action action = model_.OnPoll(stats, TrayModel::Clock::now());
       Execute(model_, action, config);
-      if (action == Action::Start) {
-        FallBackIfRoutingRejected();
-      }
       // The box runs this very config: its subscription hosts go through the proxy.
       if (stats && stats->running && !expected.empty() && stats->configSha256 == expected) {
         runningHosts_ = combinedHosts_;
@@ -733,9 +728,6 @@ class Worker {
     using sovereign::tray::RoutingSettings;
     std::vector<sovereign::tray::ProfileConfig> parts;
     std::vector<std::string> notes;
-    std::size_t source = std::string::npos;  // the part whose routing stays, in profile mode
-    std::string sourceKey;                   // that configuration, as it is now (see rejectedRouting_)
-    std::string sourceName;
     for (const Profile& profile : settings_.profiles) {
       if (!profile.enabled) {
         continue;
@@ -746,33 +738,14 @@ class Worker {
         notes.push_back(profile.name + ": ещё нет конфига");
         continue;
       }
-      if (profile.id == settings_.routing.sourceProfile) {
-        source = parts.size();
-        sourceKey = profile.id + ":" + sovereign::Sha256Hex(*config);
-        sourceName = profile.name;
-      }
       parts.push_back(
           {.name = profile.name, .config = *config, .disabled = profile.disabled, .id = profile.id, .via = profile.via});
     }
-    // The frame: the client's own, or the chosen configuration's (first) -
-    // the own one when that isn't on.
+    // The frame is always the client's own: from the configurations only their
+    // servers - their routing and DNS never (one client's routing for everyone,
+    // services like Netflix included).
     RoutingSettings routing = settings_.routing;
-    if (routing.source == RoutingSettings::Source::Profile) {
-      if (source == std::string::npos) {
-        routing.source = RoutingSettings::Source::Own;
-        notes.emplace_back("маршруты выбранной конфигурации недоступны (выключена или удалена) — работают свои");
-      } else if (sourceKey == rejectedRouting_) {
-        routing.source = RoutingSettings::Source::Own;
-        notes.push_back("ядро не приняло маршруты «" + sourceName + "» (" + rejectedWhy_ + ") — работают свои");
-      } else {
-        std::rotate(parts.begin(), parts.begin() + static_cast<std::ptrdiff_t>(source),
-                    parts.begin() + static_cast<std::ptrdiff_t>(source) + 1);
-      }
-    }
-    const bool own = routing.source == RoutingSettings::Source::Own;
-    routingKey_ = own ? std::string() : sourceKey;
-    auto combined = sovereign::tray::CombineConfigs(
-        parts, own ? std::optional<std::string>(sovereign::tray::OwnFrame(routing)) : std::nullopt);
+    auto combined = sovereign::tray::CombineConfigs(parts, sovereign::tray::OwnFrame(routing));
     combineError_ = combined.error;
     notes.insert(notes.end(), combined.notes.begin(), combined.notes.end());
     combineNotes_ = std::move(notes);
@@ -790,10 +763,6 @@ class Worker {
       if (auto viaProxy = sovereign::tray::ParseRule(list, sovereign::tray::RouteRule::Action::Proxy)) {
         routing.rules.insert(routing.rules.begin(), std::move(*viaProxy));
       }
-      // Typos answered at once - unless the core refused that with this very
-      // configuration (FallBackIfRoutingRejected).
-      typosKey_ = own ? std::string("own") : sourceKey;
-      routing.answerTypos = typosKey_ != typosRejected_;
       // The client's rules first in whatever runs (routing.h).
       combined.config = sovereign::tray::ApplyRouting(*combined.config, routing, ruleFiles_);
     }
@@ -851,13 +820,6 @@ class Worker {
     using sovereign::tray::RoutingSettings;
     RoutingSettings& r = settings_.routing;
     switch (change.what) {
-      case RoutingChange::What::Source:
-        r.source = change.on ? RoutingSettings::Source::Profile : RoutingSettings::Source::Own;
-        break;
-      case RoutingChange::What::SourceProfile:
-        r.source = RoutingSettings::Source::Profile;
-        r.sourceProfile = change.text;
-        break;
       case RoutingChange::What::RussiaDirect: r.russiaDirect = change.on; break;
       case RoutingChange::What::BlockAds: r.blockAds = change.on; break;
       case RoutingChange::What::BlockQuic: r.blockQuic = change.on; break;
@@ -928,34 +890,6 @@ class Worker {
                                                       .apps = settings_.apps,
                                                       .logLevel = settings_.logLevel,
                                                       .cacheFile = cacheFile_});
-  }
-
-  // After a start: when a configuration's own routing was in it and the core
-  // refused the config itself ("parse config" / "create box" - an exported
-  // config of a sing-box fork, with fields the official core doesn't know),
-  // own routing takes over until that configuration changes, and the user
-  // is told - rather than no connection at all. A failure while starting
-  // ("start box") is no reason: that's retried as it is.
-  void FallBackIfRoutingRejected() {
-    const std::string& error = model_.LastError();
-    const bool refused = error.find("parse config") != std::string::npos || error.find("create box") != std::string::npos;
-    if (!refused) {
-      return;
-    }
-    // The typo layout first: a rule set of the configuration's holding
-    // addresses can't sit next to evaluate. The same config without the
-    // layout is tried before its routing is given up - quietly.
-    if (!typosKey_.empty() && typosKey_ != typosRejected_) {
-      typosRejected_ = typosKey_;
-      return;
-    }
-    if (routingKey_.empty() || routingKey_ == rejectedRouting_) {
-      return;
-    }
-    rejectedRouting_ = routingKey_;
-    rejectedWhy_ = error.size() > 160 ? error.substr(0, 160) + "…" : error;
-    Notify(L"Sovereign: маршруты подписки не подошли",
-           L"Ядро их не принимает: " + Widen(rejectedWhy_) + L". Работают свои маршруты.", true, UiPage::Routing);
   }
 
   // The selector's options in the combined config and which one the box
@@ -1927,14 +1861,6 @@ class Worker {
   std::int64_t rulesUpdated_ = 0;  // unix seconds of the last list downloaded
   std::string combineError_;             // why there's none
   std::vector<std::string> combineNotes_;
-  // A configuration's routing the core refused (FallBackIfRoutingRejected):
-  // "<id>:<sha256 of its config>" - own routing runs instead until that
-  // config changes. routingKey_: the one the current config was built with.
-  std::string routingKey_;
-  // The same for the typo layout: the config the current one was built
-  // with ("own" for the client's own frame), and one the core refused it in.
-  std::string typosKey_;
-  std::string typosRejected_;
   std::string rejectedRouting_;
   std::string rejectedWhy_;
   // The subscription hosts the tray's rules send through the proxy: in the
@@ -2789,8 +2715,6 @@ UiContent ContentFrom(const View& v) {
   c.checksRunning = v.checksRunning;
   using sovereign::tray::RoutingSettings;
   const RoutingSettings& r = v.routing;
-  c.routing.own = r.source == RoutingSettings::Source::Own;
-  c.routing.sourceProfile = r.sourceProfile;
   c.routing.russiaDirect = r.russiaDirect;
   c.routing.blockAds = r.blockAds;
   c.routing.blockQuic = r.blockQuic;
@@ -3058,25 +2982,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   POINT cursor{};
   GetCursorPos(&cursor);
   switch (command) {
-    case UiCommand::SetRoutingSource:
-      send(What::Source, args.index == 1);
-      break;
-    case UiCommand::ChooseRoutingProfile: {
-      std::vector<std::wstring> names;
-      std::vector<std::string> ids;
-      int current = -1;
-      for (const auto& p : view.profiles) {
-        if (p.enabled) {
-          current = p.id == r.sourceProfile ? static_cast<int>(ids.size()) : current;
-          names.push_back(Widen(p.name));
-          ids.push_back(p.id);
-        }
-      }
-      if (const auto picked = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, current)) {
-        send(What::SourceProfile, true, 0, 0, ids[*picked]);
-      }
-      break;
-    }
     case UiCommand::ToggleRussiaDirect: send(What::RussiaDirect, !r.russiaDirect); break;
     case UiCommand::ToggleBlockAds: send(What::BlockAds, !r.blockAds); break;
     case UiCommand::ToggleBlockQuic: send(What::BlockQuic, !r.blockQuic); break;
@@ -3198,8 +3103,6 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::CheckRouteText:
       StartChecks({sovereign::tray::CheckId::Route}, Narrow(args.text));
       break;
-    case UiCommand::SetRoutingSource:
-    case UiCommand::ChooseRoutingProfile:
     case UiCommand::ToggleRussiaDirect:
     case UiCommand::ToggleBlockAds:
     case UiCommand::ToggleBlockQuic:

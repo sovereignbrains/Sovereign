@@ -74,8 +74,6 @@ struct UiRule {
   bool warp = false;    // "через WARP": listed in WARP's own card while it's on
 };
 struct UiRouting {
-  bool own = true;            // the client's own routing; else a configuration's
-  std::string sourceProfile;  // that configuration's id
   bool russiaDirect = true;
   bool blockAds = true;
   bool blockQuic = true;
@@ -178,8 +176,6 @@ enum class UiCommand : std::uint8_t {
   RemoveProfile,     // after asking
   ToggleServer,      // sub: index into its servers
   // The routing's:
-  SetRoutingSource,   // index: 0 the client's own, 1 a configuration's
-  ChooseRoutingProfile,  // anchor: the menu of enabled configurations whose routing to use
   ToggleRussiaDirect,
   ToggleBlockAds,
   ToggleBlockQuic,

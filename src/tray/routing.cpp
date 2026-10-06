@@ -280,9 +280,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
                      {"processes", r.processes},
                      {"action", ActionName(r.action)}});
   }
-  return {{"source", s.source == RoutingSettings::Source::Own ? "own" : "profile"},
-          {"sourceProfile", s.sourceProfile},
-          {"russiaDirect", s.russiaDirect},
+  return {{"russiaDirect", s.russiaDirect},
           {"blockAds", s.blockAds},
           {"blockQuic", s.blockQuic},
           {"finalDirect", s.finalDirect},
@@ -313,8 +311,6 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
     const auto it = json.find(key);
     return it != json.end() && it->is_string() ? it->get<std::string>() : std::string();
   };
-  s.source = text("source") == "profile" ? RoutingSettings::Source::Profile : RoutingSettings::Source::Own;
-  s.sourceProfile = text("sourceProfile");
   flag("russiaDirect", s.russiaDirect);
   flag("blockAds", s.blockAds);
   flag("blockQuic", s.blockQuic);
@@ -720,9 +716,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     ++at;
   }
   Prepend(route["rules"], std::move(rules), at);
-  if (settings.source == RoutingSettings::Source::Own) {
-    route["final"] = settings.finalDirect || proxy.empty() ? direct : proxy;
-  }
+  route["final"] = settings.finalDirect || proxy.empty() ? direct : proxy;
 
   // DNS: Russian and direct names resolved locally, blocked ones not at all.
   std::vector<Json> dnsRules;
@@ -764,18 +758,14 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
   }
   Prepend(dns["rules"], std::move(dnsRules), 0);
-  if (settings.answerTypos) {
-    AnswerTyposAtOnce(dns);
-  }
+  AnswerTyposAtOnce(dns);
   if (dns["rules"].empty()) {
     dns.erase("rules");
   }
-  if (settings.source == RoutingSettings::Source::Own) {
-    if (const char* strategy = DnsStrategy(settings)) {
-      dns["strategy"] = strategy;
-    } else {
-      dns.erase("strategy");
-    }
+  if (const char* strategy = DnsStrategy(settings)) {
+    dns["strategy"] = strategy;
+  } else {
+    dns.erase("strategy");
   }
   return config.dump(2, ' ', false, Json::error_handler_t::replace);
 }

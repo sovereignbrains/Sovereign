@@ -81,14 +81,13 @@ std::vector<json> Asked(const json& dns) {
 
 void TestJsonAndParse() {
   RoutingSettings s;
-  s.source = RoutingSettings::Source::Profile;
-  s.sourceProfile = "p1";
   s.russiaDirect = false;
   s.remoteDns = RoutingSettings::RemoteDns::Quad9;
   s.localDns = RoutingSettings::LocalDns::System;
   s.rules.push_back(*ParseRule("qwen.ai ~tracker 10.0.0.0/8 App.exe", RouteRule::Action::Block));
   const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
-  CHECK(back.source == RoutingSettings::Source::Profile && back.sourceProfile == "p1");
+  // A tray.json from before 0.4.29 with "source": "profile": read, the field ignored.
+  CHECK(RoutingFromJson(json{{"source", "profile"}, {"sourceProfile", "p1"}, {"blockAds", false}}).blockAds == false);
   CHECK(!back.russiaDirect && back.blockAds && back.remoteDns == RoutingSettings::RemoteDns::Quad9);
   CHECK(back.localDns == RoutingSettings::LocalDns::System);
   CHECK(RoutingSettings{}.localDns == RoutingSettings::LocalDns::Cloudflare);  // encrypted, directly, by default
@@ -202,26 +201,28 @@ void TestOwn() {
   CHECK(b["route"]["rules"].dump().find("xn--p1ai") != std::string::npos);
 }
 
-void TestProfile() {
+// A subscription's own routing and DNS (packetlab's: qwen.ai directly, its
+// "ads" list rejected, DNS over TLS through the proxy) never get in: from a
+// configuration only its servers - routing and DNS are the client's.
+void TestSubscriptionRulesDropped() {
   RoutingSettings s;
-  s.source = RoutingSettings::Source::Profile;
   s.rules.push_back(*ParseRule("my.example", RouteRule::Action::Direct));
-  const json c = json::parse(ApplyRouting(kSubscription, s, Files()));
-  Checked().emplace_back("profile", c.dump());
-  const json& rules = c["route"]["rules"];
-  // Ours first, after its sniffing, hijacking and local network; its own after ours.
-  CHECK(rules[3]["domain_suffix"] == json::array({"my.example"}));
-  CHECK(rules.dump().find("qwen.ai") > rules.dump().find("xn--p1ai"));
-  CHECK(c["route"]["final"] == "proxy");     // its own
-  CHECK(!c["dns"].contains("strategy"));     // its own
-  const std::vector<json> asked = Asked(c["dns"]);
-  CHECK(asked.size() >= 2 && asked[asked.size() - 2]["domain_suffix"] == json::array({"qwen.ai"}));  // its DNS rules after ours
-  CHECK(asked.back()["server"] == "remote");                                                         // its final
-  bool local = false;
+  const auto combined = CombineConfigs({{"sub", std::string(kSubscription), {}}}, OwnFrame(s));
+  const json c = json::parse(ApplyRouting(combined.config.value_or("{}"), s, Files()));
+  Checked().emplace_back("subscription", c.dump());
+  CHECK(c["route"]["rules"].dump().find("alicdn.com") == std::string::npos);
+  CHECK(c["route"]["rules"].dump().find("\"ads\"") == std::string::npos);
+  CHECK(c["route"]["rules"].dump().find("my.example") != std::string::npos);
+  CHECK(c["dns"]["rules"].dump().find("qwen.ai") == std::string::npos);
   for (const json& server : c["dns"]["servers"]) {
-    local = local || server["tag"] == "sov-local";
+    CHECK(server["type"] != "tls");  // its DNS server: gone
   }
-  CHECK(local);
+  CHECK(c["route"]["final"] == "proxy" && c["dns"]["strategy"] == "ipv4_only");  // ours
+  bool nl = false;
+  for (const json& o : c["outbounds"]) {
+    nl = nl || o.value("tag", "").starts_with("NL");
+  }
+  CHECK(nl);  // its server is there
 
   // A config with no direct outbound and no DNS: they're added.
   const json bare = json::parse(ApplyRouting(R"({"outbounds":[{"type":"selector","tag":"p","outbounds":["x"]},)"
@@ -241,7 +242,6 @@ void TestProfile() {
 // condition (a failed query fails, never falls to the next server).
 void TestTypos() {
   RoutingSettings s;
-  s.source = RoutingSettings::Source::Profile;
   const json c = json::parse(ApplyRouting(kSubscription, s, Files()));
   const json& rules = c["dns"]["rules"];
   for (std::size_t i = 0; i < rules.size(); ++i) {
@@ -286,16 +286,12 @@ void TestTypos() {
   CHECK(Asked(f["dns"]).size() == 2 && Asked(f["dns"]).back()["server"] == "local");
 
   // The configuration's own rule set (packetlab's "ads"): what's in it can't
-  // be told here - laid out all the same, the core decides; and with
-  // answerTypos off (the core refused it) not at all.
+  // be told here - laid out all the same, the core decides.
   const std::string theirs = R"({"dns": {"servers": [{"type": "local", "tag": "local"}],
                                          "rules": [{"rule_set": "theirs", "action": "reject"}]},
                                  "outbounds": [{"type": "direct", "tag": "direct"}],
                                  "route": {"default_domain_resolver": "local"}})";
   CHECK(Asked(json::parse(ApplyRouting(theirs, s, {}))["dns"]).size() == 2);
-  RoutingSettings refused = s;
-  refused.answerTypos = false;
-  CHECK(Asked(json::parse(ApplyRouting(theirs, refused, {}))["dns"]).empty());
 }
 
 int Run(const std::wstring& command) {
@@ -358,7 +354,6 @@ int TryReal(int argc, char** argv) {
   std::cout << "lists: " << Files().size() << ", imported rules: " << s.rules.size() << "\n";
   const auto own = CombineConfigs(parts, OwnFrame(s));
   Checked().emplace_back("real-own", ApplyRouting(own.config.value_or("{}"), s, Files()));
-  s.source = RoutingSettings::Source::Profile;
   for (std::size_t i = 0; i < parts.size(); ++i) {
     std::vector<ProfileConfig> ordered = parts;
     std::rotate(ordered.begin(), ordered.begin() + static_cast<std::ptrdiff_t>(i), ordered.end());
@@ -474,7 +469,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestJsonAndParse();
     TestImport();
     TestOwn();
-    TestProfile();
+    TestSubscriptionRulesDropped();
     TestTypos();
     TestWarp();
     TestNaiveInsecure();

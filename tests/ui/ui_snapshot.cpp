@@ -147,12 +147,10 @@ int Snapshots(const std::wstring& dir) {
   routed.routing.warpAddress = L"172.16.0.2";
   routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
   sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1400, 96, dir + L"\\routing.png");
-  routed.routing.own = false;
-  routed.routing.sourceProfile = "p1";
   routed.routing.lists = L"Списки правил не скачались: сервер ответил 503. Пока работают зоны .ru/.рф/.su.";
   routed.routing.listsFailed = true;
   sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1100, 96,
-                                            dir + L"\\routing-subscription.png");
+                                            dir + L"\\routing-lists-failed.png");
   // The checks: run, one warning, one failing, one running, speed and an address.
   UiContent checked = content;
   checked.checks = SampleChecks();

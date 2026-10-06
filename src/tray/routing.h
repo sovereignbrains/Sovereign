@@ -12,11 +12,11 @@
 #include "warp.h"
 
 // Where traffic goes and how names are resolved - the client's to decide,
-// not each subscription's. The rules here come first in whatever config runs
-// (sing-box takes the first rule that matches), and in "own" mode the tray
-// builds the whole frame - TUN, DNS, routing - with the subscriptions giving
-// only servers (combine.h). In "profile" mode one configuration's own routing
-// and DNS stay, behind these rules.
+// not each subscription's. The tray builds the whole frame - TUN, DNS,
+// routing - and the subscriptions give only servers (combine.h); their own
+// routing and DNS never get in (dropped in 0.4.29: one client's routing for
+// everyone - services like Netflix are the client's to send, through WARP
+// or a country).
 //
 // Russia directly is on by default: a Russian site or app that sees the proxy
 // server's address can tie it to the user (and the server to a VPN), so
@@ -37,14 +37,11 @@ struct RouteRule {
 };
 
 struct RoutingSettings {
-  enum class Source : std::uint8_t { Own, Profile };
   enum class RemoteDns : std::uint8_t { Cloudflare, Google, Quad9 };
   // Direct names - Russian, the user's direct ones, the servers' own - over
   // encrypted DNS straight from here (the provider doesn't see what's
   // asked) while it works; the system's resolver when it doesn't.
   enum class LocalDns : std::uint8_t { Cloudflare, Google, System };
-  Source source = Source::Own;
-  std::string sourceProfile;  // Profile: the configuration whose routing and DNS stay (its id)
   bool russiaDirect = true;
   bool blockAds = true;
   bool blockQuic = true;
@@ -60,9 +57,6 @@ struct RoutingSettings {
   bool warp = false;
   bool warpViaProxy = true;  // WireGuard to Cloudflare over the proxy (else directly)
   std::optional<WarpAccount> warpAccount;
-  // Typos answered "no addresses" at once (routing.cpp, AnswerTyposAtOnce).
-  // Not a setting: off only for a config the core refused with it.
-  bool answerTypos = true;
 };
 
 // The WARP endpoint's tag in the config.
