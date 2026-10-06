@@ -34,16 +34,11 @@ struct ReportServer {
   std::string exitIsp;
 };
 
-struct ReportCheck {
-  std::string name;     // "Утечка DNS"
-  std::string summary;  // its one line
-  bool bad = false;
-};
-
+// Only what's about the provider's service goes in: nothing of the client,
+// the system or the user's network (country, ISP, leak checks) - none of it
+// helps them fix a server, all of it tells them about the user. Dates in UTC.
 struct ReportInput {
-  std::string app;  // "Sovereign 0.4.33 · sing-box 1.14.2 · Windows 11 26100"
   std::int64_t now = 0;           // unix seconds
-  int utcOffsetMinutes = 0;       // the user's time zone, for the dates
   std::string subscriptionName;   // "packetlab.tech"
   std::string subscriptionHost;   // the link's host only
   std::int64_t lastRefresh = 0;   // 0: never
@@ -53,10 +48,7 @@ struct ReportInput {
   std::int64_t expire = 0;         // 0: no end / not sent
   bool connected = false;          // the box runs
   std::vector<ReportServer> servers;
-  std::string userCountry;  // "RU" - the user's own, not their address
-  std::string userIsp;
-  std::string userIp;       // only to be cut out of anything quoted; never written
-  std::vector<ReportCheck> checks;
+  std::string userIp;  // only to be cut out of anything quoted; never written
 };
 
 struct SupportReport {

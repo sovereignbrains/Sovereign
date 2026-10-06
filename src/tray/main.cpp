@@ -2293,31 +2293,15 @@ int UtcOffsetMinutes() {
   return static_cast<int>(-(zone.Bias + extra));
 }
 
-// "Windows 11 26100": the build from the registry (ProductName says
-// "Windows 10" on 11 too).
-std::string WindowsVersion() {
-  wchar_t build[32] = {};
-  DWORD size = sizeof(build);
-  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"CurrentBuild",
-                   RRF_RT_REG_SZ, nullptr, build, &size) != ERROR_SUCCESS) {
-    return "Windows";
-  }
-  const int number = _wtoi(build);
-  return std::format("Windows {} {}", number >= 22000 ? 11 : 10, number);
-}
-
 // The report for a configuration's support (support_report.h): built from
-// what the window already shows - the servers' measurements and exits, the
-// checks, what the panel said - saved where the user picks (the desktop
+// what the window already shows - the servers' measurements and exits, what
+// the panel said; nothing of the user's - saved where the user picks (the desktop
 // first), a short version copied for a chat, and the panel's support link
 // opened if it gave one.
 void WriteSupportReport(HWND owner, const View::ProfileView& profile, const View& view) {
   using sovereign::tray::ReportServer;
   sovereign::tray::ReportInput in;
-  in.app = Narrow(SOVEREIGN_VERSION_W) + " · sing-box " + Narrow(SOVEREIGN_SINGBOX_VERSION_W);
-  in.app = "Sovereign " + in.app + " · " + WindowsVersion();
   in.now = std::time(nullptr);
-  in.utcOffsetMinutes = UtcOffsetMinutes();
   in.subscriptionName = profile.name;
   in.subscriptionHost = Narrow(sovereign::tray::UrlHost(Widen(profile.url)));
   in.lastRefresh = profile.lastRefresh;
@@ -2367,17 +2351,6 @@ void WriteSupportReport(HWND owner, const View::ProfileView& profile, const View
     const std::string& seen = view.checks[static_cast<std::size_t>(sovereign::tray::CheckId::RussiaDirect)].summary;
     if (std::regex_search(seen, found, kIp)) {
       in.userIp = found.str();
-    }
-  }
-  const std::array<std::pair<sovereign::tray::CheckId, const char*>, 3> shown{
-      {{sovereign::tray::CheckId::DnsLeak, "Утечка DNS"},
-       {sovereign::tray::CheckId::WebRtc, "Утечка через WebRTC"},
-       {sovereign::tray::CheckId::Ipv6, "IPv6"}}};
-  for (const auto& [id, name] : shown) {
-    const sovereign::tray::CheckResult& r = view.checks[static_cast<std::size_t>(id)];
-    using Status = sovereign::tray::CheckResult::Status;
-    if (r.status == Status::Ok || r.status == Status::Warn || r.status == Status::Fail) {
-      in.checks.push_back({.name = name, .summary = r.summary, .bad = r.status == Status::Fail});
     }
   }
   const sovereign::tray::SupportReport report = sovereign::tray::BuildSupportReport(in);

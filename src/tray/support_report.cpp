@@ -86,12 +86,6 @@ std::string When(std::int64_t unix, int offsetMinutes) {
                      static_cast<int>(ymd.year()), hms.hours().count(), hms.minutes().count());
 }
 
-std::string Zone(int offsetMinutes) {
-  const int h = std::abs(offsetMinutes) / 60;
-  const int m = std::abs(offsetMinutes) % 60;
-  return std::format("UTC{}{}{}", offsetMinutes < 0 ? '-' : '+', h, m != 0 ? std::format(":{:02}", m) : std::string());
-}
-
 }  // namespace
 
 std::string FlagCountry(std::string_view name) {
@@ -271,11 +265,13 @@ SupportReport BuildSupportReport(const ReportInput& in) {
     verdict += "; трафик исчерпан";
   }
 
-  const std::string zone = Zone(in.utcOffsetMinutes);
+  // Only what's about their service: the dates in UTC (not the user's zone),
+  // no client, no system, nothing of the user's network.
+  const auto utc = [](std::int64_t unix) { return When(unix, 0) + " UTC"; };
   std::string full;
   full += std::format("Отчёт для поддержки подписки «{}»\n", in.subscriptionName);
-  full += std::format("Составлен {} ({}) · {}\n", When(in.now, in.utcOffsetMinutes), zone, in.app);
-  full += "Составлен клиентом автоматически. Ключей, паролей, ссылки подписки и адреса пользователя в нём нет.\n\n";
+  full += std::format("Составлен {}\n", utc(in.now));
+  full += "Собран автоматически. Ключей, паролей, ссылки подписки и данных пользователя в нём нет.\n\n";
 
   full += "ИТОГ: " + verdict + "\n";
   for (const auto& [name, problem] : problems) {
@@ -285,8 +281,7 @@ SupportReport BuildSupportReport(const ReportInput& in) {
   full += "\nПОДПИСКА\n";
   full += std::format("Адрес: {} (ссылка с токеном в отчёт не включена)\n",
                       in.subscriptionHost.empty() ? std::string("—") : in.subscriptionHost);
-  full += "Обновлена: " +
-          (in.lastRefresh > 0 ? When(in.lastRefresh, in.utcOffsetMinutes) : std::string("ни разу")) +
+  full += "Обновлена: " + (in.lastRefresh > 0 ? utc(in.lastRefresh) : std::string("ни разу")) +
           (in.refreshError.empty() ? std::string() : " · последняя попытка не удалась: " +
                                                           CutAddresses(in.refreshError, in.userIp)) +
           "\n";
@@ -295,8 +290,7 @@ SupportReport BuildSupportReport(const ReportInput& in) {
             (in.trafficTotal > 0 ? " из " + Bytes(in.trafficTotal) : std::string(" (без лимита)")) + "\n";
   }
   if (in.expire > 0) {
-    full += std::format("Оплачено до: {}{}\n", When(in.expire, in.utcOffsetMinutes),
-                        in.expire < in.now ? " — уже истекло" : "");
+    full += std::format("Оплачено до: {}{}\n", utc(in.expire), in.expire < in.now ? " — уже истекло" : "");
   }
 
   full += std::format("\nСЕРВЕРЫ ({})\n", in.servers.size());
@@ -315,7 +309,7 @@ SupportReport BuildSupportReport(const ReportInput& in) {
       case ReportServer::State::Failed:
         full += "   НЕ РАБОТАЕТ\n";
         if (!s.error.empty()) {
-          full += "   Ошибка клиента (sing-box): " + CutAddresses(s.error, in.userIp) + "\n";
+          full += "   Ошибка: " + CutAddresses(s.error, in.userIp) + "\n";
         }
         break;
       case ReportServer::State::Unknown: full += "   Не проверен\n"; break;
@@ -329,15 +323,6 @@ SupportReport BuildSupportReport(const ReportInput& in) {
     }
   }
 
-  full += "\nСО СТОРОНЫ ПОЛЬЗОВАТЕЛЯ\n";
-  full += std::format("Клиент {}\n", in.connected ? "подключён" : "не подключён");
-  if (!in.userCountry.empty() || !in.userIsp.empty()) {
-    full += "Сеть: " + in.userCountry + (in.userIsp.empty() ? "" : " · " + in.userIsp) + " (адрес не указан)\n";
-  }
-  for (const ReportCheck& c : in.checks) {
-    full += std::format("{}: {}{}\n", c.name, CutAddresses(c.summary, in.userIp), c.bad ? " — плохо" : "");
-  }
-
   std::string brief = std::format("Подписка «{}»: {}.\n", in.subscriptionName, verdict);
   for (std::size_t i = 0; i < problems.size() && i < 5; ++i) {
     brief += std::format("• {} — {}\n", problems[i].first, problems[i].second);
@@ -345,7 +330,7 @@ SupportReport BuildSupportReport(const ReportInput& in) {
   if (problems.size() > 5) {
     brief += std::format("• и ещё {}\n", problems.size() - 5);
   }
-  brief += std::format("Подробный отчёт Sovereign от {} — в файле.", When(in.now, in.utcOffsetMinutes));
+  brief += std::format("Подробный отчёт от {} — в файле.", utc(in.now));
   return {.full = std::move(full), .brief = std::move(brief)};
 }
 

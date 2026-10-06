@@ -109,9 +109,7 @@ void TestProblems() {
 
 void TestReport() {
   ReportInput in;
-  in.app = "Sovereign 0.4.33 · sing-box 1.14.2 · Windows 11";
   in.now = 1791300000;
-  in.utcOffsetMinutes = 180;
   in.subscriptionName = "packetlab.tech";
   in.subscriptionHost = "packetlab.tech";
   in.lastRefresh = 1791096133;
@@ -119,8 +117,6 @@ void TestReport() {
   in.trafficTotal = 107374182400ULL;
   in.expire = 1798761600;
   in.connected = true;
-  in.userCountry = "RU";
-  in.userIsp = "Trytek";
   in.userIp = "46.148.140.142";
   ReportServer good;
   good.name = "AnyTLS-REALITY";
@@ -136,7 +132,6 @@ void TestReport() {
   bad.name = "AnyTLS-ECH";
   bad.protocol = "anytls · TLS · ECH";
   in.servers = {good, bad};
-  in.checks = {{.name = "Утечка DNS", .summary = "нет: только 1.1.1.1", .bad = false}};
 
   const SupportReport r = BuildSupportReport(in);
   if (Print()) {
@@ -145,9 +140,14 @@ void TestReport() {
   CHECK(r.full.find("работает 1 из 2 серверов") != std::string::npos);
   CHECK(r.full.find("AnyTLS-ECH — сервер отклоняет ключ") != std::string::npos);
   CHECK(r.full.find("3 МБ из 100,0 ГБ") != std::string::npos);
-  CHECK(r.full.find("UTC+3") != std::string::npos);
+  CHECK(r.full.find("UTC") != std::string::npos && r.full.find("UTC+") == std::string::npos);  // not the user's zone
   CHECK(r.full.find("задержка 54 мс") != std::string::npos);
-  CHECK(r.full.find("Утечка DNS: нет") != std::string::npos);
+  // Nothing of the client, the system or the user's network: it doesn't help
+  // them fix a server, it tells them about the user.
+  for (const char* none : {"Sovereign", "sing-box", "Windows", "Trytek", "RU", "Утечка", "пользователя:"}) {
+    CHECK(r.full.find(none) == std::string::npos);
+    CHECK(r.brief.find(none) == std::string::npos);
+  }
   CHECK(r.full.find("46.148.140.142") == std::string::npos);  // the user's address: nowhere
   CHECK(r.full.find("192.168.31.57") == std::string::npos);
   CHECK(r.full.find("5.83.147.210") != std::string::npos);    // the server's: there
