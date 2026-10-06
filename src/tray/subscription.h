@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,6 +41,23 @@ ConfigCheck CheckSubscriptionConfig(std::string_view body);
 // send (packetlab's does). nullopt if absent or not a sane number; clamped
 // to 1 h .. 7 days.
 std::optional<std::chrono::hours> ParseUpdateInterval(std::string_view header);
+
+// Subscription-Userinfo (Marzban, Remnawave, 3x-ui...): "upload=N; download=N;
+// total=N; expire=UNIX" - bytes, and the end of the paid period. total and
+// expire 0 (or absent): no limit, no end. nullopt if there's nothing usable.
+struct SubscriptionUsage {
+  std::uint64_t upload = 0;
+  std::uint64_t download = 0;
+  std::uint64_t total = 0;  // 0: no limit
+  std::int64_t expire = 0;  // unix seconds; 0: no end
+};
+std::optional<SubscriptionUsage> ParseSubscriptionUserinfo(std::string_view header);
+
+// Support-Url / Profile-Web-Page-Url: a link to open for the user - https://,
+// http:// or tg://, printable ASCII, at most kMaxLinkHeader bytes. Anything
+// else (a script: link, a control character) is nullopt.
+inline constexpr std::size_t kMaxLinkHeader = 512;
+std::optional<std::string> ParseLinkHeader(std::string_view header);
 
 // Whether the config brings up a TUN inbound - which can't coexist with
 // another sing-box's TUN on the same machine.

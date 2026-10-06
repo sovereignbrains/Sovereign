@@ -104,9 +104,17 @@ void TestJson() {
   profiles[0].userHours = 48;
   profiles[0].disabled = {"NL", "FI"};
   profiles[1].enabled = false;
+  profiles[0].supportUrl = "https://t.me/support_bot";
+  profiles[0].webPageUrl = "https://panel.example.com/me";
+  profiles[0].trafficUsed = 3145728;
+  profiles[0].trafficTotal = 107374182400ULL;
+  profiles[0].expire = 1798761600;
   const auto back = ProfilesFromJson(nlohmann::json::parse(ProfilesToJson(profiles).dump()));
   CHECK(back.size() == 3);
   if (back.size() == 3) {
+    CHECK(back[0].supportUrl == "https://t.me/support_bot" && back[0].webPageUrl == "https://panel.example.com/me");
+    CHECK(back[0].trafficUsed == 3145728 && back[0].trafficTotal == 107374182400ULL && back[0].expire == 1798761600);
+    CHECK(back[1].supportUrl.empty() && back[1].trafficTotal == 0);
     CHECK(back[0].id == "p1" && back[0].url == "https://a.example.com/s" && back[0].lastRefresh == 1790770050);
     CHECK(back[0].updateHours == 6 && !back[0].autoUpdate && back[0].userHours == 48);
     CHECK(back[0].disabled == std::vector<std::string>({"NL", "FI"}));
@@ -121,8 +129,11 @@ void TestJson() {
     {"id":"p2","name":5},
     "not an object",
     {"id":"p3","name":"","updateHours":100000,"userHours":-5,"disabled":["a",1,"a"]},
-    {"id":"p4","name":"x","lastRefresh":"soon","enabled":"yes"}
+    {"id":"p4","name":"x","lastRefresh":"soon","enabled":"yes","supportUrl":"javascript:alert","expire":-5}
   ])"));
+  if (!read.empty()) {
+    CHECK(read.back().supportUrl.empty() && read.back().expire == 0);  // a link that isn't one: never opened
+  }
   CHECK(read.size() == 3);
   if (read.size() == 3) {
     CHECK(read[0].name == "ok" && read[1].id == "p3" && read[2].id == "p4");

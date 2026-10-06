@@ -48,6 +48,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <regex>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -76,6 +77,7 @@
 #include "share_links.h"
 #include "sha256.h"
 #include "subscription.h"
+#include "support_report.h"
 #include "tray_model.h"
 #include "ui_content.h"
 #include "update.h"
@@ -248,6 +250,10 @@ struct View {
     std::vector<ServerView> servers;
     bool heldBack = false;         // not fetched so its server doesn't see the user's IP
     std::string via;               // the configuration its servers connect through; "" = directly
+    std::string supportUrl;        // what its panel said (profiles.h)
+    std::uint64_t trafficUsed = 0;
+    std::uint64_t trafficTotal = 0;
+    std::int64_t expire = 0;
   };
   std::vector<ProfileView> profiles;
   // A balloon to show once: the UI shows it when noticeId changes.
@@ -1187,6 +1193,14 @@ class Worker {
     profile->lastRefresh = std::time(nullptr);
     profile->updateHours =
         static_cast<int>(fetched->updateInterval.value_or(sovereign::tray::kDefaultUpdateInterval).count());
+    // Where its support is, the traffic and the paid period: as the panel says
+    // now (a header it stopped sending is gone here too).
+    profile->supportUrl = fetched->supportUrl.value_or(std::string());
+    profile->webPageUrl = fetched->webPageUrl.value_or(std::string());
+    const sovereign::tray::SubscriptionUsage usage = fetched->usage.value_or(sovereign::tray::SubscriptionUsage{});
+    profile->trafficUsed = usage.upload + usage.download;
+    profile->trafficTotal = usage.total;
+    profile->expire = usage.expire;
     // The panel's own name for the subscription, when it sends one - until
     // the user names it themselves.
     if (fetched->title && !profile->userNamed && *fetched->title != profile->name) {
@@ -1817,7 +1831,11 @@ class Worker {
                                 .mergeNotes = state.mergeNotes,
                                 .servers = {},
                                 .heldBack = state.heldBack,
-                                .via = profile.via};
+                                .via = profile.via,
+                                .supportUrl = profile.supportUrl,
+                                .trafficUsed = profile.trafficUsed,
+                                .trafficTotal = profile.trafficTotal,
+                                .expire = profile.expire};
         for (const auto& server : state.servers) {
           shown.servers.push_back(
               {.tag = server.tag, .label = server.label, .enabled = sovereign::tray::IsServerEnabled(profile, server.tag)});
@@ -2265,6 +2283,155 @@ bool CopyText(HWND owner, const std::wstring& text) {
   return copied;
 }
 
+// The user's time zone now, in minutes east of UTC (the report's dates).
+int UtcOffsetMinutes() {
+  TIME_ZONE_INFORMATION zone{};
+  const DWORD kind = GetTimeZoneInformation(&zone);
+  const LONG extra = kind == TIME_ZONE_ID_DAYLIGHT   ? zone.DaylightBias
+                     : kind == TIME_ZONE_ID_STANDARD ? zone.StandardBias
+                                                     : 0;
+  return static_cast<int>(-(zone.Bias + extra));
+}
+
+// "Windows 11 26100": the build from the registry (ProductName says
+// "Windows 10" on 11 too).
+std::string WindowsVersion() {
+  wchar_t build[32] = {};
+  DWORD size = sizeof(build);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"CurrentBuild",
+                   RRF_RT_REG_SZ, nullptr, build, &size) != ERROR_SUCCESS) {
+    return "Windows";
+  }
+  const int number = _wtoi(build);
+  return std::format("Windows {} {}", number >= 22000 ? 11 : 10, number);
+}
+
+// The report for a configuration's support (support_report.h): built from
+// what the window already shows - the servers' measurements and exits, the
+// checks, what the panel said - saved where the user picks (the desktop
+// first), a short version copied for a chat, and the panel's support link
+// opened if it gave one.
+void WriteSupportReport(HWND owner, const View::ProfileView& profile, const View& view) {
+  using sovereign::tray::ReportServer;
+  sovereign::tray::ReportInput in;
+  in.app = Narrow(SOVEREIGN_VERSION_W) + " · sing-box " + Narrow(SOVEREIGN_SINGBOX_VERSION_W);
+  in.app = "Sovereign " + in.app + " · " + WindowsVersion();
+  in.now = std::time(nullptr);
+  in.utcOffsetMinutes = UtcOffsetMinutes();
+  in.subscriptionName = profile.name;
+  in.subscriptionHost = Narrow(sovereign::tray::UrlHost(Widen(profile.url)));
+  in.lastRefresh = profile.lastRefresh;
+  in.refreshError = profile.error;
+  in.trafficUsed = profile.trafficUsed;
+  in.trafficTotal = profile.trafficTotal;
+  in.expire = profile.expire;
+  try {
+    if (const auto config = sovereign::tray::LoadConfig(sovereign::tray::ProfileDir(profile.id))) {
+      in.servers = sovereign::tray::ReportServers(*config);
+    }
+  } catch (...) {
+    LOG_CAUGHT_EXCEPTION_MSG("reading the configuration for the report failed");
+  }
+  // The measurements are by the running config's tags: a server's own, or
+  // "<tag> · <configuration>" where two configurations named servers alike.
+  for (ReportServer& s : in.servers) {
+    for (std::size_t i = 0; i < view.protocols.size(); ++i) {
+      if (view.protocols[i] != s.name && view.protocols[i] != s.name + " · " + profile.name) {
+        continue;
+      }
+      if (i < view.delays.size() && view.delays[i]) {
+        const sovereign::tray::Delay& d = *view.delays[i];
+        if (d.state == sovereign::tray::Delay::State::Ok) {
+          s.state = ReportServer::State::Ok;
+          s.delay = d.ms;
+          s.jitter = d.jitter;
+          s.loss = d.loss;
+        } else if (d.state == sovereign::tray::Delay::State::Failed) {
+          s.state = ReportServer::State::Failed;
+          s.error = d.error;
+        }
+        in.connected = true;
+      }
+      if (i < view.locations.size()) {
+        s.exitIp = view.locations[i].ip;
+        s.exitCountry = view.locations[i].country;
+        s.exitIsp = view.locations[i].isp;
+      }
+      break;
+    }
+  }
+  // The user's own address (what Russian sites see) - only to cut it out.
+  {
+    static const std::regex kIp(R"(\d{1,3}(?:\.\d{1,3}){3})");
+    std::smatch found;
+    const std::string& seen = view.checks[static_cast<std::size_t>(sovereign::tray::CheckId::RussiaDirect)].summary;
+    if (std::regex_search(seen, found, kIp)) {
+      in.userIp = found.str();
+    }
+  }
+  const std::array<std::pair<sovereign::tray::CheckId, const char*>, 3> shown{
+      {{sovereign::tray::CheckId::DnsLeak, "Утечка DNS"},
+       {sovereign::tray::CheckId::WebRtc, "Утечка через WebRTC"},
+       {sovereign::tray::CheckId::Ipv6, "IPv6"}}};
+  for (const auto& [id, name] : shown) {
+    const sovereign::tray::CheckResult& r = view.checks[static_cast<std::size_t>(id)];
+    using Status = sovereign::tray::CheckResult::Status;
+    if (r.status == Status::Ok || r.status == Status::Warn || r.status == Status::Fail) {
+      in.checks.push_back({.name = name, .summary = r.summary, .bad = r.status == Status::Fail});
+    }
+  }
+  const sovereign::tray::SupportReport report = sovereign::tray::BuildSupportReport(in);
+
+  // Where: the desktop first, the user picks.
+  std::wstring path;
+  try {
+    const auto dialog = wil::CoCreateInstance<IFileSaveDialog>(CLSID_FileSaveDialog);
+    const std::array<COMDLG_FILTERSPEC, 1> filters{{{L"Текст", L"*.txt"}}};
+    THROW_IF_FAILED(dialog->SetFileTypes(static_cast<UINT>(filters.size()), filters.data()));
+    THROW_IF_FAILED(dialog->SetDefaultExtension(L"txt"));
+    THROW_IF_FAILED(dialog->SetTitle(L"Отчёт для поддержки"));
+    std::wstring name = L"Отчёт для поддержки — " + Widen(profile.name) + L".txt";
+    std::replace_if(
+        name.begin(), name.end(),
+        [](wchar_t c) { return std::wstring_view(L"\\/:*?\"<>|").find(c) != std::wstring_view::npos; }, L'_');
+    THROW_IF_FAILED(dialog->SetFileName(name.c_str()));
+    wil::com_ptr<IShellItem> desktop;
+    if (SUCCEEDED(SHGetKnownFolderItem(FOLDERID_Desktop, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(&desktop)))) {
+      dialog->SetFolder(desktop.get());
+    }
+    const HRESULT shownDialog = dialog->Show(owner);
+    if (shownDialog == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+      return;
+    }
+    THROW_IF_FAILED(shownDialog);
+    wil::com_ptr<IShellItem> item;
+    THROW_IF_FAILED(dialog->GetResult(&item));
+    wil::unique_cotaskmem_string chosen;
+    THROW_IF_FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &chosen));
+    path = chosen.get();
+  } catch (...) {
+    LOG_CAUGHT_EXCEPTION_MSG("the save dialog failed");
+    return;
+  }
+  // UTF-8 with a BOM and CRLF: Notepad and any support desk read it as is.
+  std::string text = "\xEF\xBB\xBF";
+  for (const char c : report.full) {
+    text += c == '\n' ? std::string("\r\n") : std::string(1, c);
+  }
+  std::ofstream(std::filesystem::path(path), std::ios::binary) << text;
+  CopyText(owner, Widen(report.brief));
+  if (!profile.supportUrl.empty()) {
+    ShellExecuteW(nullptr, L"open", Widen(profile.supportUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  }
+  if (g_trayIcon != nullptr) {
+    g_trayIcon->Balloon(L"Sovereign: отчёт сохранён",
+                        profile.supportUrl.empty()
+                            ? L"Краткая версия скопирована — вставь её в чат поддержки и приложи файл."
+                            : L"Краткая версия скопирована, чат поддержки открыт — вставь её и приложи файл.",
+                        NIIF_INFO);
+  }
+}
+
 // A run of the checks (diagnose.h), on a thread of its own: they take
 // seconds, the speed test half a minute. One at a time.
 std::optional<std::jthread> g_checks;
@@ -2679,6 +2846,9 @@ UiContent ContentFrom(const View& v) {
     shown.waiting = profile.waiting;
     shown.choiceError = Widen(profile.choiceError);
     shown.heldBack = profile.heldBack;
+    shown.usage = Widen(sovereign::tray::UsageLine(profile.trafficUsed, profile.trafficTotal, profile.expire,
+                                                   std::time(nullptr), UtcOffsetMinutes()));
+    shown.support = !profile.supportUrl.empty();
     if (!profile.via.empty()) {
       const auto through = std::find_if(v.profiles.begin(), v.profiles.end(),
                                         [&](const View::ProfileView& p) { return p.id == profile.via; });
@@ -2904,6 +3074,9 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::RefreshProfile:
       RequestRefresh(profile.id);
+      break;
+    case UiCommand::SupportReport:
+      WriteSupportReport(owner, profile, view);
       break;
     case UiCommand::ChooseVia: {  // directly, or through another configuration that isn't a chain itself
       std::vector<std::wstring> names = {L"Напрямую"};
@@ -3179,6 +3352,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::RenameProfile:
     case UiCommand::RefreshProfile:
     case UiCommand::RefreshDirect:
+    case UiCommand::SupportReport:
     case UiCommand::ChooseVia:
     case UiCommand::ToggleAutoUpdate:
     case UiCommand::ChooseRefreshPeriod:

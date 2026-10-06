@@ -71,6 +71,66 @@ std::optional<std::chrono::hours> ParseUpdateInterval(std::string_view header) {
   return std::chrono::hours(std::clamp(hours, 1, 24 * 7));
 }
 
+std::optional<SubscriptionUsage> ParseSubscriptionUserinfo(std::string_view header) {
+  SubscriptionUsage usage;
+  bool any = false;
+  while (!header.empty()) {
+    const std::size_t semi = header.find(';');
+    std::string_view part = header.substr(0, semi);
+    header = semi == std::string_view::npos ? std::string_view() : header.substr(semi + 1);
+    while (!part.empty() && part.front() == ' ') {
+      part.remove_prefix(1);
+    }
+    while (!part.empty() && part.back() == ' ') {
+      part.remove_suffix(1);
+    }
+    const std::size_t eq = part.find('=');
+    if (eq == std::string_view::npos) {
+      continue;
+    }
+    const std::string_view key = part.substr(0, eq);
+    const std::string_view value = part.substr(eq + 1);
+    // Some panels send a float ("1.073741824e+10"): the integer part is enough.
+    std::uint64_t n = 0;
+    const auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), n);
+    if (ec != std::errc{} || end == value.data()) {
+      continue;
+    }
+    if (key == "upload") {
+      usage.upload = n;
+    } else if (key == "download") {
+      usage.download = n;
+    } else if (key == "total") {
+      usage.total = n;
+    } else if (key == "expire") {
+      usage.expire = static_cast<std::int64_t>(std::min<std::uint64_t>(n, std::uint64_t{1} << 40U));
+    } else {
+      continue;
+    }
+    any = true;
+  }
+  return any ? std::optional(usage) : std::nullopt;
+}
+
+std::optional<std::string> ParseLinkHeader(std::string_view header) {
+  while (!header.empty() && header.front() == ' ') {
+    header.remove_prefix(1);
+  }
+  while (!header.empty() && header.back() == ' ') {
+    header.remove_suffix(1);
+  }
+  if (header.empty() || header.size() > kMaxLinkHeader) {
+    return std::nullopt;
+  }
+  if (!header.starts_with("https://") && !header.starts_with("http://") && !header.starts_with("tg://")) {
+    return std::nullopt;
+  }
+  if (std::any_of(header.begin(), header.end(), [](char c) { return c <= ' ' || c > '~'; })) {
+    return std::nullopt;
+  }
+  return std::string(header);
+}
+
 bool ConfigHasTun(std::string_view config) {
   const auto json = nlohmann::json::parse(config, nullptr, /*allow_exceptions=*/false);
   if (!json.is_object()) {

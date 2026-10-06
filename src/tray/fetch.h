@@ -7,12 +7,17 @@
 #include <string>
 #include <string_view>
 
+#include "subscription.h"
+
 namespace sovereign::tray {
 
 struct FetchResult {
   std::string body;
   std::optional<std::chrono::hours> updateInterval;  // Profile-Update-Interval, if sent
   std::optional<std::string> title;                  // Profile-Title, if sent (profiles.h)
+  std::optional<std::string> supportUrl;             // Support-Url, if sent and a sane link
+  std::optional<std::string> webPageUrl;             // Profile-Web-Page-Url, the same
+  std::optional<SubscriptionUsage> usage;            // Subscription-Userinfo, if sent
 };
 
 // GET over https with WinHTTP (system proxy settings, 10-30 s timeouts, the

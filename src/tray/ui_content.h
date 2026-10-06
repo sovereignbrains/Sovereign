@@ -66,6 +66,8 @@ struct UiProfile {
   bool heldBack = false;   // not fetched so its server doesn't see the user's IP: "download directly" offered
   std::wstring via;        // the configuration its servers connect through (its name); empty: directly
   bool viaBroken = false;  // that one is off, gone or chained itself: these servers don't run
+  std::wstring usage;      // what its panel said: "Трафик: 3 ГБ из 100,0 ГБ · оплачено до 01.01.2027"; empty: nothing
+  bool support = false;    // its panel gave a link to its support (Support-Url)
 };
 // The routing's page (routing.h).
 struct UiRule {
@@ -178,6 +180,7 @@ enum class UiCommand : std::uint8_t {
   ChooseRefreshPeriod,  // anchor: where to open the menu of intervals
   SetRefreshHours,   // text: the hours typed in place
   CopyProfileLink,   // the subscription link onto the clipboard
+  SupportReport,     // the report for its support saved, a short one copied, support's link opened (support_report.h)
   RemoveProfile,     // after asking
   ToggleServer,      // sub: index into its servers
   // The routing's:

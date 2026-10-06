@@ -41,6 +41,8 @@ add_library(sovereign_tray_lib STATIC
   routing.h
   diagnostics.cpp
   diagnostics.h
+  support_report.cpp
+  support_report.h
   import_formats.cpp
   import_formats.h
   qr_codes.cpp

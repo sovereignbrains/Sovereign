@@ -140,15 +140,27 @@ std::string SubscriptionStatusError(DWORD status) {
                        : std::format("сервер ответил {}", status);
 }
 
-// What a subscription answer's headers say about it: [interval, title] at `at`.
+// What a subscription answer's headers say about it, kSubscriptionHeaders'
+// order at `at`.
 void ReadSubscriptionHeaders(const Response& response, std::size_t at, FetchResult& result) {
-  if (response.headers.size() >= at + 2) {
-    if (response.headers[at]) {
-      result.updateInterval = ParseUpdateInterval(*response.headers[at]);
-    }
-    if (response.headers[at + 1]) {
-      result.title = ParseProfileTitle(*response.headers[at + 1]);
-    }
+  const auto header = [&](std::size_t i) -> const std::optional<std::string>& {
+    static const std::optional<std::string> kNone;
+    return response.headers.size() > at + i ? response.headers[at + i] : kNone;
+  };
+  if (header(0)) {
+    result.updateInterval = ParseUpdateInterval(*header(0));
+  }
+  if (header(1)) {
+    result.title = ParseProfileTitle(*header(1));
+  }
+  if (header(2)) {
+    result.supportUrl = ParseLinkHeader(*header(2));
+  }
+  if (header(3)) {
+    result.webPageUrl = ParseLinkHeader(*header(3));
+  }
+  if (header(4)) {
+    result.usage = ParseSubscriptionUserinfo(*header(4));
   }
 }
 
@@ -173,7 +185,9 @@ std::expected<FetchResult, std::string> FetchSubscription(const std::wstring& ur
                                                           std::string_view hwid) {
   // Only x-hwid: no OS version, no device model - nothing of the machine's.
   const std::wstring headers = IsHwid(hwid) ? L"x-hwid: " + std::wstring(hwid.begin(), hwid.end()) : std::wstring();
-  auto response = HttpsGet(url, userAgent, kMaxSubscriptionBytes, {L"Profile-Update-Interval", L"Profile-Title"},
+  auto response = HttpsGet(url, userAgent, kMaxSubscriptionBytes,
+                           {L"Profile-Update-Interval", L"Profile-Title", L"Support-Url", L"Profile-Web-Page-Url",
+                            L"Subscription-Userinfo"},
                            "сервер подписки", L"GET", {}, headers);
   if (!response) {
     return std::unexpected(response.error());
@@ -200,7 +214,7 @@ std::expected<FetchResult, std::string> FetchSubscriptionViaRelay(const std::str
   const std::wstring key = L"X-Relay-Key: " + Wide(relayKey);
   auto response = HttpsGet(Wide(base), userAgent, kMaxSubscriptionBytes,
                            {L"X-Relay-Status", L"X-Relay-Job", L"X-Relay-Size", L"X-Relay-Chunk", L"Profile-Update-Interval",
-                            L"Profile-Title"},
+                            L"Profile-Title", L"Support-Url", L"Profile-Web-Page-Url", L"Subscription-Userinfo"},
                            "пересыльщик", L"POST", RelayRequestBody(Utf8(url), Utf8(userAgent), hwid),
                            key + L"\r\nContent-Type: application/json");
   if (!response) {

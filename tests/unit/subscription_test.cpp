@@ -66,8 +66,34 @@ void TestTunDetection() {
 
 }  // namespace
 
+// What panels say about a subscription (Marzban, Remnawave, 3x-ui write it
+// this way): traffic in bytes, the end of the paid period, support's link.
+void TestPanelHeaders() {
+  const auto usage = ParseSubscriptionUserinfo("upload=1048576; download=2097152; total=107374182400; expire=1798761600");
+  CHECK(usage && usage->upload == 1048576 && usage->download == 2097152);
+  CHECK(usage && usage->total == 107374182400ULL && usage->expire == 1798761600);
+  const auto unlimited = ParseSubscriptionUserinfo("upload=0;download=5;total=0;expire=0");  // no spaces, no limit
+  CHECK(unlimited && unlimited->download == 5 && unlimited->total == 0 && unlimited->expire == 0);
+  const auto floaty = ParseSubscriptionUserinfo("upload=12.5; download=1e3; total=10737418240");
+  CHECK(floaty && floaty->upload == 12 && floaty->total == 10737418240ULL);  // the integer part
+  CHECK(!ParseSubscriptionUserinfo(""));
+  CHECK(!ParseSubscriptionUserinfo("hello; world=x"));
+
+  CHECK(ParseLinkHeader(" https://t.me/support_bot ") == std::optional<std::string>("https://t.me/support_bot"));
+  CHECK(ParseLinkHeader("tg://resolve?domain=support_bot").has_value());
+  CHECK(ParseLinkHeader("http://panel.example.com/sub/abc").has_value());
+  CHECK(!ParseLinkHeader("javascript:alert(1)"));
+  CHECK(!ParseLinkHeader("file:///C:/Windows/System32/calc.exe"));
+  CHECK(!ParseLinkHeader("https://t.me/a b"));      // a space: not one link
+  CHECK(!ParseLinkHeader("https://t.me/\x01"));     // a control character
+  CHECK(!ParseLinkHeader("https://t.me/\xD0\xB0"));  // not ASCII
+  CHECK(!ParseLinkHeader("https://" + std::string(kMaxLinkHeader, 'a')));
+  CHECK(!ParseLinkHeader(""));
+}
+
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
+    TestPanelHeaders();
     TestHttpsOnly();
     TestUrlHost();
     TestConfigCheck();

@@ -1443,10 +1443,19 @@ class Painter {
                       L"Правки перенесены. Там, где вы с подпиской изменили одно и то же, осталось твоё — проверь: " + where,
                       x0, x1, y) + kGap;
       }
+      if (!p.usage.empty()) {
+        y = Paragraph(l, Kind::Caption, p.usage, x0 + 4, x1, y) + kGap;
+      }
       l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Обновить", kGlyphRefresh,
                                     UiCommand::RefreshProfile, index));
       l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
                                     UiCommand::CopyProfileLink, index));
+      y += kButton + 8;
+      // What's wrong with which server, for the provider's support: a file,
+      // a short version on the clipboard, their link opened if the panel gave one.
+      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton},
+                                    p.support ? L"Написать в поддержку" : L"Отчёт для поддержки", kGlyphDownload,
+                                    UiCommand::SupportReport, index));
       y += kButton + 8;
       if (p.edited || p.waiting) {
         l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,

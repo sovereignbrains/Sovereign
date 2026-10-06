@@ -125,6 +125,11 @@ target_link_libraries(unit-diagnostics PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-diagnostics)
 add_test(NAME unit-diagnostics COMMAND unit-diagnostics)
 
+add_executable(unit-support-report support_report_test.cpp check.h)
+target_link_libraries(unit-support-report PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-support-report)
+add_test(NAME unit-support-report COMMAND unit-support-report)
+
 add_executable(unit-warp warp_test.cpp check.h)
 target_link_libraries(unit-warp PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-warp)

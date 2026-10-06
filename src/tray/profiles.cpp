@@ -1,6 +1,7 @@
 #include "profiles.h"
 
 #include "share_links.h"
+#include "subscription.h"
 
 #include <algorithm>
 #include <array>
@@ -184,7 +185,12 @@ nlohmann::json ProfilesToJson(const std::vector<Profile>& profiles) {
                     {"userHours", p.userHours},
                     {"disabled", p.disabled},
                     {"hwid", p.hwid},
-                    {"via", p.via}});
+                    {"via", p.via},
+                    {"supportUrl", p.supportUrl},
+                    {"webPageUrl", p.webPageUrl},
+                    {"trafficUsed", p.trafficUsed},
+                    {"trafficTotal", p.trafficTotal},
+                    {"expire", p.expire}});
   }
   return list;
 }
@@ -246,6 +252,19 @@ std::vector<Profile> ProfilesFromJson(const nlohmann::json& json, std::string_vi
     if (const auto via = text(entry, "via"); via && IsProfileId(*via) && *via != p.id) {
       p.via = *via;  // one that's gone by now is left to the combine: its servers dropped, not direct
     }
+    // tray.json is a file on disk: the links checked again before anything opens them.
+    for (auto [key, into] : {std::pair{"supportUrl", &p.supportUrl}, std::pair{"webPageUrl", &p.webPageUrl}}) {
+      if (const auto link = text(entry, key); link && !link->empty()) {
+        *into = ParseLinkHeader(*link).value_or(std::string());
+      }
+    }
+    if (const auto it = entry.find("trafficUsed"); it != entry.end() && it->is_number_unsigned()) {
+      p.trafficUsed = it->get<std::uint64_t>();
+    }
+    if (const auto it = entry.find("trafficTotal"); it != entry.end() && it->is_number_unsigned()) {
+      p.trafficTotal = it->get<std::uint64_t>();
+    }
+    p.expire = std::max<std::int64_t>(0, number(entry, "expire").value_or(0));
     if (p.name.empty()) {
       p.name = UniqueProfileName(profiles, "Конфиг");
     }

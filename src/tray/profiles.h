@@ -32,6 +32,13 @@ struct Profile {
   // The configuration its servers connect through (combine.h's chains): its
   // servers see that one's address, not the user's. Empty: directly.
   std::string via;
+  // What its panel said at the last refresh (Support-Url, Profile-Web-Page-Url,
+  // Subscription-Userinfo): where its support is, the traffic, the paid period.
+  std::string supportUrl;
+  std::string webPageUrl;
+  std::uint64_t trafficUsed = 0;   // upload + download, bytes
+  std::uint64_t trafficTotal = 0;  // 0: no limit, or not sent
+  std::int64_t expire = 0;         // unix seconds; 0: no end, or not sent
 };
 
 // What a subscription server is told the device is (x-hwid, which panels
