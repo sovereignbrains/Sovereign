@@ -86,6 +86,16 @@ std::string When(std::int64_t unix, int offsetMinutes) {
                      static_cast<int>(ymd.year()), hms.hours().count(), hms.minutes().count());
 }
 
+// "2 проверки", "5 проверок", "21 проверку": after "на".
+std::string Checks(int n) {
+  const int tens = n % 100;
+  const int ones = n % 10;
+  const char* word = ones == 1 && tens != 11                              ? "проверку"
+                     : ones >= 2 && ones <= 4 && (tens < 12 || tens > 14) ? "проверки"
+                                                                          : "проверок";
+  return std::format("{} {}", n, word);
+}
+
 }  // namespace
 
 std::string FlagCountry(std::string_view name) {
@@ -307,7 +317,10 @@ SupportReport BuildSupportReport(const ReportInput& in) {
         full += std::format("   Работает: задержка {} мс, джиттер {} мс, потери {} %\n", s.delay, s.jitter, s.loss);
         break;
       case ReportServer::State::Failed:
-        full += "   НЕ РАБОТАЕТ\n";
+        // How sure: a server that missed one test may have hit a hiccup.
+        full += s.failedInRow >= 2   ? std::format("   НЕ РАБОТАЕТ — не ответил на {} подряд\n", Checks(s.failedInRow))
+                : s.failedInRow == 1 ? std::string("   НЕ РАБОТАЕТ на последней проверке\n")
+                                     : std::string("   НЕ РАБОТАЕТ\n");
         if (!s.error.empty()) {
           full += "   Ошибка: " + CutAddresses(s.error, in.userIp) + "\n";
         }
@@ -315,7 +328,10 @@ SupportReport BuildSupportReport(const ReportInput& in) {
       case ReportServer::State::Unknown: full += "   Не проверен\n"; break;
     }
     if (!s.exitIp.empty() || !s.exitCountry.empty()) {
-      full += "   Выход в интернет: " + s.exitIp + (s.exitCountry.empty() ? "" : " · " + s.exitCountry) +
+      // A server that fails now came out there before - not now.
+      full += std::string(s.state == ReportServer::State::Failed ? "   Последний известный выход: "
+                                                                 : "   Выход в интернет: ") +
+              s.exitIp + (s.exitCountry.empty() ? "" : " · " + s.exitCountry) +
               (s.exitIsp.empty() ? "" : " · " + s.exitIsp) + "\n";
     }
     if (std::string p = ServerProblem(s); !p.empty()) {

@@ -154,6 +154,24 @@ void TestReport() {
   CHECK(r.brief.find("packetlab.tech") != std::string::npos && r.brief.find("AnyTLS-ECH") != std::string::npos);
   CHECK(r.brief.find("46.148.140.142") == std::string::npos);
 
+  // How sure the report is a server is down, and where it came out - before.
+  ReportInput fails = in;
+  ReportServer gone = Failed("i/o timeout");
+  gone.name = "TUIC";
+  gone.exitIp = "5.83.147.210";
+  gone.exitCountry = "DE";
+  gone.failedInRow = 1;
+  fails.servers = {good, gone};
+  std::string text = BuildSupportReport(fails).full;
+  CHECK(text.find("НЕ РАБОТАЕТ на последней проверке") != std::string::npos);
+  CHECK(text.find("Последний известный выход: 5.83.147.210 · DE") != std::string::npos);
+  CHECK(text.find("Выход в интернет: 5.83.147.210 · DE") != std::string::npos);  // the one that works: now
+  fails.servers[1].failedInRow = 3;
+  text = BuildSupportReport(fails).full;
+  CHECK(text.find("не ответил на 3 проверки подряд") != std::string::npos);
+  fails.servers[1].failedInRow = 5;
+  CHECK(BuildSupportReport(fails).full.find("на 5 проверок подряд") != std::string::npos);
+
   // Nothing measured: nothing claimed about the servers.
   ReportInput off = in;
   off.connected = false;

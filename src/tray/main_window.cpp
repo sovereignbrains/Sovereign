@@ -318,6 +318,18 @@ Item CommandItem(Kind kind, D2D1_RECT_F rect, std::wstring text, const wchar_t* 
   return i;
 }
 
+// A configuration's report for support; while one waits for its test of the
+// servers, says so and takes no clicks.
+Item ReportButton(const UiContent& c, bool support, D2D1_RECT_F rect, int index) {
+  Item i = CommandItem(Kind::Button, rect,
+                       c.reportPending ? L"Проверяю серверы…"
+                       : support       ? L"Написать в поддержку"
+                                       : L"Отчёт для поддержки",
+                       kGlyphDownload, UiCommand::SupportReport, index);
+  i.enabled = !c.reportPending;
+  return i;
+}
+
 bool Interactive(const Item& item) { return item.action != ItemAction::None && item.enabled; }
 
 // The overview's words for the state.
@@ -1119,9 +1131,7 @@ class Painter {
     // away - not three pages deep. Nothing while all is fine.
     if (!c.trouble.empty() && c.troubleProfile >= 0) {
       y = Paragraph(l, Kind::ErrorText, c.trouble, x0, x1, y + 10) + 8;
-      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton},
-                                    c.troubleSupport ? L"Написать в поддержку" : L"Отчёт для поддержки", kGlyphDownload,
-                                    UiCommand::SupportReport, c.troubleProfile));
+      l.items.push_back(ReportButton(c, c.troubleSupport, {x0, y, x1, y + kButton}, c.troubleProfile));
       y += kButton;
     }
 
@@ -1477,9 +1487,7 @@ class Painter {
       y += kButton + 8;
       // What's wrong with which server, for the provider's support: a file,
       // a short version on the clipboard, their link opened if the panel gave one.
-      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton},
-                                    p.support ? L"Написать в поддержку" : L"Отчёт для поддержки", kGlyphDownload,
-                                    UiCommand::SupportReport, index));
+      l.items.push_back(ReportButton(c, p.support, {x0, y, x1, y + kButton}, index));
       y += kButton + 8;
       if (p.edited || p.waiting) {
         l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,

@@ -19,6 +19,7 @@ struct Delay {
   int samples = 0;      // Ok: round trips measured
   int connect = 0;      // a connection, TLS and a first request; 0 if unknown
   std::string error{};  // Failed
+  int failedInRow = 0;  // the tray's count, not the service's: tests in a row this server failed
 };
 
 // Results by outbound tag; nullopt if `response` isn't a box_delays answer

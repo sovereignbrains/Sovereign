@@ -29,7 +29,10 @@ struct ReportServer {
   int jitter = 0;     // Ok: ms
   int loss = 0;       // Ok: percent
   std::string error;  // Failed: the core's words
-  std::string exitIp;       // where it comes out, when known
+  int failedInRow = 0;  // Failed: tests in a row it failed (0: not counted)
+  // Where it comes out, when known - from a test while it worked: for a
+  // server that fails now, where it came out last.
+  std::string exitIp;
   std::string exitCountry;  // "NL"
   std::string exitIsp;
 };
@@ -77,7 +80,9 @@ SupportReport BuildSupportReport(const ReportInput& input);
 // What's wrong with a subscription, for the main screen - empty while it's
 // fine: the paid period over, the traffic used up, half its servers or more
 // not connecting (`failed` of the `measured` of its `servers`), it not
-// refreshing. The worst one only.
+// refreshing. The worst one only. `failed` counts only the servers that
+// failed two tests in a row - one test lost to a network hiccup (or made
+// while the box was still starting) is no reason for alarm.
 std::string SubscriptionTrouble(std::size_t servers, std::size_t measured, std::size_t failed, bool refreshFailed,
                                 std::uint64_t used, std::uint64_t total, std::int64_t expire, std::int64_t now);
 

@@ -150,6 +150,13 @@ constexpr std::chrono::seconds kUrlTestGiveUp{120};
 // seconds and a few dozen small requests a server).
 constexpr std::chrono::minutes kAutoRetest{10};
 
+// A server that failed a test is tested again: soon after a first failure (to
+// tell a hiccup from a server that's down - the main screen only says so
+// after two in a row), and now and then while it keeps failing (so the
+// screen says it once it's back).
+constexpr std::chrono::seconds kFailRecheck{30};
+constexpr std::chrono::minutes kFailRetest{5};
+
 // A switch of the running selector the service refused is retried this often.
 constexpr std::chrono::seconds kSelectRetry{5};
 
@@ -269,6 +276,7 @@ struct View {
   int protocol = -1;                   // the one in use
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
   bool delaysTesting = false;
+  std::uint64_t delaysRound = 0;  // tests over so far: a new one is done once this moves on
   std::string delayError;
   int autoOption = -1;      // the protocol that is auto (a URL test), if any
   std::string autoServer;   // with an auto pick, the server it runs on; "" until measured
@@ -1525,17 +1533,23 @@ class Worker {
     } else if (stats->generation != generation_) {
       generation_ = stats->generation;  // a new box: the old results are gone with the old one
       delays_.clear();
+      failedInRow_.clear();
+      recheckAt_.reset();
+      delaysRound_ += testing_ ? 1 : 0;  // the test that ran is over
       testing_ = false;
     }
     const bool on = model_.GetDisplay() == Display::On;
     const auto [choices, current] = Choices();
-    const bool autoDue =
-        IsAuto(choices, current) && !testing_ && TrayModel::Clock::now() - testStarted_ >= kAutoRetest;
-    if (on && (asked || autoDue || testedGeneration_ != generation_)) {
+    const auto now = TrayModel::Clock::now();
+    const bool autoDue = IsAuto(choices, current) && !testing_ && now - testStarted_ >= kAutoRetest;
+    const bool recheckDue = recheckAt_ && !testing_ && now >= *recheckAt_;
+    if (on && (asked || autoDue || recheckDue || testedGeneration_ != generation_)) {
       testedGeneration_ = generation_;
+      recheckAt_.reset();
       StartUrlTest();
     } else if (asked) {
       delayError_ = "подключение выключено";
+      ++delaysRound_;  // asked, and over: nothing to wait for
     }
     if (testing_) {
       PollDelays();
@@ -1744,11 +1758,13 @@ class Worker {
     std::copy_if(choices.options.begin(), choices.options.end(), std::back_inserter(tags),
                  [&](const std::string& tag) { return !choices.groups.contains(tag); });
     if (tags.empty()) {
+      ++delaysRound_;  // nothing to test: over at once
       return;
     }
     const std::string error = ServiceCall(nlohmann::json{{"cmd", "box_urltest"}, {"tags", tags}}, "box_urltest_started");
     delayError_ = error;
     if (!error.empty()) {
+      ++delaysRound_;
       return;
     }
     testing_ = true;
@@ -1756,6 +1772,28 @@ class Worker {
     for (const std::string& tag : tags) {
       delays_[tag] = sovereign::tray::Delay{};  // pending until the service says
     }
+    testedTags_ = std::move(tags);
+  }
+
+  // A test over: each server's failures in a row counted, the next test
+  // planned while any fails (kFailRecheck).
+  void CountFailures() {
+    bool first = false;
+    bool failing = false;
+    for (const std::string& tag : testedTags_) {
+      const auto it = delays_.find(tag);
+      if (it == delays_.end() || it->second.state == sovereign::tray::Delay::State::Pending) {
+        continue;  // given up on: no answer either way
+      }
+      int& count = failedInRow_[tag];
+      count = it->second.state == sovereign::tray::Delay::State::Failed ? count + 1 : 0;
+      first = first || count == 1;
+      failing = failing || count > 0;
+    }
+    if (failing) {
+      recheckAt_ = TrayModel::Clock::now() + (first ? kFailRecheck : std::chrono::seconds(kFailRetest));
+    }
+    ++delaysRound_;
   }
 
   void PollDelays() {
@@ -1770,6 +1808,7 @@ class Worker {
     });
     if (!pending || TrayModel::Clock::now() - testStarted_ > kUrlTestGiveUp) {
       testing_ = false;
+      CountFailures();
       PickAutoServer();
     }
   }
@@ -1945,9 +1984,18 @@ class Worker {
         const auto group = choices.groups.find(option);
         const std::string& tag = group != choices.groups.end() && !v.autoServer.empty() ? v.autoServer : option;
         const auto it = delays_.find(tag);
-        v.delays.push_back(it == delays_.end() ? std::nullopt : std::optional(it->second));
+        if (it == delays_.end()) {
+          v.delays.emplace_back();
+          continue;
+        }
+        sovereign::tray::Delay delay = it->second;
+        if (const auto failed = failedInRow_.find(tag); failed != failedInRow_.end()) {
+          delay.failedInRow = failed->second;
+        }
+        v.delays.emplace_back(std::move(delay));
       }
       v.delaysTesting = testing_;
+      v.delaysRound = delaysRound_;
       v.delayError = delayError_;
       v.exitIp = exit_;
       v.locations.clear();
@@ -1996,6 +2044,10 @@ class Worker {
   std::uint64_t logSince_ = 0;  // box_logs cursor
   std::string loggedError_;     // the model's error last put into the log
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
+  std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
+  std::vector<std::string> testedTags_;                   // in the test that runs or ran last
+  std::optional<TrayModel::Clock::time_point> recheckAt_;  // the next test while a server fails
+  std::uint64_t delaysRound_ = 0;  // tests over (or that couldn't start), ever: what a report waits on
   bool testing_ = false;
   TrayModel::Clock::time_point testStarted_{};
   std::int64_t generation_ = -1;        // the box the results belong to
@@ -2462,6 +2514,7 @@ void WriteSupportReport(HWND owner, const View::ProfileView& profile, const View
         } else if (d.state == sovereign::tray::Delay::State::Failed) {
           s.state = ReportServer::State::Failed;
           s.error = d.error;
+          s.failedInRow = d.failedInRow;
         }
         in.connected = true;
       }
@@ -2913,6 +2966,16 @@ void RequestToggleExitIp() {
 
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
+// A support report asked for while the box runs: written once a fresh test
+// of the servers is over (View::delaysRound moves past `round`) - not from
+// whatever the last test said, hours ago.
+struct PendingReport {
+  std::string profileId;
+  HWND owner = nullptr;
+  std::uint64_t round = 0;
+};
+std::optional<PendingReport> g_pendingReport;
+
 // What the window shows, from the worker's view.
 UiContent ContentFrom(const View& v) {
   UiContent c;
@@ -2993,8 +3056,11 @@ UiContent ContentFrom(const View& v) {
       for (const View::ServerView& server : profile.servers) {
         for (std::size_t i = 0; server.enabled && i < v.protocols.size() && i < v.delays.size(); ++i) {
           if (sovereign::tray::IsRenamedTag(v.protocols[i], server.tag, profile.name) && v.delays[i]) {
-            measured += v.delays[i]->state != sovereign::tray::Delay::State::Pending ? 1 : 0;
-            failed += v.delays[i]->state == sovereign::tray::Delay::State::Failed ? 1 : 0;
+            // A first failure isn't counted either way until the recheck says.
+            const sovereign::tray::Delay& d = *v.delays[i];
+            const bool down = d.state == sovereign::tray::Delay::State::Failed && d.failedInRow >= 2;
+            measured += d.state == sovereign::tray::Delay::State::Ok || down ? 1 : 0;
+            failed += down ? 1 : 0;
             break;
           }
         }
@@ -3118,6 +3184,7 @@ UiContent ContentFrom(const View& v) {
   }
   c.delaysTesting = v.delaysTesting;
   c.canTestDelays = v.display == Display::On && !v.protocols.empty();
+  c.reportPending = g_pendingReport.has_value();
   c.delayError = Widen(v.delayError);
   c.autoOption = v.autoOption;
   c.autoServer = Widen(v.autoServer);
@@ -3197,6 +3264,20 @@ void ShowMainWindow(UiPage page) {
   }
 }
 
+// The report asked for, once its test is over (PendingReport).
+void FinishPendingReport(const View& view) {
+  if (!g_pendingReport || view.delaysRound == g_pendingReport->round || view.delaysTesting) {
+    return;
+  }
+  const PendingReport pending = *std::exchange(g_pendingReport, std::nullopt);
+  UpdateWindows();  // the button is back
+  const auto profile = std::find_if(view.profiles.begin(), view.profiles.end(),
+                                    [&](const View::ProfileView& p) { return p.id == pending.profileId; });
+  if (profile != view.profiles.end()) {
+    WriteSupportReport(IsWindow(pending.owner) ? pending.owner : nullptr, *profile, view);
+  }
+}
+
 // A command from the window. `trayWindow` is the hidden
 // window that owns the icon; menus and dialogs belong to args.owner if set.
 // A command about one configuration, from its row or its page.
@@ -3218,7 +3299,16 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       RequestRefresh(profile.id);
       break;
     case UiCommand::SupportReport:
-      WriteSupportReport(owner, profile, view);
+      if (g_pendingReport) {
+        break;  // one is on its way
+      }
+      if (view.display == Display::On && !view.protocols.empty()) {
+        g_pendingReport = PendingReport{.profileId = profile.id, .owner = owner, .round = view.delaysRound};
+        RequestUrlTest();
+        UpdateWindows();  // the button says it's testing
+      } else {
+        WriteSupportReport(owner, profile, view);
+      }
       break;
     case UiCommand::ChooseVia: {  // directly, or through another configuration that isn't a chain itself
       std::vector<std::wstring> names = {L"Напрямую"};
@@ -3715,6 +3805,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
       }
       UpdateWindows();
       UpdateLogs();
+      FinishPendingReport(view);
       return 0;
     }
     case kUpdateChangedMessage:

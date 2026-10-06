@@ -126,6 +126,7 @@ struct UiContent {
   // (DescribeImport: "подписку с packetlab.tech"); empty if nothing.
   std::wstring clipboardOffer;
   bool troubleSupport = false;  // its panel gave a support link
+  bool reportPending = false;   // a support report waits for its fresh test of the servers
 
   // Every configuration; the ones on run together (combine.h).
   std::vector<UiProfile> profiles;
