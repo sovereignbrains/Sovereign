@@ -41,10 +41,33 @@ struct RouteRule {
 // country it cuts its catalogue or doesn't let in at all). Matched by its
 // SagerNet sing-geosite list - nothing for the user to type.
 struct ServiceRoute {
-  enum class Way : std::uint8_t { Warp };  // through a country: next
-  std::string id;                          // ServiceCatalog's, "netflix"
+  // Warp: through WARP. Country: through the fastest server whose measured
+  // exit is in `country`, whatever the provider named it - picked by the
+  // tray as the exits and delays come in (PickCountryServer), switched with
+  // box_select, no restart; none there: as usual.
+  enum class Way : std::uint8_t { Warp, Country };
+  std::string id;       // ServiceCatalog's, "netflix"
   Way way = Way::Warp;
+  std::string country;  // Country: "US"
 };
+
+// The outbound a service sent through a country goes to: a selector of the
+// main group (its default: as usual) and the servers.
+std::string ServiceOutboundTag(std::string_view id);
+
+// The server for a service through `country`: of `servers` (the main group's,
+// in order), the ones whose exit is measured in `country`; the fastest by
+// delay, one not measured yet after any that is. Empty if none is there.
+std::string PickCountryServer(std::string_view country, const std::vector<std::string>& servers,
+                              const std::map<std::string, std::string>& exitCountry,
+                              const std::map<std::string, int>& delayMs);
+
+// "Нидерланды" for "NL" (the countries VPN servers are usually in); the code
+// itself for others.
+std::string CountryName(std::string_view code);
+
+// Two uppercase Latin letters.
+bool IsCountryCode(std::string_view code);
 struct ServiceInfo {
   std::string_view id;
   std::string_view name;     // as people know it: "Netflix"

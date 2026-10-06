@@ -403,7 +403,7 @@ void TestNaiveInsecure() {
 // downloaded, WARP's endpoint there for it alone, the rule after the user's.
 void TestServices() {
   RoutingSettings s;
-  s.services.push_back({.id = "netflix", .way = ServiceRoute::Way::Warp});
+  s.services.push_back({.id = "netflix", .way = ServiceRoute::Way::Warp, .country = {}});
   const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
   CHECK(back.services.size() == 1 && back.services[0].id == "netflix");
   CHECK(RoutingFromJson(json{{"services", json::array({json{{"id", "nope"}}, json{{"id", "netflix"}}, json{{"id", "netflix"}}})}})
@@ -439,6 +439,48 @@ void TestServices() {
     }
     CHECK(netflix > mine && mine >= 0);  // after the user's own rules
   }
+}
+
+// A service through a country: its own selector (the main group by default,
+// then the servers), switched by the tray to the fastest server measured
+// there; none there - as usual.
+void TestServiceCountry() {
+  RoutingSettings s;
+  s.services.push_back({.id = "netflix", .way = ServiceRoute::Way::Country, .country = "US"});
+  const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
+  CHECK(back.services.size() == 1 && back.services[0].way == ServiceRoute::Way::Country &&
+        back.services[0].country == "US");
+  CHECK(RoutingFromJson(json{{"services", json::array({json{{"id", "netflix"}, {"way", "country"}, {"country", "usa"}}})}})
+            .services[0]
+            .way == ServiceRoute::Way::Warp);  // not a country code: WARP, as before
+  CHECK(!WarpReady(s));  // through a country: no WARP needed for it
+
+  const auto combined = CombineConfigs({{"keys", Keys(), {}}}, OwnFrame(s));
+  const std::string text = ApplyRouting(combined.config.value_or("{}"), s, Files());
+  Checked().emplace_back("service-country", text);
+  const json c = json::parse(text);
+  if (!Files().empty()) {
+    json selector;
+    for (const json& out : c["outbounds"]) {
+      selector = out["tag"] == ServiceOutboundTag("netflix") ? out : selector;
+    }
+    CHECK(selector["type"] == "selector" && selector["default"] == "proxy");
+    CHECK(selector["outbounds"] == json::array({"proxy", "NL", "DE"}));
+    bool rule = false;
+    for (const json& r : c["route"]["rules"]) {
+      rule = rule || (r.value("rule_set", json()) == "sov-svc-netflix" && r.value("outbound", "") == "sov-out-netflix");
+    }
+    CHECK(rule);
+  }
+
+  const std::vector<std::string> servers = {"A", "B", "C", "D"};
+  const std::map<std::string, std::string> exits = {{"A", "DE"}, {"B", "US"}, {"C", "US"}, {"D", "US"}};
+  CHECK(PickCountryServer("US", servers, exits, {{"B", 180}, {"C", 90}}) == "C");  // the fastest there
+  CHECK(PickCountryServer("US", servers, exits, {{"D", 300}}) == "D");             // measured beats not
+  CHECK(PickCountryServer("US", servers, exits, {}) == "B");                       // none measured: the first
+  CHECK(PickCountryServer("JP", servers, exits, {}).empty());                      // none there
+  CHECK(CountryName("NL") == "Нидерланды" && CountryName("XQ") == "XQ");
+  CHECK(IsCountryCode("US") && !IsCountryCode("us") && !IsCountryCode("USA"));
 }
 
 void TestWarp() {
@@ -526,6 +568,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestSubscriptionRulesDropped();
     TestTypos();
     TestServices();
+    TestServiceCountry();
     TestWarp();
     TestNaiveInsecure();
     if (check) {

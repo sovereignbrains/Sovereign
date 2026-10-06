@@ -282,6 +282,7 @@ struct View {
   bool killSwitchActive = false;
   std::string killSwitchError;
   std::string relayUrl;  // the subscription relay's address; never its key
+  std::map<std::string, std::string> serviceVia;  // a service through a country: its server now ("" none there)
   bool relayKeySet = false;
 };
 
@@ -328,6 +329,7 @@ struct RoutingChange {
     Warp,           // on (a device registered first if there's none)
     AddService,     // text: the service's id - through WARP (WARP turned on)
     RemoveService,  // index
+    SetServiceWay,  // index; text: "warp" (WARP turned on) or a country code
     WarpVia,        // on: over the proxy; off: directly
   };
   What what = What::RussiaDirect;
@@ -665,6 +667,7 @@ class Worker {
       }
       UpdateDelays(stats, urlTest);
       ApplySelection(stats);
+      ApplyServiceSelections(stats);
       UpdateExitIp(stats);
       UpdateServerExits(stats);
       if (toggleExitIp) {
@@ -862,7 +865,7 @@ class Worker {
           r.warpAccount = std::move(*account);
         }
         r.warp = true;
-        r.services.push_back({.id = change.text, .way = sovereign::tray::ServiceRoute::Way::Warp});
+        r.services.push_back({.id = change.text, .way = sovereign::tray::ServiceRoute::Way::Warp, .country = {}});
         break;
       }
       case RoutingChange::What::RemoveService:
@@ -870,6 +873,29 @@ class Worker {
           r.services.erase(r.services.begin() + change.index);
         }
         break;
+      case RoutingChange::What::SetServiceWay: {
+        if (change.index < 0 || static_cast<std::size_t>(change.index) >= r.services.size()) {
+          break;
+        }
+        sovereign::tray::ServiceRoute& s = r.services[static_cast<std::size_t>(change.index)];
+        if (sovereign::tray::IsCountryCode(change.text)) {
+          s.way = sovereign::tray::ServiceRoute::Way::Country;
+          s.country = change.text;
+          break;
+        }
+        if (!r.warpAccount) {  // through WARP: WARP on - a device registered first, if there's none
+          auto account = RegisterWarp();
+          if (!account) {
+            Notify(L"Sovereign: WARP не включился", Widen(account.error()), true, UiPage::Routing);
+            break;
+          }
+          r.warpAccount = std::move(*account);
+        }
+        r.warp = true;
+        s.way = sovereign::tray::ServiceRoute::Way::Warp;
+        s.country.clear();
+        break;
+      }
       case RoutingChange::What::WarpVia: r.warpViaProxy = change.on; break;
       case RoutingChange::What::RemoteDns:
         r.remoteDns = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 2));
@@ -1648,6 +1674,59 @@ class Worker {
     }
   }
 
+  // Services sent through a country (routing.h): each one's selector on the
+  // fastest server measured in that country, on the main group while none is
+  // - after every start of a box too, as ApplySelection. No restart: the
+  // selectors are in the config from the start, only switched.
+  void ApplyServiceSelections(const std::optional<sovereign::tray::Stats>& stats) {
+    serviceVia_.clear();
+    if (!stats || !stats->running) {
+      serviceSelected_.clear();
+      return;
+    }
+    const auto choices = Choices().first;
+    std::vector<std::string> servers;
+    std::copy_if(choices.options.begin(), choices.options.end(), std::back_inserter(servers),
+                 [&](const std::string& tag) { return !choices.groups.contains(tag); });
+    std::map<std::string, std::string> exits;
+    for (const auto& [tag, exit] : serverExits_) {
+      if (!exit.country.empty()) {
+        exits[tag] = exit.country;
+      }
+    }
+    std::map<std::string, int> delays;
+    for (const auto& [tag, delay] : delays_) {
+      if (delay.state == sovereign::tray::Delay::State::Ok) {
+        delays[tag] = delay.ms;
+      }
+    }
+    const auto now = TrayModel::Clock::now();
+    for (const sovereign::tray::ServiceRoute& s : settings_.routing.services) {
+      if (s.way != sovereign::tray::ServiceRoute::Way::Country || choices.selector.empty()) {
+        continue;
+      }
+      const std::string server = sovereign::tray::PickCountryServer(s.country, servers, exits, delays);
+      serviceVia_[s.id] = server;
+      const std::string want = server.empty() ? choices.selector : server;  // none there: as usual
+      const std::string selector = sovereign::tray::ServiceOutboundTag(s.id);
+      const auto done = serviceSelected_.find(selector);
+      if (done != serviceSelected_.end() && done->second == std::pair{want, stats->generation}) {
+        continue;
+      }
+      auto& tried = serviceSelectTry_[selector];
+      if (tried && now - *tried < kSelectRetry) {
+        continue;
+      }
+      tried = now;
+      if (ServiceCall(nlohmann::json{{"cmd", "box_select"}, {"selector", selector}, {"outbound", want}},
+                      "box_selected")
+              .empty()) {
+        serviceSelected_[selector] = {want, stats->generation};
+        tried.reset();
+      }
+    }
+  }
+
   // Auto's server after a latency test (delays.h: JudgeAuto).
   void PickAutoServer() {
     const auto [choices, current] = Choices();
@@ -1859,6 +1938,7 @@ class Worker {
       v.autoOption = autoOption == choices.options.end() ? -1 : static_cast<int>(autoOption - choices.options.begin());
       v.autoServer = autoServer;
       v.selectError = selectError_;
+      v.serviceVia = serviceVia_;
       v.delays.clear();
       for (const std::string& option : v.protocols) {
         // A group shows the latency of the server it runs on.
@@ -1924,6 +2004,12 @@ class Worker {
   sovereign::tray::AutoPick autoPick_;  // the server auto runs on
   std::string selected_;                // what the running selector was last switched to
   std::int64_t selectedGeneration_ = -1;  // in which box
+  // The services' country selectors (ApplyServiceSelections): what each was
+  // switched to in which box, when a failed switch was last tried, and the
+  // server each service goes through now ("" none in its country) - shown.
+  std::map<std::string, std::pair<std::string, std::int64_t>> serviceSelected_;
+  std::map<std::string, std::optional<TrayModel::Clock::time_point>> serviceSelectTry_;
+  std::map<std::string, std::string> serviceVia_;
   std::string selectError_;
   std::optional<TrayModel::Clock::time_point> lastSelectTry_;
   sovereign::tray::ExitIp exit_;
@@ -2281,6 +2367,22 @@ bool CopyText(HWND owner, const std::wstring& text) {
   }
   CloseClipboard();
   return copied;
+}
+
+// The countries the servers really come out in (their measured exits), each
+// once, by name - what a service can be sent through.
+std::vector<std::string> KnownExitCountries(const View& view) {
+  std::vector<std::string> countries;
+  for (const sovereign::tray::ExitIp& exit : view.locations) {
+    if (sovereign::tray::IsCountryCode(exit.country) &&
+        std::find(countries.begin(), countries.end(), exit.country) == countries.end()) {
+      countries.push_back(exit.country);
+    }
+  }
+  std::sort(countries.begin(), countries.end(), [](const std::string& a, const std::string& b) {
+    return sovereign::tray::CountryName(a) < sovereign::tray::CountryName(b);
+  });
+  return countries;
 }
 
 // The user's time zone now, in minutes east of UTC (the report's dates).
@@ -2906,10 +3008,23 @@ UiContent ContentFrom(const View& v) {
          .action = RuleActions()[static_cast<std::size_t>(rule.action)],
          .warp = rule.action == sovereign::tray::RouteRule::Action::Warp});
   }
+  const std::vector<std::string> countries = KnownExitCountries(v);
   for (const auto& s : r.services) {
     const auto* info = sovereign::tray::FindService(s.id);
+    std::wstring way = r.warp ? L"через WARP" : L"через WARP · WARP выключен";
+    if (s.way == sovereign::tray::ServiceRoute::Way::Country) {
+      way = L"через " + Widen(sovereign::tray::CountryName(s.country));
+      const auto via = v.serviceVia.find(s.id);
+      if (via != v.serviceVia.end() && !via->second.empty()) {
+        way += L" · " + Widen(via->second);
+      } else if (countries.empty()) {
+        way += L" — страны серверов ещё узнаются";
+      } else {
+        way += L" — сервера в этой стране нет, идёт как обычно";
+      }
+    }
     c.routing.services.push_back({.name = info != nullptr ? Widen(std::string(info->name)) : Widen(s.id),
-                                  .way = r.warp ? L"через WARP" : L"через WARP · WARP выключен"});
+                                  .way = std::move(way)});
   }
   if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
     c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
@@ -3243,12 +3358,32 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     }
-    case UiCommand::ServiceMenu:
-      if (args.index >= 0 && static_cast<std::size_t>(args.index) < r.services.size() &&
-          PickFromMenu(owner, cursor, {L"Через WARP", L"Убрать"}, 0) == std::optional<std::size_t>(1)) {
+    case UiCommand::ServiceMenu: {
+      if (args.index < 0 || static_cast<std::size_t>(args.index) >= r.services.size()) {
+        break;
+      }
+      // Through WARP, through each country a server really comes out in, or away.
+      const sovereign::tray::ServiceRoute& s = r.services[static_cast<std::size_t>(args.index)];
+      const std::vector<std::string> countries = KnownExitCountries(view);
+      std::vector<std::wstring> items = {L"Через WARP"};
+      int current = s.way == sovereign::tray::ServiceRoute::Way::Warp ? 0 : -1;
+      for (const std::string& code : countries) {
+        current = s.way == sovereign::tray::ServiceRoute::Way::Country && s.country == code ? static_cast<int>(items.size())
+                                                                                            : current;
+        items.push_back(L"Через " + Widen(sovereign::tray::CountryName(code)));
+      }
+      items.emplace_back(L"Убрать");
+      const auto picked = PickFromMenu(owner, cursor, items, current);
+      if (!picked) {
+        break;
+      }
+      if (*picked == items.size() - 1) {
         send(What::RemoveService, false, 0, args.index);
+      } else {
+        send(What::SetServiceWay, true, 0, args.index, *picked == 0 ? std::string("warp") : countries[*picked - 1]);
       }
       break;
+    }
     case UiCommand::ImportRules: {
       std::vector<std::wstring> names;
       names.reserve(view.profiles.size());

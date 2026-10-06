@@ -327,7 +327,11 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
   }
   nlohmann::json services = nlohmann::json::array();
   for (const ServiceRoute& r : s.services) {
-    services.push_back({{"id", r.id}, {"way", "warp"}});
+    nlohmann::json service = {{"id", r.id}, {"way", r.way == ServiceRoute::Way::Country ? "country" : "warp"}};
+    if (r.way == ServiceRoute::Way::Country) {
+      service["country"] = r.country;
+    }
+    services.push_back(std::move(service));
   }
   return {{"russiaDirect", s.russiaDirect},
           {"blockAds", s.blockAds},
@@ -372,7 +376,13 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
       const bool known = FindService(id) != nullptr;
       const bool twice = std::any_of(s.services.begin(), s.services.end(), [&](const ServiceRoute& r) { return r.id == id; });
       if (known && !twice) {
-        s.services.push_back({.id = id, .way = ServiceRoute::Way::Warp});
+        const std::string way = item.value("way", std::string());
+        const std::string country = item.value("country", std::string());
+        if (way == "country" && IsCountryCode(country)) {
+          s.services.push_back({.id = id, .way = ServiceRoute::Way::Country, .country = country});
+        } else {
+          s.services.push_back({.id = id, .way = ServiceRoute::Way::Warp, .country = {}});
+        }
       }
     }
   }
@@ -567,6 +577,55 @@ void MergeRules(std::vector<RouteRule>& into, const std::vector<RouteRule>& more
 }
 
 std::span<const ServiceInfo> ServiceCatalog() { return kServices; }
+
+std::string ServiceOutboundTag(std::string_view id) { return "sov-out-" + std::string(id); }
+
+bool IsCountryCode(std::string_view code) {
+  return code.size() == 2 && std::all_of(code.begin(), code.end(), [](char c) { return c >= 'A' && c <= 'Z'; });
+}
+
+std::string PickCountryServer(std::string_view country, const std::vector<std::string>& servers,
+                              const std::map<std::string, std::string>& exitCountry,
+                              const std::map<std::string, int>& delayMs) {
+  std::string best;
+  int bestDelay = 0;
+  for (const std::string& server : servers) {
+    const auto exit = exitCountry.find(server);
+    if (exit == exitCountry.end() || exit->second != country) {
+      continue;
+    }
+    const auto delay = delayMs.find(server);
+    const int ms = delay != delayMs.end() && delay->second > 0 ? delay->second : 0;
+    // Measured beats not measured; among measured, the faster; else the first.
+    if (best.empty() || (ms > 0 && (bestDelay == 0 || ms < bestDelay))) {
+      best = server;
+      bestDelay = ms;
+    }
+  }
+  return best;
+}
+
+std::string CountryName(std::string_view code) {
+  static constexpr std::array<std::pair<std::string_view, std::string_view>, 44> kNames = {{
+      {"US", "США"},          {"NL", "Нидерланды"},  {"DE", "Германия"},   {"GB", "Великобритания"},
+      {"FR", "Франция"},      {"FI", "Финляндия"},   {"SE", "Швеция"},     {"NO", "Норвегия"},
+      {"DK", "Дания"},        {"PL", "Польша"},      {"LV", "Латвия"},     {"LT", "Литва"},
+      {"EE", "Эстония"},      {"CH", "Швейцария"},   {"AT", "Австрия"},    {"IT", "Италия"},
+      {"ES", "Испания"},      {"PT", "Португалия"},  {"IE", "Ирландия"},   {"BE", "Бельгия"},
+      {"CZ", "Чехия"},        {"RO", "Румыния"},     {"BG", "Болгария"},   {"HU", "Венгрия"},
+      {"GR", "Греция"},       {"CY", "Кипр"},        {"MD", "Молдова"},    {"RS", "Сербия"},
+      {"AL", "Албания"},      {"TR", "Турция"},      {"GE", "Грузия"},     {"AM", "Армения"},
+      {"KZ", "Казахстан"},    {"AE", "ОАЭ"},         {"IL", "Израиль"},    {"JP", "Япония"},
+      {"KR", "Корея"},        {"SG", "Сингапур"},    {"HK", "Гонконг"},    {"IN", "Индия"},
+      {"CA", "Канада"},       {"AU", "Австралия"},   {"BR", "Бразилия"},   {"RU", "Россия"},
+  }};
+  for (const auto& [c, name] : kNames) {
+    if (c == code) {
+      return std::string(name);
+    }
+  }
+  return std::string(code);
+}
 
 const ServiceInfo* FindService(std::string_view id) {
   const auto it = std::find_if(kServices.begin(), kServices.end(), [&](const ServiceInfo& s) { return s.id == id; });
@@ -787,8 +846,22 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   // Services: each by its list, after the user's own rules.
   for (const ServiceRoute& s : settings.services) {
     const std::string tag = std::string(kServicePrefix) + s.id;
-    if (s.way == ServiceRoute::Way::Warp && !warp.empty() && lists.contains(tag)) {
+    if (!lists.contains(tag)) {
+      continue;
+    }
+    if (s.way == ServiceRoute::Way::Warp && !warp.empty()) {
       rules.push_back(Json{{"rule_set", tag}, {"outbound", warp}});
+    } else if (s.way == ServiceRoute::Way::Country && !proxy.empty()) {
+      // A selector of its own: the main group first (its default - as usual
+      // until the tray knows which server is in that country), then the
+      // servers; the tray switches it (box_select) as exits are measured.
+      std::vector<std::string> members = {proxy};
+      GroupServers(outbounds, proxy, members);
+      const std::string out = ServiceOutboundTag(s.id);
+      if (members.size() > 1 && !Tags(outbounds).contains(out)) {
+        outbounds.push_back(Json{{"type", "selector"}, {"tag", out}, {"outbounds", members}, {"default", proxy}});
+        rules.push_back(Json{{"rule_set", tag}, {"outbound", out}});
+      }
     }
   }
   if (settings.blockAds && lists.contains(std::string(kAds))) {
