@@ -181,6 +181,19 @@ void TestReport() {
 
 }  // namespace
 
+void TestTrouble() {
+  constexpr std::int64_t kNow = 1791300000;
+  CHECK(SubscriptionTrouble(3, 3, 0, false, 0, 0, 0, kNow).empty());           // fine: nothing on the screen
+  CHECK(SubscriptionTrouble(3, 3, 1, false, 0, 0, 0, kNow).empty());           // one of three: not worth a line
+  CHECK(SubscriptionTrouble(4, 4, 2, false, 0, 0, 0, kNow) == "не работает 2 из 4 серверов");
+  CHECK(SubscriptionTrouble(2, 2, 2, false, 0, 0, 0, kNow) == "не отвечает ни один сервер");
+  CHECK(SubscriptionTrouble(1, 1, 1, false, 0, 0, 0, kNow) == "сервер не отвечает");
+  CHECK(SubscriptionTrouble(3, 0, 0, false, 0, 0, 0, kNow).empty());           // not measured: nothing claimed
+  CHECK(SubscriptionTrouble(3, 3, 0, true, 0, 0, 0, kNow) == "подписка не обновляется");
+  CHECK(SubscriptionTrouble(3, 3, 3, true, 10, 10, kNow - 1, kNow) == "оплата истекла");  // the worst one
+  CHECK(SubscriptionTrouble(3, 3, 0, false, 10, 10, 0, kNow) == "трафик закончился");
+}
+
 void TestUsageLine() {
   CHECK(UsageLine(3145728, 107374182400ULL, 1798761600, 1791300000, 180) == "Трафик: 3 МБ из 100,0 ГБ · оплачено до 01.01.2027");
   CHECK(UsageLine(1610612736, 0, 0, 0, 0) == "Трафик: 1,5 ГБ (без лимита)");
@@ -197,6 +210,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestProblems();
     TestReport();
     TestUsageLine();
+    TestTrouble();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 1;

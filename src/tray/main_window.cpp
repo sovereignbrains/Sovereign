@@ -1101,6 +1101,16 @@ class Painter {
     // The server it runs on: where it really is, its network, its latency.
     y = ServerCard(l, c, x0, x1, y);
 
+    // A subscription in trouble: said here, its report for support a click
+    // away - not three pages deep. Nothing while all is fine.
+    if (!c.trouble.empty() && c.troubleProfile >= 0) {
+      y = Paragraph(l, Kind::ErrorText, c.trouble, x0, x1, y + 10) + 8;
+      l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton},
+                                    c.troubleSupport ? L"Написать в поддержку" : L"Отчёт для поддержки", kGlyphDownload,
+                                    UiCommand::SupportReport, c.troubleProfile));
+      y += kButton;
+    }
+
     y += kGap;
 
     // The traffic, while it flows.

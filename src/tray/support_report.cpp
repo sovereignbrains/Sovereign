@@ -334,6 +334,26 @@ SupportReport BuildSupportReport(const ReportInput& in) {
   return {.full = std::move(full), .brief = std::move(brief)};
 }
 
+std::string SubscriptionTrouble(std::size_t servers, std::size_t measured, std::size_t failed, bool refreshFailed,
+                                std::uint64_t used, std::uint64_t total, std::int64_t expire, std::int64_t now) {
+  if (expire > 0 && expire < now) {
+    return "оплата истекла";
+  }
+  if (total > 0 && used >= total) {
+    return "трафик закончился";
+  }
+  if (measured > 0 && failed == measured) {
+    return measured == 1 ? "сервер не отвечает" : "не отвечает ни один сервер";
+  }
+  if (failed > 0 && failed * 2 >= measured) {
+    return std::format("не работает {} из {} серверов", failed, std::max(servers, measured));
+  }
+  if (refreshFailed) {
+    return "подписка не обновляется";
+  }
+  return {};
+}
+
 std::string UsageLine(std::uint64_t used, std::uint64_t total, std::int64_t expire, std::int64_t now,
                       int utcOffsetMinutes) {
   std::string line;

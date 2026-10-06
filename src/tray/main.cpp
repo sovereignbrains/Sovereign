@@ -2954,6 +2954,30 @@ UiContent ContentFrom(const View& v) {
       detail += L" · " + shown.updated;
     }
     shown.detail = std::move(detail);
+    // In trouble: said on the main screen, the first subscription that is.
+    // Its servers' measurements by the running config's tags (its own, or
+    // "<tag> · <configuration>" where combine renamed a clash).
+    if (!profile.url.empty() && profile.enabled && c.trouble.empty()) {
+      std::size_t measured = 0;
+      std::size_t failed = 0;
+      for (const View::ServerView& server : profile.servers) {
+        for (std::size_t i = 0; server.enabled && i < v.protocols.size() && i < v.delays.size(); ++i) {
+          if ((v.protocols[i] == server.tag || v.protocols[i] == server.tag + " · " + profile.name) && v.delays[i]) {
+            measured += v.delays[i]->state != sovereign::tray::Delay::State::Pending ? 1 : 0;
+            failed += v.delays[i]->state == sovereign::tray::Delay::State::Failed ? 1 : 0;
+            break;
+          }
+        }
+      }
+      const std::string trouble = sovereign::tray::SubscriptionTrouble(
+          profile.servers.size(), measured, failed, !profile.error.empty(), profile.trafficUsed, profile.trafficTotal,
+          profile.expire, std::time(nullptr));
+      if (!trouble.empty()) {
+        c.trouble = L"«" + Widen(profile.name) + L"»: " + Widen(trouble);
+        c.troubleProfile = static_cast<int>(c.profiles.size());  // this one's index, before it's added
+        c.troubleSupport = !profile.supportUrl.empty();
+      }
+    }
     c.profiles.push_back(std::move(shown));
   }
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckTitles = {

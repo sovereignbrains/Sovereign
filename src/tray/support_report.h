@@ -74,6 +74,13 @@ std::vector<ReportServer> ReportServers(std::string_view config);
 
 SupportReport BuildSupportReport(const ReportInput& input);
 
+// What's wrong with a subscription, for the main screen - empty while it's
+// fine: the paid period over, the traffic used up, half its servers or more
+// not connecting (`failed` of the `measured` of its `servers`), it not
+// refreshing. The worst one only.
+std::string SubscriptionTrouble(std::size_t servers, std::size_t measured, std::size_t failed, bool refreshFailed,
+                                std::uint64_t used, std::uint64_t total, std::int64_t expire, std::int64_t now);
+
 // The subscription card's line from what the panel said: "Трафик: 3 ГБ из
 // 100,0 ГБ · оплачено до 01.01.2027" ("истекло" once past); empty if it said
 // nothing.

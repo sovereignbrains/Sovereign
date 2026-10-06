@@ -117,6 +117,12 @@ struct UiContent {
   double up = 0;
   std::int64_t connections = 0;
   std::wstring error;            // why the box doesn't run; empty if it does or is off
+  // A subscription in trouble (support_report.h SubscriptionTrouble), said on
+  // the main screen with its report a click away: "«name»: не отвечает ни один
+  // сервер"; empty while all is fine. troubleProfile: its index in profiles.
+  std::wstring trouble;
+  int troubleProfile = -1;
+  bool troubleSupport = false;  // its panel gave a support link
 
   // Every configuration; the ones on run together (combine.h).
   std::vector<UiProfile> profiles;

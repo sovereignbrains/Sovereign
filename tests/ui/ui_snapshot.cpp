@@ -136,6 +136,12 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(content, static_cast<UiPage>(p), logs, 400, 620, 96, path);
   }
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\overview-150.png");
+  // A subscription in trouble: the line and its support report on the main screen.
+  UiContent troubled = content;
+  troubled.trouble = L"«packetlab.tech»: не отвечает ни один сервер";
+  troubled.troubleProfile = 0;
+  troubled.troubleSupport = true;
+  sovereign::tray::RenderMainWindowSnapshot(troubled, UiPage::Overview, logs, 400, 760, 96, dir + L"\\overview-trouble.png");
   // The routing: own, with rules; and a configuration's.
   UiContent routed = content;
   routed.routing.remoteDns = L"Cloudflare (DoH)";
