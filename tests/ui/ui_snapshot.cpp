@@ -36,9 +36,6 @@ UiContent SampleContent() {
   UiContent c;
   c.display = sovereign::tray::Display::On;
   c.on = true;
-  c.down = 2.4 * 1024 * 1024;
-  c.up = 310.2 * 1024;
-  c.connections = 37;
   c.hasConfig = true;
   using sovereign::tray::UiServer;
   sovereign::tray::UiProfile packetlab;

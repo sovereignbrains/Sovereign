@@ -174,7 +174,6 @@ enum class Kind : std::uint8_t {
   AppRow,        // a program in the per-app list
   LogBox,        // the log's lines
   Hint,          // a "?": pointed at, its text shows in a tip
-  Stat,          // a number and what it counts, centered (index 0/1: download/upload colour)
   ValueRow,      // a setting with its value on the right and a chevron: a click picks another
 };
 
@@ -369,8 +368,7 @@ std::wstring StateDetailBase(const UiContent& c) {
       }
       return c.profiles.empty() ? L"Сначала добавь подписку." : L"Включи конфигурацию: " + c.combineError;
     case Display::Starting: return L"Запускается ядро sing-box…";
-    case Display::On:
-      return std::format(L"↓ {}   ↑ {}   ·   соединений: {}", FormatRate(c.down), FormatRate(c.up), c.connections);
+    case Display::On: return {};  // the switch and the server card say it all
     case Display::Error: return c.error.empty() ? std::wstring(L"ядро не запустилось") : c.error;
   }
   return {};
@@ -572,8 +570,6 @@ class Painter {
     tip_ = MakeFormat(kText, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
     nav_ = MakeFormat(kText, 10.5f);
     nav_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    stat_ = MakeFormat(kDisplay, 17, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    stat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -1050,7 +1046,7 @@ class Painter {
 
   // The one screen for every day, top to bottom: the state, what waits for a
   // click (an update, a subscription), the switch, the server it runs on and
-  // where it comes out, the traffic. The rest of the window - the kill switch
+  // where it comes out. The rest of the window - the kill switch
   // too, in the settings - is a tap away in the navigation under it (Nav).
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
     const float cx = (x0 + x1) / 2;
@@ -1066,8 +1062,8 @@ class Painter {
       l.items.push_back(Make(error ? Kind::ErrorText : Kind::Caption, {x0, y, x1, y + h}, detail,
                              error ? kGlyphWarning : nullptr));
       y += h;
-    } else if (c.killSwitchActive && c.display != Display::Off) {
-      y = Paragraph(l, Kind::Caption, StateDetail(c), x0, x1, y);
+    } else if (const std::wstring detail = StateDetail(c); !detail.empty()) {
+      y = Paragraph(l, Kind::Caption, detail, x0, x1, y);
     }
     y += kGap;
 
@@ -1135,32 +1131,6 @@ class Painter {
       y += kButton;
     }
 
-    y += kGap;
-
-    // The traffic, while it flows.
-    if (on) {
-      const float h = 58;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      const float third = (x1 - x0) / 3;
-      const std::array<std::pair<std::wstring, const wchar_t*>, 3> stats = {{
-          {FormatRate(c.down), L"загрузка"},
-          {FormatRate(c.up), L"отдача"},
-          {std::to_wstring(c.connections), L"соединений"},
-      }};
-      for (std::size_t i = 0; i < stats.size(); ++i) {
-        const float left = x0 + static_cast<float>(i) * third;
-        if (i > 0) {
-          l.items.push_back(Make(Kind::Divider, {left, y + 12, left + 1, y + h - 12}));
-        }
-        Item stat = Make(Kind::Stat, {left, y, left + third, y + h}, stats[i].first);
-        stat.detail = stats[i].second;
-        stat.index = static_cast<int>(i);  // 0 down, 1 up: their colours
-        l.items.push_back(std::move(stat));
-      }
-      y += h + kGap;
-    }
-
-    y -= kGap;
     if (!c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y + kGap);
     }
@@ -1312,13 +1282,7 @@ class Painter {
                              c.hasConfig ? L"В конфиге нет выбора сервера." : L"Ни одна конфигурация не включена."));
       return y + 56;
     }
-    const float h = static_cast<float>(c.protocols.size()) * kLatencyRow;
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-    for (std::size_t i = 0; i < c.protocols.size(); ++i) {
-      const float top = y + static_cast<float>(i) * kLatencyRow;
-      if (i > 0) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-      }
+    const auto row = [&](std::size_t i, float top) {
       // Where the server is, once known: its country's flag in place of any
       // its name has, and the network it's in ahead of the measurement.
       const UiLocation* location = i < c.locations.size() ? &c.locations[i] : nullptr;
@@ -1341,6 +1305,32 @@ class Painter {
         choice.detail = choice.detail.empty() ? isp : isp + L" · " + choice.detail;
       }
       l.items.push_back(std::move(choice));
+    };
+    // Auto on its own card above the servers: it isn't one of them, it's a
+    // way to pick one.
+    const bool hasAuto = c.autoOption >= 0 && static_cast<std::size_t>(c.autoOption) < c.protocols.size();
+    if (hasAuto) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kLatencyRow}));
+      row(static_cast<std::size_t>(c.autoOption), y);
+      y += kLatencyRow + kGap;
+    }
+    const std::size_t servers = c.protocols.size() - (hasAuto ? 1 : 0);
+    if (servers == 0) {
+      return y - kGap;
+    }
+    const float h = static_cast<float>(servers) * kLatencyRow;
+    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+    std::size_t shown = 0;
+    for (std::size_t i = 0; i < c.protocols.size(); ++i) {
+      if (hasAuto && static_cast<int>(i) == c.autoOption) {
+        continue;
+      }
+      const float top = y + static_cast<float>(shown) * kLatencyRow;
+      if (shown > 0) {
+        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      }
+      row(i, top);
+      ++shown;
     }
     return y + h;
   }
@@ -2024,14 +2014,6 @@ class Painter {
         }
         break;
       }
-      case Kind::Stat: {
-        const D2D1_COLOR_F ink = it.index == 0   ? FromColorRef(ui::kAccent)
-                                 : it.index == 1 ? FromColorRef(ui::kUpload)
-                                                 : primary;
-        k.Text(it.text, stat_.get(), {r.left + 4, r.top + 8, r.right - 4, r.top + 32}, ink);
-        k.Text(it.detail, chip_.get(), {r.left + 4, r.top + 32, r.right - 4, r.bottom - 8}, secondary);
-        break;
-      }
       case Kind::ValueRow: {
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
@@ -2359,7 +2341,6 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> hint_;      // the "?" of a hint
   wil::com_ptr<IDWriteTextFormat> tip_;       // a tip's text, wrapped
   wil::com_ptr<IDWriteTextFormat> nav_;       // a navigation item's word
-  wil::com_ptr<IDWriteTextFormat> stat_;      // a traffic number
   wil::com_ptr<IDWriteTextFormat> glyph_;
   wil::com_ptr<IDWriteTextFormat> glyphBig_;
   // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).

@@ -2984,9 +2984,6 @@ UiContent ContentFrom(const View& v) {
   }
   c.display = v.display;
   c.on = v.wantOn;
-  c.down = v.down;
-  c.up = v.up;
-  c.connections = v.connections;
   c.error = v.display == Display::Error ? Widen(v.error) : std::wstring();
   c.hasConfig = v.hasConfig;
   c.combineError = Widen(v.combineError);
