@@ -96,6 +96,21 @@ std::string Checks(int n) {
   return std::format("{} {}", n, word);
 }
 
+// "3 сервера", "5 серверов", "21 сервер": a count of servers.
+std::string Servers(std::size_t n) {
+  const std::size_t tens = n % 100;
+  const std::size_t ones = n % 10;
+  const char* word = ones == 1 && tens != 11                              ? "сервер"
+                     : ones >= 2 && ones <= 4 && (tens < 12 || tens > 14) ? "сервера"
+                                                                          : "серверов";
+  return std::format("{} {}", n, word);
+}
+
+// "из 1 сервера", "из 3 серверов", "из 21 сервера".
+std::string OfServers(std::size_t n) {
+  return std::format("из {} {}", n, n % 10 == 1 && n % 100 != 11 ? "сервера" : "серверов");
+}
+
 }  // namespace
 
 std::string FlagCountry(std::string_view name) {
@@ -257,13 +272,14 @@ SupportReport BuildSupportReport(const ReportInput& in) {
   if (!in.connected || measured == 0) {
     verdict = std::format("серверы не проверены — клиент не был подключён ({} в подписке)", in.servers.size());
   } else if (working == 0 && measured == in.servers.size()) {
-    verdict = std::format("не работает ни один из {} серверов — возможно, у пользователя нет интернета, "
+    verdict = std::format("не работает ни один {} — возможно, у пользователя нет интернета, "
                           "или подписка отключена целиком",
-                          in.servers.size());
+                          OfServers(in.servers.size()));
   } else if (problems.empty()) {
-    verdict = std::format("все {} серверов работают", in.servers.size());
+    verdict = in.servers.size() == 1 ? std::string("сервер работает")
+                                     : std::format("все {} работают", Servers(in.servers.size()));
   } else {
-    verdict = std::format("работает {} из {} серверов", working, in.servers.size());
+    verdict = std::format("работает {} {}", working, OfServers(in.servers.size()));
   }
   if (!in.refreshError.empty()) {
     verdict += "; подписка не обновляется";
@@ -362,7 +378,7 @@ std::string SubscriptionTrouble(std::size_t servers, std::size_t measured, std::
     return measured == 1 ? "сервер не отвечает" : "не отвечает ни один сервер";
   }
   if (failed > 0 && failed * 2 >= measured) {
-    return std::format("не работает {} из {} серверов", failed, std::max(servers, measured));
+    return std::format("не работает {} {}", failed, OfServers(std::max(servers, measured)));
   }
   if (refreshFailed) {
     return "подписка не обновляется";

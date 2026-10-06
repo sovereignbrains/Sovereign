@@ -172,6 +172,19 @@ void TestReport() {
   fails.servers[1].failedInRow = 5;
   CHECK(BuildSupportReport(fails).full.find("на 5 проверок подряд") != std::string::npos);
 
+  // The counts in Russian.
+  ReportInput all = in;
+  all.servers = {good, good, good};
+  CHECK(BuildSupportReport(all).full.find("ИТОГ: все 3 сервера работают") != std::string::npos);
+  all.servers.assign(5, good);
+  CHECK(BuildSupportReport(all).full.find("все 5 серверов работают") != std::string::npos);
+  all.servers.assign(21, good);
+  CHECK(BuildSupportReport(all).full.find("все 21 сервер работают") != std::string::npos);
+  all.servers.back() = bad;
+  CHECK(BuildSupportReport(all).full.find("работает 20 из 21 сервера") != std::string::npos);
+  all.servers = {good};
+  CHECK(BuildSupportReport(all).full.find("ИТОГ: сервер работает") != std::string::npos);
+
   // Nothing measured: nothing claimed about the servers.
   ReportInput off = in;
   off.connected = false;
@@ -204,6 +217,7 @@ void TestTrouble() {
   CHECK(SubscriptionTrouble(3, 3, 0, false, 0, 0, 0, kNow).empty());           // fine: nothing on the screen
   CHECK(SubscriptionTrouble(3, 3, 1, false, 0, 0, 0, kNow).empty());           // one of three: not worth a line
   CHECK(SubscriptionTrouble(4, 4, 2, false, 0, 0, 0, kNow) == "не работает 2 из 4 серверов");
+  CHECK(SubscriptionTrouble(21, 21, 11, false, 0, 0, 0, kNow) == "не работает 11 из 21 сервера");
   CHECK(SubscriptionTrouble(2, 2, 2, false, 0, 0, 0, kNow) == "не отвечает ни один сервер");
   CHECK(SubscriptionTrouble(1, 1, 1, false, 0, 0, 0, kNow) == "сервер не отвечает");
   CHECK(SubscriptionTrouble(3, 0, 0, false, 0, 0, 0, kNow).empty());           // not measured: nothing claimed
