@@ -1618,9 +1618,9 @@ class Painter {
 
     // Services: a whole service its own way, by its list - none shown until
     // one is added (one button, not a row per service).
-    y = Heading(l, L"Ð¡ÐµÑ€Ð²Ð¸ÑÑ‹", x0, x1, y,
-                L"Ð¡ÐµÑ€Ð²Ð¸Ñ Ñ†ÐµÐ»Ð¸ÐºÐ¾Ð¼ â€” Ð¿Ð¾ Ð³Ð¾Ñ‚Ð¾Ð²Ð¾Ð¼Ñƒ ÑÐ¿Ð¸ÑÐºÑƒ ÐµÐ³Ð¾ Ð°Ð´Ñ€ÐµÑÐ¾Ð², Ð±ÐµÐ· Ñ€ÑƒÑ‡Ð½Ð¾Ð³Ð¾ Ð²Ð²Ð¾Ð´Ð° ÑÐ°Ð¹Ñ‚Ð¾Ð². ÐÐ°Ð¿Ñ€Ð¸Ð¼ÐµÑ€, Netflix "
-                L"Ñ‡ÐµÑ€ÐµÐ· WARP: Ñ Ð°Ð´Ñ€ÐµÑÐ° ÑÐµÑ€Ð²ÐµÑ€Ð° Ð² Ð“ÐµÑ€Ð¼Ð°Ð½Ð¸Ð¸ Ð¾Ð½ ÑƒÑ€ÐµÐ·Ð°ÐµÑ‚ ÐºÐ°Ñ‚Ð°Ð»Ð¾Ð³ Ð¸Ð»Ð¸ Ð½Ðµ Ð¿ÑƒÑÐºÐ°ÐµÑ‚ Ð²Ð¾Ð²ÑÐµ.");
+    y = Heading(l, L"Сервисы", x0, x1, y,
+                L"Сервис целиком — по готовому списку его адресов, без ручного ввода сайтов. Например, Netflix "
+                L"через WARP: с адреса сервера в Германии он урезает каталог или не пускает вовсе.");
     if (!r.services.empty()) {
       const float h = static_cast<float>(r.services.size()) * kProfileRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
@@ -1637,7 +1637,7 @@ class Painter {
       }
       y += h + 8;
     }
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Ð”Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ ÑÐµÑ€Ð²Ð¸Ñ", kGlyphAdd,
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Добавить сервис", kGlyphAdd,
                                   UiCommand::AddService));
     y += kButton + kGap + 4;
 

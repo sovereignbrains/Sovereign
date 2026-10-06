@@ -27,6 +27,20 @@ jobs:
           $tag = (Get-Content tools/codegen/sing-box.version)[0]
           git clone --depth 1 --branch $tag https://github.com/SagerNet/sing-box.git vendor/sing-box
 
+      # UTF-8 Russian read as another code page and written back (a script without
+      # a BOM did that to the Services section, 06.10.2026): "Ð¡ÐµÑ€..." in the UI.
+      # Ð/Ñ followed by Latin-1 junk never occurs in real text here.
+      - name: No mangled Russian in the sources
+        shell: pwsh
+        run: |
+          $bad = Get-ChildItem src, tests -Recurse -File -Include *.cpp,*.h,*.rc |
+            Select-String -Encoding utf8 -Pattern '[\u00D0\u00D1][\u0080-\u00BF\u0152-\u0178\u2010-\u203A]'
+          if ($bad) {
+            $bad | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
+            Write-Output "::error::mojibake in the sources (UTF-8 read in another encoding)"
+            exit 1
+          }
+
       - name: Regenerate
         shell: pwsh
         run: pwsh tools/codegen/generate.ps1

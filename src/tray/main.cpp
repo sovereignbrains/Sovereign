@@ -850,7 +850,7 @@ class Worker {
         if (!r.warpAccount) {
           auto account = RegisterWarp();
           if (!account) {
-            Notify(L"Sovereign: WARP Ð½Ðµ Ð²ÐºÐ»ÑŽÑ‡Ð¸Ð»ÑÑ", Widen(account.error()), true, UiPage::Routing);
+            Notify(L"Sovereign: WARP не включился", Widen(account.error()), true, UiPage::Routing);
             break;
           }
           r.warpAccount = std::move(*account);
@@ -2766,7 +2766,7 @@ UiContent ContentFrom(const View& v) {
   for (const auto& s : r.services) {
     const auto* info = sovereign::tray::FindService(s.id);
     c.routing.services.push_back({.name = info != nullptr ? Widen(std::string(info->name)) : Widen(s.id),
-                                  .way = r.warp ? L"Ñ‡ÐµÑ€ÐµÐ· WARP" : L"Ñ‡ÐµÑ€ÐµÐ· WARP Â· WARP Ð²Ñ‹ÐºÐ»ÑŽÑ‡ÐµÐ½"});
+                                  .way = r.warp ? L"через WARP" : L"через WARP · WARP выключен"});
   }
   if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
     c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
@@ -3088,7 +3088,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       for (const auto& s : sovereign::tray::ServiceCatalog()) {
         if (std::none_of(r.services.begin(), r.services.end(),
                          [&](const sovereign::tray::ServiceRoute& x) { return x.id == s.id; })) {
-          names.push_back(Widen(std::string(s.name)) + L" â€” Ñ‡ÐµÑ€ÐµÐ· WARP");
+          names.push_back(Widen(std::string(s.name)) + L" — через WARP");
           ids.emplace_back(s.id);
         }
       }
@@ -3099,7 +3099,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::ServiceMenu:
       if (args.index >= 0 && static_cast<std::size_t>(args.index) < r.services.size() &&
-          PickFromMenu(owner, cursor, {L"Ð§ÐµÑ€ÐµÐ· WARP", L"Ð£Ð±Ñ€Ð°Ñ‚ÑŒ"}, 0) == std::optional<std::size_t>(1)) {
+          PickFromMenu(owner, cursor, {L"Через WARP", L"Убрать"}, 0) == std::optional<std::size_t>(1)) {
         send(What::RemoveService, false, 0, args.index);
       }
       break;

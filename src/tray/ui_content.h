@@ -75,7 +75,7 @@ struct UiRule {
 };
 struct UiService {
   std::wstring name;  // "Netflix"
-  std::wstring way;   // "Ñ‡ÐµÑ€ÐµÐ· WARP"
+  std::wstring way;   // "через WARP"
 };
 struct UiRouting {
   bool russiaDirect = true;
