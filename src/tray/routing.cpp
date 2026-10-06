@@ -27,6 +27,7 @@ constexpr const char* kGeoipRu = "sov-geoip-ru";
 constexpr const char* kAds = "sov-ads";
 constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kServicePrefix = "sov-svc-";  // a service's list: sov-svc-<id>
+constexpr int kWarpViaTolerance = 65000;  // ms: WARP's own group never moves while its server works
 
 // What people want sent elsewhere: shut to a VPS's country (video, AI) or
 // wanted apart. Each list checked to exist in sing-geosite (06.10.2026).
@@ -172,6 +173,29 @@ std::vector<std::string> ServerNames(const Json& config) {
     }
   }
   return {names.begin(), names.end()};
+}
+
+// The servers behind a group, groups inside it expanded, in order, each once:
+// the selector "proxy" -> "auto" and the servers -> the servers.
+void GroupServers(const Json& outbounds, const std::string& tag, std::vector<std::string>& out, int depth = 0) {
+  for (const Json& o : outbounds) {
+    if (Str(o, "tag") != tag) {
+      continue;
+    }
+    const std::string type = Str(o, "type");
+    if (type != "selector" && type != "urltest") {
+      if (type != "direct" && type != "block" && std::find(out.begin(), out.end(), tag) == out.end()) {
+        out.push_back(tag);
+      }
+      return;
+    }
+    if (depth < 4 && o.contains("outbounds")) {
+      for (const std::string& member : Strings(o["outbounds"])) {
+        GroupServers(outbounds, member, out, depth + 1);
+      }
+    }
+    return;
+  }
 }
 
 std::set<std::string> Tags(const Json& list) {
@@ -667,8 +691,27 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     for (int n = 2; taken.contains(warp); ++n) {
       warp = std::format("{} {}", kWarpTag, n);
     }
-    config["endpoints"].push_back(
-        WarpEndpoint(*settings.warpAccount, warp, settings.warpViaProxy ? proxy : std::string()));
+    // Over the proxy: a group of its own, not the selector. A switch of the
+    // selector (the tray picks its server a second after every start) moved
+    // WireGuard's UDP to another server, and Cloudflare took nothing from the
+    // new address until WireGuard's next handshake - 15-25 s without WARP
+    // (seen 06.10.2026: the first Netflix request after a start hung). The same
+    // servers here, and a tolerance no measurement crosses: it stays on its
+    // first server while that one works.
+    std::string via;
+    if (settings.warpViaProxy && !proxy.empty()) {
+      std::vector<std::string> servers;
+      GroupServers(outbounds, proxy, servers);
+      if (!servers.empty()) {
+        via = std::string(kWarpTag) + "-via";
+        for (int n = 2; taken.contains(via); ++n) {
+          via = std::format("{}-via {}", kWarpTag, n);
+        }
+        outbounds.push_back(
+            Json{{"type", "urltest"}, {"tag", via}, {"outbounds", servers}, {"tolerance", kWarpViaTolerance}});
+      }
+    }
+    config["endpoints"].push_back(WarpEndpoint(*settings.warpAccount, warp, via));
   }
 
   // The lists that are there, as local files.

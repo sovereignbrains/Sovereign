@@ -466,9 +466,20 @@ void TestWarp() {
   const json c = json::parse(text);
   CHECK(c["endpoints"].size() == 1);
   if (c["endpoints"].size() == 1) {
+    // Over the proxy through a group of its own: a switch of the selector moved
+    // WireGuard's UDP and WARP went quiet until its next handshake (15-25 s).
     CHECK(c["endpoints"][0]["type"] == "wireguard" && c["endpoints"][0]["tag"] == "warp" &&
-          c["endpoints"][0]["detour"] == "proxy");
+          c["endpoints"][0]["detour"] == "warp-via");
   }
+  json via;
+  json selector;
+  for (const json& out : c["outbounds"]) {
+    via = out["tag"] == "warp-via" ? out : via;
+    selector = out["tag"] == "proxy" ? out : selector;
+  }
+  CHECK(via["type"] == "urltest" && via["tolerance"] == 65000);
+  CHECK(via["outbounds"] == json::array({"NL", "DE"}));  // the servers, "auto" expanded, each once
+  CHECK(selector["outbounds"].dump().find("warp-via") == std::string::npos);  // not a choice for the user
   // Only its sites go to WARP - no IPv6 of everything (that made WARP global).
   bool rule = false;
   for (const json& r : c["route"]["rules"]) {
