@@ -284,6 +284,18 @@ void TestTypos() {
   Checked().emplace_back("typos-fakeip", f.dump());
   CHECK(f["dns"]["rules"].dump().find(R"("server":"fake")") != std::string::npos);
   CHECK(Asked(f["dns"]).size() == 2 && Asked(f["dns"]).back()["server"] == "local");
+
+  // The configuration's own rule set (packetlab's "ads"): what's in it can't
+  // be told here - laid out all the same, the core decides; and with
+  // answerTypos off (the core refused it) not at all.
+  const std::string theirs = R"({"dns": {"servers": [{"type": "local", "tag": "local"}],
+                                         "rules": [{"rule_set": "theirs", "action": "reject"}]},
+                                 "outbounds": [{"type": "direct", "tag": "direct"}],
+                                 "route": {"default_domain_resolver": "local"}})";
+  CHECK(Asked(json::parse(ApplyRouting(theirs, s, {}))["dns"]).size() == 2);
+  RoutingSettings refused = s;
+  refused.answerTypos = false;
+  CHECK(Asked(json::parse(ApplyRouting(theirs, refused, {}))["dns"]).empty());
 }
 
 int Run(const std::wstring& command) {

@@ -60,6 +60,9 @@ struct RoutingSettings {
   bool warp = false;
   bool warpViaProxy = true;  // WireGuard to Cloudflare over the proxy (else directly)
   std::optional<WarpAccount> warpAccount;
+  // Typos answered "no addresses" at once (routing.cpp, AnswerTyposAtOnce).
+  // Not a setting: off only for a config the core refused with it.
+  bool answerTypos = true;
 };
 
 // The WARP endpoint's tag in the config.

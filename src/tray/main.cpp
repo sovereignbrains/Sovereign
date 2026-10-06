@@ -790,6 +790,10 @@ class Worker {
       if (auto viaProxy = sovereign::tray::ParseRule(list, sovereign::tray::RouteRule::Action::Proxy)) {
         routing.rules.insert(routing.rules.begin(), std::move(*viaProxy));
       }
+      // Typos answered at once - unless the core refused that with this very
+      // configuration (FallBackIfRoutingRejected).
+      typosKey_ = own ? std::string("own") : sourceKey;
+      routing.answerTypos = typosKey_ != typosRejected_;
       // The client's rules first in whatever runs (routing.h).
       combined.config = sovereign::tray::ApplyRouting(*combined.config, routing, ruleFiles_);
     }
@@ -935,7 +939,17 @@ class Worker {
   void FallBackIfRoutingRejected() {
     const std::string& error = model_.LastError();
     const bool refused = error.find("parse config") != std::string::npos || error.find("create box") != std::string::npos;
-    if (routingKey_.empty() || !refused || routingKey_ == rejectedRouting_) {
+    if (!refused) {
+      return;
+    }
+    // The typo layout first: a rule set of the configuration's holding
+    // addresses can't sit next to evaluate. The same config without the
+    // layout is tried before its routing is given up - quietly.
+    if (!typosKey_.empty() && typosKey_ != typosRejected_) {
+      typosRejected_ = typosKey_;
+      return;
+    }
+    if (routingKey_.empty() || routingKey_ == rejectedRouting_) {
       return;
     }
     rejectedRouting_ = routingKey_;
@@ -1917,6 +1931,10 @@ class Worker {
   // "<id>:<sha256 of its config>" - own routing runs instead until that
   // config changes. routingKey_: the one the current config was built with.
   std::string routingKey_;
+  // The same for the typo layout: the config the current one was built
+  // with ("own" for the client's own frame), and one the core refused it in.
+  std::string typosKey_;
+  std::string typosRejected_;
   std::string rejectedRouting_;
   std::string rejectedWhy_;
   // The subscription hosts the tray's rules send through the proxy: in the

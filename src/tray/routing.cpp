@@ -190,8 +190,9 @@ void Prepend(Json& list, std::vector<Json> items, std::size_t at) {
 }
 
 // A DNS rule sing-box reads the old way (an address filter, a strategy) - it
-// can't sit next to evaluate; nor one already using answers, nor another's
-// rule set (it may hold addresses: a filter again).
+// can't sit next to evaluate; nor one already using answers. A rule set can't
+// be told from here (one of addresses is a filter too): the core decides, and
+// the tray builds the config again without the layout if it's refused.
 bool OldStyleDnsRule(const Json& rule) {
   static constexpr std::array kKeys = {"ip_cidr",        "ip_is_private",   "ip_accept_any", "rule_set_ip_cidr_accept_empty",
                                        "rule_set_ipcidr_accept_empty", "match_response", "response_rcode",
@@ -206,13 +207,6 @@ bool OldStyleDnsRule(const Json& rule) {
   }
   if (const std::string action = Str(rule, "action"); action == "evaluate" || action == "respond") {
     return true;
-  }
-  if (rule.contains("rule_set")) {
-    for (const std::string& set : Strings(rule.at("rule_set"))) {
-      if (set != kGeositeRu && set != kGeositeGovRu && set != kAds) {
-        return true;
-      }
-    }
   }
   if (rule.contains("rules")) {
     for (const Json& sub : rule.at("rules")) {
@@ -770,7 +764,9 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
   }
   Prepend(dns["rules"], std::move(dnsRules), 0);
-  AnswerTyposAtOnce(dns);
+  if (settings.answerTypos) {
+    AnswerTyposAtOnce(dns);
+  }
   if (dns["rules"].empty()) {
     dns.erase("rules");
   }
