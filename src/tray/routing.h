@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,23 @@ struct RouteRule {
   Action action = Action::Direct;
 };
 
+// A whole service sent its own way: Netflix through WARP (from a VPS's
+// country it cuts its catalogue or doesn't let in at all). Matched by its
+// SagerNet sing-geosite list - nothing for the user to type.
+struct ServiceRoute {
+  enum class Way : std::uint8_t { Warp };  // through a country: next
+  std::string id;                          // ServiceCatalog's, "netflix"
+  Way way = Way::Warp;
+};
+struct ServiceInfo {
+  std::string_view id;
+  std::string_view name;     // as people know it: "Netflix"
+  std::string_view geosite;  // the list: geosite-<geosite>.srs
+};
+// The services that can be sent their own way, in the order offered.
+std::span<const ServiceInfo> ServiceCatalog();
+const ServiceInfo* FindService(std::string_view id);
+
 struct RoutingSettings {
   enum class RemoteDns : std::uint8_t { Cloudflare, Google, Quad9 };
   // Direct names - Russian, the user's direct ones, the servers' own - over
@@ -50,6 +68,7 @@ struct RoutingSettings {
   LocalDns localDns = LocalDns::Cloudflare;     // directly: Russian and direct names, the servers' own
   bool ipv4Only = true;
   std::vector<RouteRule> rules;  // the user's, first of all
+  std::vector<ServiceRoute> services;  // after the user's rules
 
   // Cloudflare WARP (warp.h): an endpoint the box has while warp is on and
   // there's an account; only rules with Action::Warp go to it (IPv6 of
@@ -67,7 +86,9 @@ inline constexpr std::string_view kWarpTag = "warp";
 // nothing (and over the proxy it broke every 5 min idle, filling the log).
 inline bool WarpReady(const RoutingSettings& s) {
   return s.warp && s.warpAccount.has_value() &&
-         std::any_of(s.rules.begin(), s.rules.end(), [](const RouteRule& r) { return r.action == RouteRule::Action::Warp; });
+         (std::any_of(s.rules.begin(), s.rules.end(), [](const RouteRule& r) { return r.action == RouteRule::Action::Warp; }) ||
+          std::any_of(s.services.begin(), s.services.end(),
+                      [](const ServiceRoute& r) { return r.way == ServiceRoute::Way::Warp; }));
 }
 
 // tray.json's "routing", read defensively (a wrong field keeps its default).

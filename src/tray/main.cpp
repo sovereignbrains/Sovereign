@@ -320,6 +320,8 @@ struct RoutingChange {
     RemoveRule,     // index
     ImportFrom,     // text: a configuration's id - its rules copied
     Warp,           // on (a device registered first if there's none)
+    AddService,     // text: the service's id - through WARP (WARP turned on)
+    RemoveService,  // index
     WarpVia,        // on: over the proxy; off: directly
   };
   What what = What::RussiaDirect;
@@ -836,6 +838,31 @@ class Worker {
           r.warpAccount = std::move(*account);
         }
         r.warp = change.on;
+        break;
+      case RoutingChange::What::AddService: {
+        const bool known = sovereign::tray::FindService(change.text) != nullptr;
+        const bool twice = std::any_of(r.services.begin(), r.services.end(),
+                                       [&](const sovereign::tray::ServiceRoute& s) { return s.id == change.text; });
+        if (!known || twice) {
+          break;
+        }
+        // Through WARP: WARP on - a device registered first, if there's none.
+        if (!r.warpAccount) {
+          auto account = RegisterWarp();
+          if (!account) {
+            Notify(L"Sovereign: WARP Ð½Ðµ Ð²ÐºÐ»ÑŽÑ‡Ð¸Ð»ÑÑ", Widen(account.error()), true, UiPage::Routing);
+            break;
+          }
+          r.warpAccount = std::move(*account);
+        }
+        r.warp = true;
+        r.services.push_back({.id = change.text, .way = sovereign::tray::ServiceRoute::Way::Warp});
+        break;
+      }
+      case RoutingChange::What::RemoveService:
+        if (change.index >= 0 && static_cast<std::size_t>(change.index) < r.services.size()) {
+          r.services.erase(r.services.begin() + change.index);
+        }
         break;
       case RoutingChange::What::WarpVia: r.warpViaProxy = change.on; break;
       case RoutingChange::What::RemoteDns:
@@ -2736,6 +2763,11 @@ UiContent ContentFrom(const View& v) {
          .action = RuleActions()[static_cast<std::size_t>(rule.action)],
          .warp = rule.action == sovereign::tray::RouteRule::Action::Warp});
   }
+  for (const auto& s : r.services) {
+    const auto* info = sovereign::tray::FindService(s.id);
+    c.routing.services.push_back({.name = info != nullptr ? Widen(std::string(info->name)) : Widen(s.id),
+                                  .way = r.warp ? L"Ñ‡ÐµÑ€ÐµÐ· WARP" : L"Ñ‡ÐµÑ€ÐµÐ· WARP Â· WARP Ð²Ñ‹ÐºÐ»ÑŽÑ‡ÐµÐ½"});
+  }
   if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
     c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
     c.routing.listsFailed = true;
@@ -3050,6 +3082,27 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     }
+    case UiCommand::AddService: {
+      std::vector<std::wstring> names;
+      std::vector<std::string> ids;
+      for (const auto& s : sovereign::tray::ServiceCatalog()) {
+        if (std::none_of(r.services.begin(), r.services.end(),
+                         [&](const sovereign::tray::ServiceRoute& x) { return x.id == s.id; })) {
+          names.push_back(Widen(std::string(s.name)) + L" â€” Ñ‡ÐµÑ€ÐµÐ· WARP");
+          ids.emplace_back(s.id);
+        }
+      }
+      if (const auto picked = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1)) {
+        send(What::AddService, true, 0, 0, ids[*picked]);
+      }
+      break;
+    }
+    case UiCommand::ServiceMenu:
+      if (args.index >= 0 && static_cast<std::size_t>(args.index) < r.services.size() &&
+          PickFromMenu(owner, cursor, {L"Ð§ÐµÑ€ÐµÐ· WARP", L"Ð£Ð±Ñ€Ð°Ñ‚ÑŒ"}, 0) == std::optional<std::size_t>(1)) {
+        send(What::RemoveService, false, 0, args.index);
+      }
+      break;
     case UiCommand::ImportRules: {
       std::vector<std::wstring> names;
       names.reserve(view.profiles.size());
@@ -3117,6 +3170,8 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::AddRule:
     case UiCommand::AddRuleText:
     case UiCommand::RuleMenu:
+    case UiCommand::AddService:
+    case UiCommand::ServiceMenu:
     case UiCommand::ImportRules:
       OnRoutingCommand(owner, command, args, view);
       break;

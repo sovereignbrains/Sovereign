@@ -145,6 +145,7 @@ int Snapshots(const std::wstring& dir) {
   routed.routing.warp = true;
   routed.routing.warpRegistered = true;
   routed.routing.warpAddress = L"172.16.0.2";
+  routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
   routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
   sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1400, 96, dir + L"\\routing.png");
   routed.routing.lists = L"Списки правил не скачались: сервер ответил 503. Пока работают зоны .ru/.рф/.su.";
@@ -324,6 +325,7 @@ int LayoutTest(const std::wstring& dir) {
   routed.routing.warp = true;
   routed.routing.warpRegistered = true;
   routed.routing.warpAddress = L"172.16.0.2";
+  routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
   const std::array<std::pair<UiPage, const wchar_t*>, 8> pages = {{{UiPage::Overview, L"overview"},
                                                                    {UiPage::Servers, L"servers"},
                                                                    {UiPage::Subscription, L"subscription"},

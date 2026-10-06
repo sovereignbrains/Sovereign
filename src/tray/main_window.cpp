@@ -1616,6 +1616,31 @@ class Painter {
       y += h + kGap + 4;
     }
 
+    // Services: a whole service its own way, by its list - none shown until
+    // one is added (one button, not a row per service).
+    y = Heading(l, L"Ð¡ÐµÑ€Ð²Ð¸ÑÑ‹", x0, x1, y,
+                L"Ð¡ÐµÑ€Ð²Ð¸Ñ Ñ†ÐµÐ»Ð¸ÐºÐ¾Ð¼ â€” Ð¿Ð¾ Ð³Ð¾Ñ‚Ð¾Ð²Ð¾Ð¼Ñƒ ÑÐ¿Ð¸ÑÐºÑƒ ÐµÐ³Ð¾ Ð°Ð´Ñ€ÐµÑÐ¾Ð², Ð±ÐµÐ· Ñ€ÑƒÑ‡Ð½Ð¾Ð³Ð¾ Ð²Ð²Ð¾Ð´Ð° ÑÐ°Ð¹Ñ‚Ð¾Ð². ÐÐ°Ð¿Ñ€Ð¸Ð¼ÐµÑ€, Netflix "
+                L"Ñ‡ÐµÑ€ÐµÐ· WARP: Ñ Ð°Ð´Ñ€ÐµÑÐ° ÑÐµÑ€Ð²ÐµÑ€Ð° Ð² Ð“ÐµÑ€Ð¼Ð°Ð½Ð¸Ð¸ Ð¾Ð½ ÑƒÑ€ÐµÐ·Ð°ÐµÑ‚ ÐºÐ°Ñ‚Ð°Ð»Ð¾Ð³ Ð¸Ð»Ð¸ Ð½Ðµ Ð¿ÑƒÑÐºÐ°ÐµÑ‚ Ð²Ð¾Ð²ÑÐµ.");
+    if (!r.services.empty()) {
+      const float h = static_cast<float>(r.services.size()) * kProfileRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      for (std::size_t n = 0; n < r.services.size(); ++n) {
+        const float top = y + static_cast<float>(n) * kProfileRow;
+        if (n > 0) {
+          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        }
+        Item item = CommandItem(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 4, top + kProfileRow - 3}, r.services[n].name,
+                                kGlyphChevron, UiCommand::ServiceMenu, static_cast<int>(n));
+        item.detail = r.services[n].way;
+        item.checked = true;
+        l.items.push_back(std::move(item));
+      }
+      y += h + 8;
+    }
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Ð”Ð¾Ð±Ð°Ð²Ð¸Ñ‚ÑŒ ÑÐµÑ€Ð²Ð¸Ñ", kGlyphAdd,
+                                  UiCommand::AddService));
+    y += kButton + kGap + 4;
+
     // WARP: a way out of its own for chosen sites - listed right here.
     y = Heading(l, L"WARP", x0, x1, y,
                 L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "

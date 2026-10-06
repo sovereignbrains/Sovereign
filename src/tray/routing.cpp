@@ -26,6 +26,27 @@ constexpr const char* kGeositeGovRu = "sov-geosite-gov-ru";
 constexpr const char* kGeoipRu = "sov-geoip-ru";
 constexpr const char* kAds = "sov-ads";
 constexpr const char* kLocalDns = "sov-local";
+constexpr std::string_view kServicePrefix = "sov-svc-";  // a service's list: sov-svc-<id>
+
+// What people want sent elsewhere: shut to a VPS's country (video, AI) or
+// wanted apart. Each list checked to exist in sing-geosite (06.10.2026).
+constexpr std::array<ServiceInfo, 15> kServices = {{
+    {"netflix", "Netflix", "netflix"},
+    {"youtube", "YouTube", "youtube"},
+    {"chatgpt", "ChatGPT", "openai"},
+    {"gemini", "Gemini", "google-gemini"},
+    {"claude", "Claude", "anthropic"},
+    {"spotify", "Spotify", "spotify"},
+    {"disney", "Disney+", "disney"},
+    {"hbo", "HBO Max", "hbo"},
+    {"primevideo", "Prime Video", "primevideo"},
+    {"twitch", "Twitch", "twitch"},
+    {"tiktok", "TikTok", "tiktok"},
+    {"instagram", "Instagram", "instagram"},
+    {"facebook", "Facebook", "facebook"},
+    {"x", "X (Twitter)", "twitter"},
+    {"discord", "Discord", "discord"},
+}};
 
 constexpr std::string_view kGeositeBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/";
 constexpr std::string_view kGeoipBase = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/";
@@ -280,6 +301,10 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
                      {"processes", r.processes},
                      {"action", ActionName(r.action)}});
   }
+  nlohmann::json services = nlohmann::json::array();
+  for (const ServiceRoute& r : s.services) {
+    services.push_back({{"id", r.id}, {"way", "warp"}});
+  }
   return {{"russiaDirect", s.russiaDirect},
           {"blockAds", s.blockAds},
           {"blockQuic", s.blockQuic},
@@ -292,6 +317,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
                                                                           : "cloudflare"},
           {"ipv4Only", s.ipv4Only},
           {"rules", std::move(rules)},
+          {"services", std::move(services)},
           {"warp", s.warp},
           {"warpViaProxy", s.warpViaProxy},
               {"warpAccount", s.warpAccount ? WarpToJson(*s.warpAccount) : nlohmann::json()}};
@@ -316,6 +342,16 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   flag("blockQuic", s.blockQuic);
   flag("finalDirect", s.finalDirect);
   flag("ipv4Only", s.ipv4Only);
+  if (const auto it = json.find("services"); it != json.end() && it->is_array()) {
+    for (const nlohmann::json& item : *it) {
+      const std::string id = item.is_object() ? item.value("id", std::string()) : std::string();
+      const bool known = FindService(id) != nullptr;
+      const bool twice = std::any_of(s.services.begin(), s.services.end(), [&](const ServiceRoute& r) { return r.id == id; });
+      if (known && !twice) {
+        s.services.push_back({.id = id, .way = ServiceRoute::Way::Warp});
+      }
+    }
+  }
   flag("warp", s.warp);
   flag("warpViaProxy", s.warpViaProxy);
   if (const auto it = json.find("warpAccount"); it != json.end()) {
@@ -506,6 +542,13 @@ void MergeRules(std::vector<RouteRule>& into, const std::vector<RouteRule>& more
   }
 }
 
+std::span<const ServiceInfo> ServiceCatalog() { return kServices; }
+
+const ServiceInfo* FindService(std::string_view id) {
+  const auto it = std::find_if(kServices.begin(), kServices.end(), [&](const ServiceInfo& s) { return s.id == id; });
+  return it == kServices.end() ? nullptr : &*it;
+}
+
 std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
   std::vector<RuleSetSource> sets;
   if (settings.russiaDirect) {
@@ -515,6 +558,12 @@ std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
   }
   if (settings.blockAds) {
     sets.push_back({std::string(kAds), std::string(kGeositeBase) + "geosite-category-ads-all.srs", false});
+  }
+  for (const ServiceRoute& r : settings.services) {
+    if (const ServiceInfo* info = FindService(r.id)) {
+      sets.push_back({std::string(kServicePrefix) + r.id,
+                      std::string(kGeositeBase) + "geosite-" + std::string(info->geosite) + ".srs", false});
+    }
   }
   return sets;
 }
@@ -691,6 +740,13 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       rule["outbound"] = direct;
     }
     rules.push_back(std::move(rule));
+  }
+  // Services: each by its list, after the user's own rules.
+  for (const ServiceRoute& s : settings.services) {
+    const std::string tag = std::string(kServicePrefix) + s.id;
+    if (s.way == ServiceRoute::Way::Warp && !warp.empty() && lists.contains(tag)) {
+      rules.push_back(Json{{"rule_set", tag}, {"outbound", warp}});
+    }
   }
   if (settings.blockAds && lists.contains(std::string(kAds))) {
     rules.push_back(Json{{"rule_set", kAds}, {"action", "reject"}});

@@ -73,6 +73,10 @@ struct UiRule {
   std::wstring action;  // "напрямую" / "через прокси" / "блокировать" / "через WARP"
   bool warp = false;    // "через WARP": listed in WARP's own card while it's on
 };
+struct UiService {
+  std::wstring name;  // "Netflix"
+  std::wstring way;   // "Ñ‡ÐµÑ€ÐµÐ· WARP"
+};
 struct UiRouting {
   bool russiaDirect = true;
   bool blockAds = true;
@@ -89,6 +93,7 @@ struct UiRouting {
   bool warpRegistered = false;
   bool warpViaProxy = true;
   std::wstring warpAddress;   // the device's address in WARP, once registered
+  std::vector<UiService> services;  // sent their own way, in order
 };
 
 // The checks' page (diagnostics.h): one row each.
@@ -190,6 +195,8 @@ enum class UiCommand : std::uint8_t {
   AddRule,            // starts typing over the button
   AddRuleText,        // text: what was typed
   RuleMenu,           // index into the rules; anchor
+  AddService,         // anchor: the menu of services not sent their own way yet
+  ServiceMenu,        // index into the services; anchor
   ImportRules,        // anchor: the menu of configurations to take rules from
   // The checks':
   RunChecks,          // everything but speed and an address

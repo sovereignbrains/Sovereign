@@ -316,6 +316,7 @@ bool MakeLists(const std::filesystem::path& singBox, const std::filesystem::path
       {"sov-geosite-gov-ru", R"({"version":3,"rules":[{"domain_suffix":["gosuslugi.ru"]}]})"},
       {"sov-geoip-ru", R"({"version":3,"rules":[{"ip_cidr":["5.0.0.0/16"]}]})"},
       {"sov-ads", R"({"version":3,"rules":[{"domain_suffix":["doubleclick.net"]}]})"},
+      {"sov-svc-netflix", R"({"version":3,"rules":[{"domain_suffix":["netflix.com","nflxvideo.net"]}]})"},
   };
   for (const auto& [tag, source] : sources) {
     const auto in = dir / (tag + ".json");
@@ -398,6 +399,48 @@ void TestNaiveInsecure() {
 
 // WARP: its endpoint over the proxy, rules "через WARP" to it and nothing
 // else; off, none of it - and the rules wait.
+// Services: Netflix through WARP by its list - kept in tray.json, its list
+// downloaded, WARP's endpoint there for it alone, the rule after the user's.
+void TestServices() {
+  RoutingSettings s;
+  s.services.push_back({.id = "netflix", .way = ServiceRoute::Way::Warp});
+  const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
+  CHECK(back.services.size() == 1 && back.services[0].id == "netflix");
+  CHECK(RoutingFromJson(json{{"services", json::array({json{{"id", "nope"}}, json{{"id", "netflix"}}, json{{"id", "netflix"}}})}})
+            .services.size() == 1);  // unknown and repeated ones dropped
+  bool list = false;
+  for (const RuleSetSource& set : NeededRuleSets(s)) {
+    list = list || (set.tag == "sov-svc-netflix" && set.url.ends_with("/geosite-netflix.srs"));
+  }
+  CHECK(list);
+  CHECK(FindService("chatgpt") != nullptr && FindService("chatgpt")->geosite == "openai");
+  CHECK(ServiceCatalog().size() >= 10);
+
+  WarpAccount account;
+  account.privateKey = "YJ9Lx3UFbVd6R+1QpYx0K5nV5+OYn5cB4m3Hk4qH0lI=";
+  account.peerKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=";
+  account.address4 = "172.16.0.2";
+  s.warpAccount = account;
+  s.warp = true;
+  CHECK(WarpReady(s));  // a service alone is reason enough for WARP
+  s.rules.push_back(*ParseRule("my.example", RouteRule::Action::Direct));
+  const auto combined = CombineConfigs({{"keys", Keys(), {}}}, OwnFrame(s));
+  const std::string text = ApplyRouting(combined.config.value_or("{}"), s, Files());
+  Checked().emplace_back("services", text);
+  const json c = json::parse(text);
+  CHECK(c.contains("endpoints") && c["endpoints"].size() == 1);
+  if (!Files().empty()) {
+    int mine = -1;
+    int netflix = -1;
+    for (std::size_t i = 0; i < c["route"]["rules"].size(); ++i) {
+      const json& r = c["route"]["rules"][i];
+      mine = r.dump().find("my.example") != std::string::npos ? static_cast<int>(i) : mine;
+      netflix = r.value("rule_set", json()) == "sov-svc-netflix" && r.value("outbound", "") == "warp" ? static_cast<int>(i) : netflix;
+    }
+    CHECK(netflix > mine && mine >= 0);  // after the user's own rules
+  }
+}
+
 void TestWarp() {
   RoutingSettings s;
   s.rules.push_back(*ParseRule("chatgpt.com", RouteRule::Action::Warp));
@@ -471,6 +514,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestOwn();
     TestSubscriptionRulesDropped();
     TestTypos();
+    TestServices();
     TestWarp();
     TestNaiveInsecure();
     if (check) {
