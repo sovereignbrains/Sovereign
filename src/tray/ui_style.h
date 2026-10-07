@@ -25,13 +25,14 @@ inline D2D1_COLOR_F FromColorRef(COLORREF c, float a = 1.0f) {
   return Rgb(static_cast<float>(GetRValue(c)), static_cast<float>(GetGValue(c)), static_cast<float>(GetBValue(c)), a);
 }
 
-// Surfaces, darkest first. The card color is opaque on purpose: a child
-// control (the log's edit box) paints with it through GDI.
-inline constexpr COLORREF kWindowColor = RGB(24, 26, 32);
-inline constexpr COLORREF kPanelColor = RGB(28, 31, 38);  // the window's caption
-inline constexpr COLORREF kCardColor = RGB(34, 38, 46);
+// Surfaces, darkest first: neutral near-black, a drawing's paper (the plan
+// of 07.10 - no blue cast, no pure black). The card color is opaque on
+// purpose: a child control (the log's edit box) paints with it through GDI.
+inline constexpr COLORREF kWindowColor = RGB(14, 14, 15);
+inline constexpr COLORREF kPanelColor = RGB(18, 18, 19);  // the window's caption, the navigation
+inline constexpr COLORREF kCardColor = RGB(24, 24, 26);
 inline constexpr COLORREF kPrimaryText = RGB(242, 244, 248);
-inline constexpr COLORREF kSecondaryText = RGB(160, 168, 184);
+inline constexpr COLORREF kSecondaryText = RGB(156, 158, 164);
 inline constexpr COLORREF kAccent = RGB(76, 146, 255);
 inline constexpr COLORREF kUpload = RGB(64, 196, 140);
 inline constexpr COLORREF kDanger = RGB(240, 96, 96);

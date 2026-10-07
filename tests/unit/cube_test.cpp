@@ -42,10 +42,20 @@ void TestPoses() {
   // On floats and glows; off rests dark; an error is askew; connecting lifts a little.
   const CubePose on = CubePoseFor(Display::On);
   const CubePose off = CubePoseFor(Display::Off);
-  CHECK(on.lift > 0 && on.glow > 0.9f && off.lift == 0 && off.glow == 0);
-  CHECK(on.body.b > off.body.b);
+  CHECK(on.lift > 0 && on.glow > off.glow && off.lift == 0 && off.glow == 0);
+  // The same dark glass in every state; the one colour is the knob's.
+  CHECK(Close(on.body.r, off.body.r) && Close(on.body.b, off.body.b));
+  CHECK(on.rim.a > off.rim.a);
+  CHECK(on.signal.b > on.signal.r && CubePoseFor(Display::Error).signal.r > CubePoseFor(Display::Error).signal.b);
   CHECK(!Close(std::fmod(CubePoseFor(Display::Error).yaw - 45, 90.0f), 0));
   CHECK(CubePoseFor(Display::Starting).lift > 0);
+  // The lever: thrown left while off, right while on, about upright while it connects.
+  CHECK(off.press == 0 && on.press == 1);
+  CHECK(LeverAngle(off.press) < -20 && LeverAngle(on.press) > 20 && Close(LeverAngle(0), -LeverAngle(1)));
+  const float connecting = LeverAngle(CubePoseFor(Display::Starting).press);
+  CHECK(std::abs(connecting) < 10);
+  CHECK(Close(BlendPose(off, on, 0.5f).press, 0.5f) && Close(LeverAngle(0.5f), 0));
+  CHECK(Close(LeverAngle(2), LeverAngle(1)));  // past the end: thrown all the way, no further
 }
 
 void TestFaces() {

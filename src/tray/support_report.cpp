@@ -386,6 +386,15 @@ std::string SubscriptionTrouble(std::size_t servers, std::size_t measured, std::
   return {};
 }
 
+std::string BytesText(std::uint64_t bytes) { return Bytes(bytes); }
+
+std::string DateText(std::int64_t unix, int utcOffsetMinutes) { return When(unix, utcOffsetMinutes).substr(0, 10); }
+
+// "ещё 1 дн." to its last day.
+std::int64_t DaysLeft(std::int64_t expire, std::int64_t now) {
+  return expire <= now ? 0 : (expire - now + 86399) / 86400;
+}
+
 std::string UsageLine(std::uint64_t used, std::uint64_t total, std::int64_t expire, std::int64_t now,
                       int utcOffsetMinutes) {
   std::string line;
@@ -393,9 +402,10 @@ std::string UsageLine(std::uint64_t used, std::uint64_t total, std::int64_t expi
     line = "Трафик: " + Bytes(used) + (total > 0 ? " из " + Bytes(total) : std::string(" (без лимита)"));
   }
   if (expire > 0) {
-    const std::string day = When(expire, utcOffsetMinutes).substr(0, 10);
+    const std::string day = DateText(expire, utcOffsetMinutes);
     line += (line.empty() ? std::string() : std::string(" · ")) +
-            (expire < now ? "оплата истекла " + day : "оплачено до " + day);
+            (expire < now ? "оплата истекла " + day
+                          : std::format("оплачено до {} (ещё {} дн.)", day, DaysLeft(expire, now)));
   }
   return line;
 }

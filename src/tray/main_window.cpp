@@ -182,6 +182,7 @@ enum class Kind : std::uint8_t {
   LogBox,        // the log's lines
   Hint,          // a "?": pointed at, its text shows in a tip
   ValueRow,      // a setting with its value on the right and a chevron: a click picks another
+  Meter,         // a thin bar: how much is used (index: per mille)
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
@@ -213,6 +214,7 @@ struct Item {
   bool enabled = true;
   bool warn = false;    // something's wrong with it (a ProfileRow's refresh failed)
   bool scrolls = true;  // lives in the page (scrolls, clipped), not in the rail
+  bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
 };
 
 struct Layout {
@@ -222,6 +224,7 @@ struct Layout {
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
   std::optional<D2D1_RECT_F> logBox;
+  std::optional<D2D1_POINT_2F> blueprint;  // the main screen's drawing (cube.h DrawBlueprint) round this point
 };
 
 // The log's level groups, as its filter shows them.
@@ -339,22 +342,11 @@ Item ReportButton(const UiContent& c, bool support, D2D1_RECT_F rect, int index)
 
 bool Interactive(const Item& item) { return item.action != ItemAction::None && item.enabled; }
 
-// The overview's words for the state.
-std::wstring StateTitle(const UiContent& c) {
-  switch (c.display) {
-    case Display::ServiceDown: return L"Служба не запущена";
-    case Display::Off: return L"Выключено";
-    case Display::Starting: return L"Подключение…";
-    case Display::On: return L"Подключено";
-    case Display::Error: return L"Ошибка";
-  }
-  return {};
-}
-
 std::wstring StateDetailBase(const UiContent& c);
 
-// The overview's lines under the state: which server and how fast, or what
-// to do about it - and when the kill switch holds the internet closed, that.
+// The overview's words over the cube - the cube's pose says the state, so
+// only what it can't: what's wrong and what to do about it, and when the
+// kill switch holds the internet closed, that. Empty while all is well.
 std::wstring StateDetail(const UiContent& c) {
   std::wstring detail = StateDetailBase(c);
   if (c.killSwitchActive && c.display != Display::On && c.display != Display::Off) {
@@ -371,12 +363,10 @@ std::wstring StateDetailBase(const UiContent& c) {
     case Display::ServiceDown:
       return L"sovereign-core не отвечает. Установи службу от администратора: sovereign-core.exe --install";
     case Display::Off:
-      if (c.hasConfig) {
-        return L"Кнопка внизу — подключиться.";
-      }
-      return c.profiles.empty() ? L"Сначала добавь подписку." : L"Включи конфигурацию: " + c.combineError;
-    case Display::Starting: return L"Запускается ядро sing-box…";
-    case Display::On: return {};  // the switch and the server card say it all
+      // Nothing to run: why (no configuration at all - the first screen says it).
+      return c.hasConfig || c.profiles.empty() ? std::wstring() : L"Включи конфигурацию: " + c.combineError;
+    case Display::Starting:
+    case Display::On: return {};
     case Display::Error: return c.error.empty() ? std::wstring(L"ядро не запустилось") : c.error;
   }
   return {};
@@ -386,29 +376,6 @@ bool AnyWaiting(const UiContent& c) {
   return std::any_of(c.profiles.begin(), c.profiles.end(), [](const UiProfile& p) { return p.waiting; });
 }
 
-// The configurations' line on the overview: which are on.
-std::wstring SubscriptionLine(const UiContent& c) {
-  if (c.profiles.empty()) {
-    return L"нет — добавь ссылку или ключи";
-  }
-  std::vector<const UiProfile*> on;
-  for (const UiProfile& p : c.profiles) {
-    if (p.enabled) {
-      on.push_back(&p);
-    }
-  }
-  if (on.empty()) {
-    return L"все выключены";
-  }
-  std::wstring line = on.size() == 1 ? on.front()->name : std::format(L"включено {} из {}", on.size(), c.profiles.size());
-  if (AnyWaiting(c)) {
-    return line + L" · новая версия ждёт";
-  }
-  if (std::any_of(on.begin(), on.end(), [](const UiProfile* p) { return p->failed; })) {
-    return line + L" · ошибка обновления";
-  }
-  return on.size() == 1 && on.front()->subscription ? line + L" · " + on.front()->updated : line;
-}
 // The checks' line on the overview.
 std::wstring ChecksLine(const UiContent& c) {
   if (c.checksRunning) {
@@ -582,8 +549,6 @@ class Painter {
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    glyphBig_ = MakeFormat(glyphs.c_str(), 30);  // the power sign on the cube's top (cube.h: a 40-DIP box)
-    glyphBig_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   }
 
   ID2D1Factory* D2d() const { return d2d_.get(); }
@@ -639,6 +604,9 @@ class Painter {
     Canvas k{t, brush.get(), dwrite_.get(), Flags(t), in.cube ? &*in.cube : nullptr};
     const D2D1_SIZE_F size = t->GetSize();
     t->Clear(FromColorRef(ui::kWindowColor));
+    if (l.blueprint) {
+      DrawBlueprint(t, size, *l.blueprint);
+    }
 
     bool clipped = false;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
@@ -691,13 +659,13 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 30> kNames = {
+    static constexpr std::array<const wchar_t*, 31> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Nav",      L"NavBar",   L"Server", L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
-        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value"};
+        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter"};
     // One per Kind, in its order: a kind added or gone shifts every name after it.
-    static_assert(kNames.size() == static_cast<std::size_t>(Kind::ValueRow) + 1);
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Meter) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -737,7 +705,8 @@ class Painter {
           const Item& o = l.items[j];
           const bool over = Interactive(o) && o.rect.left < r.right && o.rect.right > r.left && o.rect.top < r.bottom &&
                             o.rect.bottom > r.top;
-          const bool allowed = o.kind == Kind::Hint || (o.kind == Kind::IconButton && it.kind == Kind::Title);
+          const bool allowed = o.kind == Kind::Hint ||
+                               (o.kind == Kind::IconButton && (it.kind == Kind::Title || it.kind == Kind::Card));
           overlaps = overlaps || (over && !allowed);
         }
       }
@@ -1063,21 +1032,14 @@ class Painter {
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
     const float cx = (x0 + x1) / 2;
 
-    // The state: a word, and a line when there's something to say.
-    l.items.push_back(Make(Kind::Title, {x0, y, x1, y + 30}, StateTitle(c)));
-    y += 32;
-    const bool on = c.display == Display::On;
-    if (!on) {
-      const std::wstring detail = StateDetail(c);
-      const bool error = c.display == Display::Error;
+    // The state is the cube's: words only when there's something to say.
+    if (const std::wstring detail = StateDetail(c); !detail.empty()) {
+      const bool error = c.display == Display::Error || c.display == Display::ServiceDown;
       const float h = error ? TextHeight(detail, wrap_.get(), x1 - x0 - 28) : TextHeight(detail, captionWrap_.get(), x1 - x0);
       l.items.push_back(Make(error ? Kind::ErrorText : Kind::Caption, {x0, y, x1, y + h}, detail,
                              error ? kGlyphWarning : nullptr));
-      y += h;
-    } else if (const std::wstring detail = StateDetail(c); !detail.empty()) {
-      y = Paragraph(l, Kind::Caption, detail, x0, x1, y);
+      y += h + kGap;
     }
-    y += kGap;
 
     // What waits for a click: one line each.
     if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading) {
@@ -1097,6 +1059,8 @@ class Painter {
       l.items.push_back(std::move(waiting));
       y += 40 + 8;
     }
+
+    y = SubscriptionCard(l, c, x0, x1, y);
 
     // Nothing to connect with yet: the way to fix that comes first.
     // The first screen: what the clipboard holds is offered as it is ("Добавить
@@ -1147,9 +1111,21 @@ class Painter {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y + kGap);
     }
 
-    // Room to spare in a tall window: the switch and what's under it move
-    // down into it, half of it - to the middle, not stuck to the top.
-    if (const float spare = bottom - y; spare > 8) {
+    // Room to spare in a tall window: the cube grows into some of it (up to
+    // 1.7 times), then it and what's under it move down into half of the
+    // rest - to the middle, not stuck to the top.
+    if (float spare = bottom - y; spare > 8) {
+      const float grow = std::min(spare * 0.4f, kPower * 0.7f);
+      Item& cube = l.items[hero];
+      cube.rect.left -= grow / 2;
+      cube.rect.right += grow / 2;
+      cube.rect.bottom += grow;
+      for (std::size_t i = hero + 1; i < l.items.size(); ++i) {
+        l.items[i].rect.top += grow;
+        l.items[i].rect.bottom += grow;
+      }
+      y += grow;
+      spare -= grow;
       const float shift = std::min(spare / 2, 110.0f);
       for (std::size_t i = hero; i < l.items.size(); ++i) {
         l.items[i].rect.top += shift;
@@ -1157,7 +1133,100 @@ class Painter {
       }
       y += shift;
     }
+    // The drawing under it all, its axes through the cube (cube.cpp: its
+    // center a little above the box's).
+    const D2D1_RECT_F& cube = l.items[hero].rect;
+    l.blueprint = D2D1_POINT_2F{(cube.left + cube.right) / 2, cube.top + (cube.right - cube.left) * 0.48f};
     return y;
+  }
+
+  // What it connects with, over the switch: the subscription (the first one
+  // on; else the first configuration on). A card that is a link to the
+  // configurations, read top-down: what it is and how fresh, its name - the
+  // refresh button level with them on the right - then the panel's numbers
+  // side by side: the traffic with a bar of it, the paid period with the
+  // days left. Nothing before there's one.
+  float SubscriptionCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    const auto on = [](const UiProfile& p) { return p.enabled; };
+    auto shown = std::find_if(c.profiles.begin(), c.profiles.end(),
+                              [](const UiProfile& p) { return p.enabled && p.subscription; });
+    if (shown == c.profiles.end()) {
+      shown = std::find_if(c.profiles.begin(), c.profiles.end(), on);
+    }
+    if (shown == c.profiles.end()) {
+      return y;
+    }
+    const UiProfile& p = *shown;
+    const auto others = std::count_if(c.profiles.begin(), c.profiles.end(), on) - 1;
+    const bool numbers = !p.trafficUsed.empty() || !p.paidTill.empty();
+    const bool unsaid = !numbers && p.subscription;
+    const float h = numbers ? 136.0f : unsaid ? 84.0f : 66.0f;
+    constexpr float kInset = 16;
+    const float left = x0 + kInset;
+    const float right = x1 - kInset;
+
+    Item card = Make(Kind::Card, {x0, y, x1, y + h}, L"Конфигурации");
+    card.action = ItemAction::Page;
+    card.index = static_cast<int>(UiPage::Subscription);
+    l.items.push_back(std::move(card));
+
+    // The buttons, right, level with the two lines: another one added (the
+    // clipboard, a QR code, a file), and - a subscription - fetched again.
+    float buttons = x1 - 8;
+    const auto key = [&](Item item) {
+      item.key = true;
+      l.items.push_back(std::move(item));
+    };
+    if (p.subscription) {
+      key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Обновить подписку", kGlyphRefresh,
+                      UiCommand::RefreshProfile, static_cast<int>(shown - c.profiles.begin())));
+      buttons -= 42;
+    }
+    key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Добавить: из буфера, QR-код, файл",
+                    kGlyphAdd, UiCommand::AddMenu));
+    buttons -= 38;
+    const float textRight = buttons - 4;
+
+    // What it is, and how fresh; its name under it.
+    Item what = Make(Kind::Muted, {left, y + 12, textRight, y + 30},
+                     (p.subscription ? std::wstring(L"Подписка · ") : std::wstring(L"Свой конфиг · ")) +
+                         (p.failed         ? std::wstring(L"не обновилась")
+                          : p.subscription ? L"обновлена " + p.updated
+                                           : std::format(L"серверов: {}", p.serverCount)));
+    what.warn = p.failed;
+    l.items.push_back(std::move(what));
+    l.items.push_back(Make(Kind::Heading, {left, y + 30, textRight, y + 56},
+                           others > 0 ? std::format(L"{}  +{}", p.name, others) : p.name));
+
+    if (unsaid) {
+      l.items.push_back(Make(Kind::Muted, {left, y + 58, right, y + 76}, L"Провайдер не сообщает трафик и срок"));
+    }
+    if (!numbers) {
+      return y + h + kGap;
+    }
+    // The panel's numbers, two columns under a rule.
+    l.items.push_back(Make(Kind::Divider, {left, y + 66, right, y + 67}));
+    const float mid = (x0 + x1) / 2;
+    const float top = y + 76;
+    l.items.push_back(Make(Kind::Muted, {left, top, mid - 8, top + 18}, L"Трафик"));
+    l.items.push_back(Make(Kind::Text, {left, top + 18, mid - 8, top + 40},
+                           p.trafficUsed.empty()    ? std::wstring(L"—")
+                           : p.trafficTotal.empty() ? p.trafficUsed + L" · без лимита"
+                                                    : p.trafficUsed + L" из " + p.trafficTotal));
+    if (p.trafficShare >= 0) {
+      Item meter = Make(Kind::Meter, {left, top + 46, mid - 8, top + 49});
+      meter.index = static_cast<int>(p.trafficShare * 1000);
+      l.items.push_back(std::move(meter));
+    }
+    l.items.push_back(Make(Kind::Muted, {mid + 8, top, right, top + 18}, L"Оплачено до"));
+    l.items.push_back(Make(Kind::Text, {mid + 8, top + 18, right, top + 40}, p.paidTill.empty() ? L"—" : p.paidTill));
+    if (p.daysLeft >= 0) {
+      Item days = Make(Kind::Muted, {mid + 8, top + 40, right, top + 56},
+                       p.daysLeft == 0 ? std::wstring(L"истекло") : std::format(L"ещё {} дн.", p.daysLeft));
+      days.warn = p.daysLeft <= 3;
+      l.items.push_back(std::move(days));
+    }
+    return y + h + kGap;
   }
 
   // The server the box runs on as a card: the flag of where it really is,
@@ -1241,8 +1310,8 @@ class Painter {
       std::wstring state;
       bool dot;
     };
-    const std::array<Entry, 5> entries = {{
-        {kGlyphSync, L"Конфиги", UiPage::Subscription, L"Конфигурации: " + SubscriptionLine(c), AnyWaiting(c)},
+    // The configurations aren't here: their card is over the switch.
+    const std::array<Entry, 4> entries = {{
         {kGlyphRoute, L"Маршруты", UiPage::Routing, L"Маршруты и DNS: " + RoutingLine(c), c.routing.listsFailed},
         {kGlyphShield, L"Проверка", UiPage::Checks, L"Проверка: " + ChecksLine(c), false},
         {kGlyphLog, L"Журнал", UiPage::Logs,
@@ -2029,13 +2098,26 @@ class Painter {
     switch (it.kind) {
       case Kind::Card:
         k.Round(r, kRadius, FromColorRef(ui::kCardColor));
+        if (hoverAlpha > 0 && it.action != ItemAction::None) {  // a card that is a link
+          k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha * 0.5f));
+        }
         k.Outline(r, kRadius, Rgb(255, 255, 255, 0.06f));
         break;
       case Kind::Divider: k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(255, 255, 255, 0.06f)); break;
       case Kind::Title: k.Text(it.text, title_.get(), r, primary); break;
       case Kind::Heading: k.Text(it.text, heading_.get(), r, primary); break;
-      case Kind::Text: k.Text(it.text, body_.get(), r, primary); break;
-      case Kind::Muted: k.Text(it.text, caption_.get(), r, secondary); break;
+      case Kind::Text: k.Text(it.text, body_.get(), r, it.warn ? FromColorRef(ui::kDanger) : primary); break;
+      case Kind::Muted: k.Text(it.text, caption_.get(), r, it.warn ? FromColorRef(ui::kDanger) : secondary); break;
+      case Kind::Meter: {
+        // A thin track and how much of it is used: amber from three
+        // quarters, red from nine tenths.
+        const float share = std::clamp(static_cast<float>(it.index) / 1000, 0.0f, 1.0f);
+        k.Round(r, 1.5f, Rgb(255, 255, 255, 0.08f));
+        const COLORREF used = share >= 0.9f ? ui::kDanger : share >= 0.75f ? ui::kWarning : ui::kPrimaryText;
+        k.Round({r.left, r.top, r.left + (r.right - r.left) * share, r.bottom}, 1.5f,
+                FromColorRef(used, used == ui::kPrimaryText ? 0.75f : 1.0f));
+        break;
+      }
       case Kind::Wrap: k.Text(it.text, wrap_.get(), r, secondary); break;
       case Kind::Caption: k.Text(it.text, captionWrap_.get(), r, secondary); break;
       case Kind::ErrorText: {
@@ -2102,6 +2184,10 @@ class Painter {
       case Kind::AccentButton:
       case Kind::DangerButton: DrawButton(k, it, hovered, pressed); break;
       case Kind::IconButton:
+        if (it.key) {
+          DrawKey(k, it, hovered && it.enabled, pressed && it.enabled);
+          break;
+        }
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
@@ -2354,11 +2440,39 @@ class Painter {
     k.Text(it.text, body_.get(), textBox, ink);
   }
 
+  // An icon button as a key: its face lit from above, a bright edge along
+  // its top, on a dark base that gives it height - up a little under the
+  // pointer, down when pressed.
+  void DrawKey(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
+    const D2D1_RECT_F r = Inflate(it.rect, -4);
+    constexpr float kRest = 3;  // how far the face stands over the base at rest
+    const float height = pressed ? 1.0f : hovered ? 4.5f : kRest;
+    constexpr float kKeyRadius = 8;
+    const D2D1_RECT_F base{r.left, r.top + kRest, r.right, r.bottom};
+    const D2D1_RECT_F face{r.left, base.top - height, r.right, base.bottom - height};
+    k.Round(base, kKeyRadius, Rgb(9, 9, 10));
+    k.Outline(base, kKeyRadius, Rgb(255, 255, 255, 0.07f));
+    const float lift = hovered ? 8.0f : 0.0f;
+    const std::array<D2D1_GRADIENT_STOP, 2> stops{{{0, Rgb(46 + lift, 46 + lift, 50 + lift)},
+                                                   {1, Rgb(28 + lift, 28 + lift, 31 + lift)}}};
+    wil::com_ptr<ID2D1GradientStopCollection> collection;
+    wil::com_ptr<ID2D1LinearGradientBrush> fill;
+    if (SUCCEEDED(k.t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
+        SUCCEEDED(k.t->CreateLinearGradientBrush(
+            D2D1::LinearGradientBrushProperties({face.left, face.top}, {face.left, face.bottom}), collection.get(),
+            fill.put()))) {
+      k.t->FillRoundedRectangle(D2D1::RoundedRect(face, kKeyRadius, kKeyRadius), fill.get());
+    }
+    k.Outline(face, kKeyRadius, Rgb(255, 255, 255, hovered ? 0.24f : 0.14f));
+    k.Line({face.left + kKeyRadius, face.top + 1.5f}, {face.right - kKeyRadius, face.top + 1.5f},
+           Rgb(255, 255, 255, hovered ? 0.30f : 0.20f));
+    k.Text(it.glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.88f));
+  }
+
   // The switch is a cube (cube.h): in the pose the window animates it
   // through, or - a still picture, a snapshot - the state's own.
   void DrawPower(const Canvas& k, const Item& it, const UiContent& c, bool hovered, bool pressed) const {
-    DrawCube(k.t, k.cube != nullptr ? *k.cube : CubePoseFor(c.display), it.rect, hovered, pressed, glyphBig_.get(),
-             it.glyph);
+    DrawCube(k.t, k.cube != nullptr ? *k.cube : CubePoseFor(c.display), it.rect, hovered, pressed);
   }
 
   wil::com_ptr<ID2D1Factory> d2d_;
@@ -2382,7 +2496,6 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> tip_;       // a tip's text, wrapped
   wil::com_ptr<IDWriteTextFormat> nav_;       // a navigation item's word
   wil::com_ptr<IDWriteTextFormat> glyph_;
-  wil::com_ptr<IDWriteTextFormat> glyphBig_;
   // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
   mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
   mutable wil::com_ptr<ID2D1Bitmap> flags_;  // Flags'

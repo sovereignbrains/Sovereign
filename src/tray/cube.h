@@ -1,10 +1,8 @@
 #pragma once
 
 #include <d2d1.h>
-#include <dwrite.h>
 
 #include <array>
-#include <string_view>
 #include <vector>
 
 #include "tray_model.h"
@@ -17,9 +15,10 @@
 // takes the pose at once.
 //
 // Drawn with Direct2D, no 3D engine: an orthographic view keeps a cube's
-// faces parallelograms, so each is a filled path and the glyph on the top
-// one an affine transform. The pose math is pure, tested in
-// tests/unit/cube_test.cpp.
+// faces parallelograms, so each is a filled path, and a circle on the top
+// face an ellipse. The lever turns in the plane facing the viewer, so it
+// reads the same whichever way the cube has turned. The pose math is pure,
+// tested in tests/unit/cube_test.cpp.
 
 namespace sovereign::tray {
 
@@ -28,9 +27,10 @@ struct CubePose {
   float pitch = 26;  // degrees the top tips toward the viewer
   float lift = 0;    // DIPs above where it rests
   float glow = 0;    // 0..1: the light inside, and around it
-  D2D1_COLOR_F body{};   // the glass
-  D2D1_COLOR_F rim{};    // the edges' light
-  D2D1_COLOR_F glyph{};  // the power sign on top
+  float press = 0;   // 0..1: the lever on top, thrown left (off) to right (on)
+  D2D1_COLOR_F body{};    // the glass
+  D2D1_COLOR_F rim{};     // the edges' light
+  D2D1_COLOR_F signal{};  // the lever's knob: the one colour, the state's
 };
 
 // The pose a state rests in.
@@ -58,10 +58,18 @@ struct CubeFace {
 // (lift moves it up), that face the viewer.
 std::vector<CubeFace> CubeFaces(const CubePose& pose, D2D1_POINT_2F center, float half);
 
-// The cube in `box` (square), with its shadow and glow; `glyphFormat` draws
-// `glyph` (centered both ways) on the top face. Hovered lifts it a little,
-// pressed sets it down.
-void DrawCube(ID2D1RenderTarget* target, const CubePose& pose, D2D1_RECT_F box, bool hovered, bool pressed,
-              IDWriteTextFormat* glyphFormat, std::wstring_view glyph);
+// The cube in `box` (square), with its shadow and glow, and a knife switch on
+// its top face: a lever in a slotted mount, thrown left while off, right
+// while on, upright while it connects. Hovered nudges the lever toward the
+// other side, pressed throws it further.
+void DrawCube(ID2D1RenderTarget* target, const CubePose& pose, D2D1_RECT_F box, bool hovered, bool pressed);
+
+// The lever's angle off upright, degrees (negative: to the left) for a press.
+float LeverAngle(float press);
+
+// The drawing the main screen sits on: a faint grid square to `focus` (the
+// cube's center), the isometric axes through it in dashes, a cross where
+// every third grid line meets.
+void DrawBlueprint(ID2D1RenderTarget* target, D2D1_SIZE_F size, D2D1_POINT_2F focus);
 
 }  // namespace sovereign::tray

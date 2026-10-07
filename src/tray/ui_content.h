@@ -79,6 +79,13 @@ struct UiProfile {
   std::wstring via;        // the configuration its servers connect through (its name); empty: directly
   bool viaBroken = false;  // that one is off, gone or chained itself: these servers don't run
   std::wstring usage;      // what its panel said: "Трафик: 3 ГБ из 100,0 ГБ · оплачено до 01.01.2027"; empty: nothing
+  // The same, apart - the main screen's card shows each in its place.
+  std::wstring trafficUsed;   // "3,2 ГБ"; empty: the panel didn't say
+  std::wstring trafficTotal;  // "100,0 ГБ"; empty: no limit (or not said)
+  float trafficShare = -1;    // used of the total, 0..1; -1: no total
+  std::wstring paidTill;      // "01.01.2027"; empty: not said
+  int daysLeft = -1;          // whole days started till then, 0 once past; -1: not said
+  std::size_t serverCount = 0;
   bool support = false;    // its panel gave a link to its support (Support-Url)
 };
 // The routing's page (routing.h).
@@ -192,6 +199,7 @@ enum class UiCommand : std::uint8_t {
   PasteSubscription,
   ImportFile,        // a config, keys or a QR code's picture from a file
   ScanScreen,        // QR codes on the screen
+  AddMenu,           // anchor: the three ways to add one - the clipboard, a QR code on the screen, a file
   // A configuration's, by index into profiles:
   ToggleProfile,     // on or off
   RenameProfile,     // text: the name typed in place

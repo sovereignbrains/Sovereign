@@ -548,6 +548,46 @@ void TestWarp() {
   CHECK(back.warp && !back.warpViaProxy && back.warpAccount.has_value() &&
         back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Warp);
 }
+// The local DNS giving way when it stops answering: in what order, and what
+// in the core's log says it doesn't (07.10.2026: 8.8.8.8:443 stopped
+// answering from a home ISP and the box resolved nothing).
+void TestLocalDnsFallback() {
+  using LocalDns = RoutingSettings::LocalDns;
+  CHECK(LocalDnsOrder(LocalDns::Google) ==
+        (std::vector{LocalDns::Google, LocalDns::Cloudflare, LocalDns::Quad9, LocalDns::System}));
+  CHECK(LocalDnsOrder(LocalDns::Quad9).front() == LocalDns::Quad9 && LocalDnsOrder(LocalDns::Quad9).back() == LocalDns::System);
+  // The system's picked: it first (a failing system resolver doesn't say an address, so it's never left).
+  CHECK(LocalDnsOrder(LocalDns::System) ==
+        (std::vector{LocalDns::System, LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9}));
+  CHECK(LocalDnsAddress(LocalDns::Google) == "8.8.8.8" && LocalDnsAddress(LocalDns::System).empty());
+  CHECK(LocalDnsName(LocalDns::Quad9) == "Quad9");
+
+  // The lines the box wrote that evening.
+  CHECK(LocalDnsUnreachable("ERROR[0101] outbound/urltest[auto]: lookup main.spacevpn.com: dial tcp 8.8.8.8:443: "
+                            "i/o timeout",
+                            "8.8.8.8"));
+  CHECK(LocalDnsUnreachable("dns: exchange failed for x. IN A: dial tcp 1.1.1.1:443: connectex: No connection could "
+                            "be made because the target machine actively refused it.",
+                            "1.1.1.1"));
+  // Not that server, or not a dial to it.
+  CHECK(!LocalDnsUnreachable("lookup main.spacevpn.com: dial tcp 8.8.8.8:443: i/o timeout", "1.1.1.1"));
+  CHECK(!LocalDnsUnreachable("dial tcp 18.8.8.8:443: i/o timeout", "8.8.8.8"));
+  CHECK(!LocalDnsUnreachable("dns: exchange failed for google.ru. IN A: context deadline exceeded", "8.8.8.8"));
+  CHECK(!LocalDnsUnreachable("outbound/direct: connected to 8.8.8.8:443", "8.8.8.8"));
+  CHECK(!LocalDnsUnreachable("dial tcp 8.8.8.8:443: i/o timeout", ""));
+
+  // Quad9 is a pick of its own, kept in tray.json; its server is its address.
+  RoutingSettings s;
+  s.localDns = LocalDns::Quad9;
+  CHECK(RoutingFromJson(json::parse(RoutingToJson(s).dump())).localDns == LocalDns::Quad9);
+  const json applied = json::parse(ApplyRouting(R"({"outbounds":[{"type":"direct","tag":"direct"}]})", s, {}));
+  bool quad9 = false;
+  for (const json& server : applied["dns"]["servers"]) {
+    quad9 = quad9 || (server.value("tag", "") == "sov-local" && server.value("server", "") == "9.9.9.9");
+  }
+  CHECK(quad9);
+}
+
 int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see the catch below
   if (argc >= 5 && std::string_view(argv[1]) == "--try") {
     return TryReal(argc, argv);
@@ -571,6 +611,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestServiceCountry();
     TestWarp();
     TestNaiveInsecure();
+    TestLocalDnsFallback();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

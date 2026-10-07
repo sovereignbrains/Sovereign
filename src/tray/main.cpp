@@ -161,6 +161,13 @@ constexpr std::chrono::minutes kFailRetest{5};
 // The local network's devices are looked at this often (lan.h).
 constexpr std::chrono::seconds kLanScan{10};
 
+// The local DNS server not answering (WatchLocalDns): this many failed dials
+// to it within the window move the box on to the next; never again sooner
+// than the gap.
+constexpr std::size_t kDnsFailuresToSwitch = 3;
+constexpr std::chrono::seconds kDnsFailureWindow{60};
+constexpr std::chrono::minutes kDnsSwitchGap{2};
+
 // A switch of the running selector the service refused is retried this often.
 constexpr std::chrono::seconds kSelectRetry{5};
 
@@ -231,6 +238,8 @@ struct View {
   std::string combineError;        // why they don't
   std::vector<std::string> combineNotes;  // what was left out of it
   sovereign::tray::RoutingSettings routing;  // as set (routing.h)
+  // The local DNS the box runs with instead of routing's pick, which stopped answering.
+  std::optional<sovereign::tray::RoutingSettings::LocalDns> dnsInstead;
   std::size_t listsReady = 0;             // the routing's lists downloaded
   std::size_t listsNeeded = 0;
   std::int64_t listsUpdated = 0;          // unix seconds of the last one downloaded
@@ -795,6 +804,9 @@ class Worker {
     // servers - their routing and DNS never (one client's routing for everyone,
     // services like Netflix included).
     RoutingSettings routing = settings_.routing;
+    if (dnsInstead_) {
+      routing.localDns = *dnsInstead_;  // the pick isn't answering (WatchLocalDns)
+    }
     auto combined = sovereign::tray::CombineConfigs(parts, sovereign::tray::OwnFrame(routing));
     combineError_ = combined.error;
     notes.insert(notes.end(), combined.notes.begin(), combined.notes.end());
@@ -940,7 +952,9 @@ class Worker {
         r.remoteDns = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 2));
         break;
       case RoutingChange::What::LocalDns:
-        r.localDns = static_cast<RoutingSettings::LocalDns>(std::clamp(change.value, 0, 2));
+        r.localDns = static_cast<RoutingSettings::LocalDns>(std::clamp(change.value, 0, 3));
+        dnsInstead_.reset();  // picked by hand: that one, from now
+        dnsFailures_.clear();
         break;
       case RoutingChange::What::AddRule:
         if (auto rule = sovereign::tray::ParseRule(change.text, static_cast<sovereign::tray::RouteRule::Action>(
@@ -1870,6 +1884,39 @@ class Worker {
   // The core's new log lines from the service, plus the tray's own errors
   // (a box that never started has no log of its own to explain why), into the
   // lines the main window's log shows.
+  // The local DNS server (routing.h) not answering: three failed dials to it
+  // within a minute and the box moves on to the next of LocalDnsOrder - its
+  // config rebuilt, the box restarted with it (the model sees the new hash).
+  // Not more than once in two minutes; the system's resolver is the last -
+  // with no internet at all every one fails, and going round again helps
+  // nothing. The user's pick stays; picking one by hand starts over.
+  void WatchLocalDns(std::string_view line) {
+    using sovereign::tray::RoutingSettings;
+    const RoutingSettings::LocalDns now = dnsInstead_.value_or(settings_.routing.localDns);
+    if (!sovereign::tray::LocalDnsUnreachable(line, sovereign::tray::LocalDnsAddress(now))) {
+      return;
+    }
+    const auto clock = TrayModel::Clock::now();
+    std::erase_if(dnsFailures_, [&](const auto& at) { return clock - at > kDnsFailureWindow; });
+    dnsFailures_.push_back(clock);
+    if (dnsFailures_.size() < kDnsFailuresToSwitch || (lastDnsSwitch_ && clock - *lastDnsSwitch_ < kDnsSwitchGap)) {
+      return;
+    }
+    const auto order = sovereign::tray::LocalDnsOrder(settings_.routing.localDns);
+    const auto at = std::find(order.begin(), order.end(), now);
+    if (at == order.end() || at + 1 == order.end()) {
+      return;  // the last one: nowhere further
+    }
+    const RoutingSettings::LocalDns next = *(at + 1);
+    dnsInstead_ = next;
+    dnsFailures_.clear();
+    lastDnsSwitch_ = clock;
+    Notify(std::format(L"Sovereign: DNS {} не отвечает", Widen(std::string(sovereign::tray::LocalDnsName(now)))),
+           std::format(L"Переключился на {}. Выбор в «Маршрутах» не менялся.",
+                       Widen(std::string(sovereign::tray::LocalDnsName(next)))),
+           false, UiPage::Routing);
+  }
+
   void CollectLogs() {
     std::vector<std::wstring> fresh;
     for (int page = 0; page < kLogPagesPerPoll; ++page) {
@@ -1880,6 +1927,7 @@ class Worker {
         break;
       }
       for (const auto& line : parsed->lines) {
+        WatchLocalDns(line.message);
         fresh.push_back(FormatLogLine(line));
       }
       logSince_ = parsed->next;
@@ -1981,6 +2029,7 @@ class Worker {
       v.combineError = combineError_;
       v.combineNotes = combineNotes_;
       v.routing = settings_.routing;
+      v.dnsInstead = dnsInstead_;
       v.listsReady = ruleFiles_.size();
       v.listsNeeded = sovereign::tray::NeededRuleSets(settings_.routing).size();
       v.listsUpdated = rulesUpdated_;
@@ -2101,6 +2150,11 @@ class Worker {
   std::string loggedError_;     // the model's error last put into the log
   std::vector<sovereign::tray::LanDevice> lanDevices_;
   std::optional<TrayModel::Clock::time_point> lastLanScan_;
+  // The local DNS in use instead of the pick, its pick not answering; the
+  // failed dials to the one in use lately; when it last moved on.
+  std::optional<sovereign::tray::RoutingSettings::LocalDns> dnsInstead_;
+  std::vector<TrayModel::Clock::time_point> dnsFailures_;
+  std::optional<TrayModel::Clock::time_point> lastDnsSwitch_;
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
   std::vector<std::string> testedTags_;                   // in the test that runs or ran last
@@ -3088,6 +3142,19 @@ UiContent ContentFrom(const View& v) {
     shown.heldBack = profile.heldBack;
     shown.usage = Widen(sovereign::tray::UsageLine(profile.trafficUsed, profile.trafficTotal, profile.expire,
                                                    std::time(nullptr), UtcOffsetMinutes()));
+    if (profile.trafficUsed > 0 || profile.trafficTotal > 0) {
+      shown.trafficUsed = Widen(sovereign::tray::BytesText(profile.trafficUsed));
+    }
+    if (profile.trafficTotal > 0) {
+      shown.trafficTotal = Widen(sovereign::tray::BytesText(profile.trafficTotal));
+      shown.trafficShare = std::min(1.0f, static_cast<float>(static_cast<double>(profile.trafficUsed) /
+                                                             static_cast<double>(profile.trafficTotal)));
+    }
+    if (profile.expire > 0) {
+      shown.paidTill = Widen(sovereign::tray::DateText(profile.expire, UtcOffsetMinutes()));
+      shown.daysLeft = static_cast<int>(sovereign::tray::DaysLeft(profile.expire, std::time(nullptr)));
+    }
+    shown.serverCount = profile.servers.size();
     shown.support = !profile.supportUrl.empty();
     if (!profile.via.empty()) {
       const auto through = std::find_if(v.profiles.begin(), v.profiles.end(),
@@ -3191,9 +3258,12 @@ UiContent ContentFrom(const View& v) {
   c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
                         : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? L"Quad9 (DoH)"
                                                                             : L"Cloudflare (DoH)";
-  c.routing.localDns = r.localDns == RoutingSettings::LocalDns::Google   ? L"Google (DoH)"
-                       : r.localDns == RoutingSettings::LocalDns::System ? L"системный"
-                                                                          : L"Cloudflare (DoH)";
+  c.routing.localDns = r.localDns == RoutingSettings::LocalDns::System
+                           ? std::wstring(L"системный")
+                           : Widen(std::string(sovereign::tray::LocalDnsName(r.localDns))) + L" (DoH)";
+  if (v.dnsInstead) {  // the pick not answering: what runs instead
+    c.routing.localDns += L" · не отвечает, сейчас " + Widen(std::string(sovereign::tray::LocalDnsName(*v.dnsInstead)));
+  }
   for (const auto& rule : r.rules) {
     c.routing.rules.push_back(
         {.text = Widen(sovereign::tray::RuleText(rule)),
@@ -3548,14 +3618,19 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         send(What::RemoteDns, false, static_cast<int>(*picked));
       }
       break;
-    case UiCommand::ChooseLocalDns:
+    case UiCommand::ChooseLocalDns: {
+      // In the menu's order; the one that stops answering gives way to the next (routing.h LocalDnsOrder).
+      using LocalDns = sovereign::tray::RoutingSettings::LocalDns;
+      static constexpr std::array kChoices = {LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::System};
+      const auto current = std::find(kChoices.begin(), kChoices.end(), r.localDns) - kChoices.begin();
       if (const auto picked = PickFromMenu(owner, args.anchor,
                                            {L"Cloudflare (DoH, зашифрованный)", L"Google (DoH, зашифрованный)",
-                                            L"Системный (провайдера)"},
-                                           static_cast<int>(r.localDns))) {
-        send(What::LocalDns, false, static_cast<int>(*picked));
+                                            L"Quad9 (DoH, зашифрованный)", L"Системный (провайдера)"},
+                                           static_cast<int>(current))) {
+        send(What::LocalDns, false, static_cast<int>(kChoices.at(*picked)));
       }
       break;
+    }
     case UiCommand::AddRule:  // what to match, typed over the button; then where it goes
       if (g_mainWindow != nullptr) {
         g_mainWindow->EditInPlace(UiCommand::AddRule, 0, UiCommand::AddRuleText, L"", false);
@@ -3660,6 +3735,15 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ScanScreen:
       ScanScreen();
+      break;
+    case UiCommand::AddMenu:  // the main screen's "+": what the configurations page offers, in one menu
+      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Вставить из буфера", L"QR-код с экрана", L"Из файла…"}, -1)) {
+        switch (*picked) {
+          case 0: RequestImport(owner); break;
+          case 1: ScanScreen(); break;
+          default: ImportFile(owner); break;
+        }
+      }
       break;
     case UiCommand::RunChecks: {
       using sovereign::tray::CheckId;
@@ -3992,9 +4076,35 @@ bool HasArg(const wchar_t* commandLine, std::wstring_view arg) {
 
 }  // namespace
 
+// The menus (TrackPopupMenu: the window's, the tray icon's) dark like the
+// window: uxtheme's SetPreferredAppMode(ForceDark) and FlushMenuThemes,
+// ordinals 135 and 136 since Windows 10 1903 - not in the SDK, what
+// Explorer, Terminal and Notepad++ use. Not there: the menus stay light.
+static void DarkMenus() {
+  HMODULE uxtheme = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+  if (uxtheme == nullptr) {
+    return;  // kept loaded when it is: the setting lives in it
+  }
+  using SetPreferredAppModeFn = int(WINAPI*)(int);
+  using FlushMenuThemesFn = void(WINAPI*)();
+  constexpr int kForceDark = 2;
+  // Through an integer, as GetGeoInfoEx above: clang rejects a direct FARPROC-to-function cast.
+  const auto setMode = reinterpret_cast<SetPreferredAppModeFn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(GetProcAddress(uxtheme, MAKEINTRESOURCEA(135))));
+  const auto flush = reinterpret_cast<FlushMenuThemesFn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(GetProcAddress(uxtheme, MAKEINTRESOURCEA(136))));
+  if (setMode != nullptr) {
+    setMode(kForceDark);
+  }
+  if (flush != nullptr) {
+    flush();
+  }
+}
+
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
   // Sharp at any scaling: the window sizes itself for its monitor's DPI.
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  DarkMenus();
   // The file dialog ("add exe") is COM, on this thread.
   const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   // The whole command line: CommandLineToArgvW expects argv[0] first.

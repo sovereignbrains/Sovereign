@@ -86,6 +86,13 @@ SupportReport BuildSupportReport(const ReportInput& input);
 std::string SubscriptionTrouble(std::size_t servers, std::size_t measured, std::size_t failed, bool refreshFailed,
                                 std::uint64_t used, std::uint64_t total, std::int64_t expire, std::int64_t now);
 
+// The parts of what a panel says, for the main screen's card: "3,2 ГБ",
+// "01.01.2027" (unix seconds in the user's zone), and the days left till
+// an expiry - whole days started, 0 once past.
+std::string BytesText(std::uint64_t bytes);
+std::string DateText(std::int64_t unix, int utcOffsetMinutes);
+std::int64_t DaysLeft(std::int64_t expire, std::int64_t now);
+
 // The subscription card's line from what the panel said: "Трафик: 3 ГБ из
 // 100,0 ГБ · оплачено до 01.01.2027" ("истекло" once past); empty if it said
 // nothing.

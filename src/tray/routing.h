@@ -81,8 +81,10 @@ struct RoutingSettings {
   enum class RemoteDns : std::uint8_t { Cloudflare, Google, Quad9 };
   // Direct names - Russian, the user's direct ones, the servers' own - over
   // encrypted DNS straight from here (the provider doesn't see what's
-  // asked) while it works; the system's resolver when it doesn't.
-  enum class LocalDns : std::uint8_t { Cloudflare, Google, System };
+  // asked). Its one server is the user's pick; when that stops answering
+  // (an ISP blocks its address) the tray moves the box on to the next of
+  // LocalDnsOrder, the system's resolver last - the pick stays as it is.
+  enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9 };
   bool russiaDirect = true;
   bool blockAds = true;
   bool blockQuic = true;
@@ -156,5 +158,23 @@ std::string OwnFrame(const RoutingSettings& settings);
 // or `config` unchanged if it isn't a JSON object.
 std::string ApplyRouting(std::string_view config, const RoutingSettings& settings,
                          const std::map<std::string, std::string>& files);
+
+// The local DNS servers in the order a failing one gives way: the user's
+// pick, then the other encrypted ones (Cloudflare, Google, Quad9), the
+// system's resolver last.
+std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns pick);
+
+// The address an encrypted local server is dialled at ("1.1.1.1"); empty
+// for the system's resolver.
+std::string_view LocalDnsAddress(RoutingSettings::LocalDns dns);
+
+// "Cloudflare", "Google", "Quad9", "системный".
+std::string_view LocalDnsName(RoutingSettings::LocalDns dns);
+
+// Whether a core log line says the local server at `address` (port 443)
+// couldn't be reached: a dial to it timed out, was refused or reset, had no
+// route. A query that timed out without saying where isn't counted - it may
+// have been the remote DNS, through the proxy.
+bool LocalDnsUnreachable(std::string_view line, std::string_view address);
 
 }  // namespace sovereign::tray

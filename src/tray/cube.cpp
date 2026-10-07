@@ -134,44 +134,129 @@ wil::com_ptr<ID2D1PathGeometry> Polygon(ID2D1RenderTarget* t, const std::array<D
 
 bool Near(D2D1_POINT_2F a, D2D1_POINT_2F b) { return std::abs(a.x - b.x) < 0.01f && std::abs(a.y - b.y) < 0.01f; }
 
+// A drafting line: short dashes, round nothing.
+wil::com_ptr<ID2D1StrokeStyle> Dashed(ID2D1RenderTarget* t) {
+  wil::com_ptr<ID2D1Factory> factory;
+  t->GetFactory(factory.put());
+  static constexpr std::array<float, 2> kDashes = {3, 4};
+  wil::com_ptr<ID2D1StrokeStyle> style;
+  if (factory) {
+    factory->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_FLAT,
+                                                           D2D1_CAP_STYLE_FLAT, D2D1_LINE_JOIN_MITER, 10,
+                                                           D2D1_DASH_STYLE_CUSTOM, 0),
+                               kDashes.data(), static_cast<UINT32>(kDashes.size()), style.put());
+  }
+  return style;
+}
+
+// From `a` through `b` and `length` on.
+D2D1_POINT_2F Beyond(D2D1_POINT_2F a, D2D1_POINT_2F b, float length) {
+  const float dx = b.x - a.x;
+  const float dy = b.y - a.y;
+  const float n = std::hypot(dx, dy);
+  return n < 0.001f ? b : D2D1_POINT_2F{b.x + dx / n * length, b.y + dy / n * length};
+}
+
+// The knife switch on the cube's top face: a round mount (a circle seen at
+// the tilt - an ellipse) with the groove the lever runs in, the hinge, the
+// lever - turning in the plane that faces the viewer - and its knob, the
+// one thing in the state's colour.
+void DrawLever(ID2D1RenderTarget* t, const CubePose& p, const std::vector<CubeFace>& faces, float half) {
+  const auto top = std::find_if(faces.begin(), faces.end(), [](const CubeFace& f) { return f.top; });
+  const auto ink = Solid(t, p.rim);
+  if (top == faces.end() || !ink) {
+    return;
+  }
+  D2D1_POINT_2F base{0, 0};
+  for (const auto& c : top->corners) {
+    base.x += c.x / 4;
+    base.y += c.y / 4;
+  }
+  const float sp = std::sin(p.pitch * kDegrees);
+  const float cp = std::cos(p.pitch * kDegrees);
+
+  // The mount, and the groove across it.
+  const float r = half * 0.46f;
+  if (const auto mount = Solid(t, Scale(p.body, 0.6f))) {
+    t->FillEllipse(D2D1::Ellipse(base, r, r * sp), mount.get());
+  }
+  ink->SetOpacity(0.7f);
+  t->DrawEllipse(D2D1::Ellipse(base, r, r * sp), ink.get(), 1);
+  if (const auto groove = Solid(t, Color(0.02f, 0.02f, 0.025f, 1))) {
+    t->DrawLine({base.x - r * 0.75f, base.y}, {base.x + r * 0.75f, base.y}, groove.get(), 3.2f);
+  }
+
+  // The lever, out of the hinge just above the face.
+  const D2D1_POINT_2F hinge{base.x, base.y - half * 0.05f * cp};
+  const float angle = LeverAngle(p.press) * kDegrees;
+  const float length = half * 0.95f;
+  const D2D1_POINT_2F tip{hinge.x + length * std::sin(angle), hinge.y - length * std::cos(angle) * cp};
+  if (const auto dark = Solid(t, Color(0.02f, 0.02f, 0.025f, 0.9f))) {
+    t->DrawLine(hinge, tip, dark.get(), 5.5f);
+  }
+  ink->SetOpacity(0.9f);
+  t->DrawLine(hinge, tip, ink.get(), 2.6f);
+
+  // The hinge pin.
+  if (const auto pin = Solid(t, Scale(p.body, 1.6f))) {
+    t->FillEllipse(D2D1::Ellipse(hinge, 3.4f, 3.4f), pin.get());
+  }
+  ink->SetOpacity(0.9f);
+  t->DrawEllipse(D2D1::Ellipse(hinge, 3.4f, 3.4f), ink.get(), 1);
+
+  // The knob: the state's colour, glowing a little round it.
+  const float kr = half * 0.17f;
+  Spot(t, tip, kr * 3.2f, kr * 3.2f, WithAlpha(p.signal, 0.30f * p.signal.a));
+  if (const auto knob = Linear(t, {tip.x - kr, tip.y - kr}, {tip.x + kr, tip.y + kr}, Scale(p.signal, 1.15f),
+                               Scale(p.signal, 0.7f))) {
+    t->FillEllipse(D2D1::Ellipse(tip, kr, kr), knob.get());
+  }
+  ink->SetOpacity(0.85f);
+  t->DrawEllipse(D2D1::Ellipse(tip, kr, kr), ink.get(), 1);
+  if (const auto shine = Solid(t, Color(1, 1, 1, 0.45f))) {
+    t->FillEllipse(D2D1::Ellipse({tip.x - kr * 0.35f, tip.y - kr * 0.38f}, kr * 0.28f, kr * 0.28f), shine.get());
+  }
+}
+
 }  // namespace
 
 CubePose CubePoseFor(Display display) {
   CubePose p;
+  // A drawing's palette: dark glass, light thin edges - the same in every
+  // state; the one colour is the lever's knob. On, the edges brighten and a
+  // faint white light stands round it.
+  p.body = Color(0.12f, 0.12f, 0.13f, 0.96f);
+  p.rim = Color(0.92f, 0.93f, 0.96f, 0.80f);
+  p.signal = Color(0.80f, 0.81f, 0.85f, 0.90f);
   switch (display) {
     case Display::On:
-      p.pitch = 34;
-      p.lift = 8;
-      p.glow = 1;
-      p.body = Scale(FromRef(ui::kAccent), 0.78f);
-      p.rim = Color(0.80f, 0.88f, 1.0f, 0.95f);
-      p.glyph = Color(0.97f, 0.98f, 1.0f, 1.0f);
+      p.pitch = 32;
+      p.lift = 6;
+      p.glow = 0.35f;
+      p.press = 1;
+      p.rim = Color(0.96f, 0.97f, 1.0f, 1.0f);
+      p.signal = Mix(FromRef(ui::kAccent), Color(1, 1, 1), 0.15f);
       break;
     case Display::Starting:
-      p.pitch = 30;
-      p.lift = 4;
-      p.glow = 0.35f;
-      p.body = Color(0.30f, 0.33f, 0.40f, 0.96f);
-      p.rim = Color(0.92f, 0.65f, 0.0f, 0.95f);
-      p.glyph = Color(0.95f, 0.72f, 0.20f, 1.0f);
+      p.pitch = 29;
+      p.lift = 3;
+      p.glow = 0.15f;
+      p.press = 0.55f;
+      p.rim = Color(0.94f, 0.95f, 0.98f, 0.90f);
+      p.signal = FromRef(ui::kWarning);
       break;
     case Display::Error:
       p.yaw = 20;  // askew: 25 degrees short of resting square
       p.pitch = 18;
-      p.body = Color(0.36f, 0.22f, 0.24f, 0.96f);
-      p.rim = FromRef(ui::kDanger, 0.9f);
-      p.glyph = Color(1.0f, 0.62f, 0.62f, 0.95f);
+      p.rim = Color(0.92f, 0.93f, 0.96f, 0.55f);
+      p.signal = FromRef(ui::kDanger);
       break;
     case Display::ServiceDown:
-      p.body = Color(0.21f, 0.22f, 0.25f, 0.95f);
-      p.rim = Color(0.70f, 0.72f, 0.78f, 0.25f);
-      p.glyph = Color(0.80f, 0.82f, 0.88f, 0.40f);
+      p.body = Color(0.10f, 0.10f, 0.11f, 0.95f);
+      p.rim = Color(0.85f, 0.87f, 0.92f, 0.35f);
+      p.signal = Color(0.6f, 0.62f, 0.66f, 0.5f);
       break;
-    case Display::Off:
-      p.body = Color(0.29f, 0.31f, 0.36f, 0.96f);
-      p.rim = Color(0.78f, 0.81f, 0.88f, 0.40f);
-      p.glyph = Color(0.86f, 0.88f, 0.93f, 0.80f);
-      break;
+    case Display::Off: break;
   }
   return p;
 }
@@ -183,10 +268,13 @@ CubePose BlendPose(const CubePose& a, const CubePose& b, float t) {
           .pitch = lerp(a.pitch, b.pitch),
           .lift = lerp(a.lift, b.lift),
           .glow = lerp(a.glow, b.glow),
+          .press = lerp(a.press, b.press),
           .body = Mix(a.body, b.body, t),
           .rim = Mix(a.rim, b.rim, t),
-          .glyph = Mix(a.glyph, b.glyph, t)};
+          .signal = Mix(a.signal, b.signal, t)};
 }
+
+float LeverAngle(float press) { return -38 + 76 * std::clamp(press, 0.0f, 1.0f); }
 
 float EaseOut(float t) {
   t = std::clamp(t, 0.0f, 1.0f);
@@ -227,14 +315,13 @@ std::vector<CubeFace> CubeFaces(const CubePose& pose, D2D1_POINT_2F center, floa
   return faces;
 }
 
-void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool hovered, bool pressed,
-              IDWriteTextFormat* glyphFormat, std::wstring_view glyph) {
+void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool hovered, bool pressed) {
   CubePose p = pose;
-  if (pressed) {
-    p.lift = std::max(0.0f, p.lift - 3);
-    p.body = Scale(p.body, 0.92f);
-  } else if (hovered) {
-    p.lift += 2;
+  // The lever answers the pointer: under it, it leans toward the other side;
+  // pushed, it goes most of the way.
+  const float toward = p.press > 0.5f ? -1.0f : 1.0f;
+  p.press = std::clamp(p.press + toward * (pressed ? 0.45f : hovered ? 0.15f : 0.0f), 0.0f, 1.0f);
+  if (hovered && !pressed) {
     p.body = Scale(p.body, 1.08f);
   }
   const float size = box.right - box.left;
@@ -271,8 +358,11 @@ void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool 
     }
   }
 
-  // The edges catch the light: where two lit faces meet, bright; the outline, softer.
+  // The edges catch the light: where two lit faces meet, bright; the outline,
+  // softer - and running on past the corners in dashes, a drawing's
+  // construction lines; a point at each corner.
   const auto edges = Solid(t, p.rim);
+  std::vector<std::pair<D2D1_POINT_2F, D2D1_POINT_2F>> outline;
   if (edges) {
     for (std::size_t i = 0; i < faces.size(); ++i) {
       for (std::size_t c = 0; c < 4; ++c) {
@@ -293,35 +383,61 @@ void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool 
         if (drawn) {
           continue;
         }
-        edges->SetOpacity(shared ? 1.0f : 0.55f);
-        t->DrawLine(a, b, edges.get(), shared ? 1.4f : 1.0f);
+        if (!shared) {
+          outline.emplace_back(a, b);
+        }
+        edges->SetOpacity(shared ? 0.75f : 1.0f);
+        t->DrawLine(a, b, edges.get(), shared ? 1.0f : 1.2f);
       }
+    }
+    const auto dashed = Dashed(t);
+    edges->SetOpacity(0.22f);
+    for (const auto& [a, b] : outline) {
+      t->DrawLine(b, Beyond(a, b, half * 0.9f), edges.get(), 1, dashed.get());
+      t->DrawLine(a, Beyond(b, a, half * 0.9f), edges.get(), 1, dashed.get());
+    }
+    edges->SetOpacity(0.95f);
+    for (const auto& [a, b] : outline) {
+      t->FillEllipse(D2D1::Ellipse(a, 1.7f, 1.7f), edges.get());
     }
   }
 
-  // The power sign lying on the top face: as wide as the face, foreshortened
-  // by the tilt, upright whatever the turn.
-  if (glyphFormat != nullptr && !glyph.empty()) {
-    const auto top = std::find_if(faces.begin(), faces.end(), [](const CubeFace& f) { return f.top; });
-    if (top != faces.end()) {
-      D2D1_POINT_2F mid{0, 0};
-      for (const auto& c : top->corners) {
-        mid.x += c.x / 4;
-        mid.y += c.y / 4;
-      }
-      constexpr float kBox = 40;
-      const float scale = half * 1.15f / kBox;
-      const float squash = std::sin(p.pitch * kDegrees);
-      D2D1_MATRIX_3X2_F before{};
-      t->GetTransform(&before);
-      const D2D1_MATRIX_3X2_F onTop = D2D1::Matrix3x2F(scale, 0, 0, scale * squash, mid.x - scale * kBox / 2,
-                                                       mid.y - scale * squash * kBox / 2);
-      t->SetTransform(onTop * before);
-      if (const auto ink = Solid(t, WithAlpha(p.glyph, p.glyph.a * (0.55f + 0.45f * top->shade)))) {
-        t->DrawText(glyph.data(), static_cast<UINT32>(glyph.size()), glyphFormat, D2D1::RectF(0, 0, kBox, kBox),
-                    ink.get());
-      }
-      t->SetTransform(before);
+  DrawLever(t, p, faces, half);
+}
+
+void DrawBlueprint(ID2D1RenderTarget* t, D2D1_SIZE_F size, D2D1_POINT_2F focus) {
+  const auto ink = Solid(t, Color(1, 1, 1, 1));
+  if (!ink) {
+    return;
+  }
+  constexpr float kCell = 40;
+  // The grid, through the focus.
+  ink->SetOpacity(0.028f);
+  const float x0 = std::fmod(focus.x, kCell);
+  const float y0 = std::fmod(focus.y, kCell);
+  for (float x = x0; x < size.width; x += kCell) {
+    t->DrawLine({x, 0}, {x, size.height}, ink.get(), 1);
+  }
+  for (float y = y0; y < size.height; y += kCell) {
+    t->DrawLine({0, y}, {size.width, y}, ink.get(), 1);
+  }
+  // The isometric axes (30 degrees off the horizontal) and the vertical, in dashes.
+  const auto dashed = Dashed(t);
+  ink->SetOpacity(0.075f);
+  const float reach = size.width + size.height;
+  const float rise = std::tan(30 * kDegrees);
+  for (const float side : {-1.0f, 1.0f}) {
+    t->DrawLine({focus.x - reach * side, focus.y - reach * rise}, {focus.x + reach * side, focus.y + reach * rise},
+                ink.get(), 1, dashed.get());
+  }
+  t->DrawLine({focus.x, 0}, {focus.x, size.height}, ink.get(), 1, dashed.get());
+  // Crosses at every third crossing of the grid.
+  ink->SetOpacity(0.16f);
+  constexpr float kArm = 3.5f;
+  for (float x = std::fmod(focus.x, kCell * 3); x < size.width; x += kCell * 3) {
+    for (float y = std::fmod(focus.y, kCell * 3); y < size.height; y += kCell * 3) {
+      t->DrawLine({x - kArm, y}, {x + kArm, y}, ink.get(), 1);
+      t->DrawLine({x, y - kArm}, {x, y + kArm}, ink.get(), 1);
     }
   }
 }

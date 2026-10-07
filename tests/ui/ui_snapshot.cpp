@@ -49,7 +49,13 @@ UiContent SampleContent() {
   packetlab.detail = L"подписка · серверов: 3 (выкл. 1) · 27.09 19:20";
   packetlab.subscription = true;
   packetlab.host = L"packetlab.tech";
-  packetlab.usage = L"Трафик: 3,2 ГБ из 100,0 ГБ · оплачено до 01.01.2027";
+  packetlab.usage = L"Трафик: 3,2 ГБ из 100,0 ГБ · оплачено до 01.01.2027 (ещё 87 дн.)";
+  packetlab.trafficUsed = L"3,2 ГБ";
+  packetlab.trafficTotal = L"100,0 ГБ";
+  packetlab.trafficShare = 0.032f;
+  packetlab.paidTill = L"01.01.2027";
+  packetlab.daysLeft = 87;
+  packetlab.serverCount = 3;
   packetlab.support = true;
   packetlab.updated = L"27.09 19:20";
   packetlab.period = L"каждые 12 ч (как советует сервер)";

@@ -6,6 +6,7 @@
 #include <array>
 #include <cctype>
 #include <format>
+#include <initializer_list>
 #include <set>
 #include <utility>
 
@@ -211,10 +212,8 @@ std::set<std::string> Tags(const Json& list) {
 }
 
 Json LocalDnsServer(RoutingSettings::LocalDns local) {
-  switch (local) {
-    case RoutingSettings::LocalDns::Cloudflare: return Json{{"type", "https"}, {"tag", kLocalDns}, {"server", "1.1.1.1"}};
-    case RoutingSettings::LocalDns::Google: return Json{{"type", "https"}, {"tag", kLocalDns}, {"server", "8.8.8.8"}};
-    case RoutingSettings::LocalDns::System: break;
+  if (const std::string_view address = LocalDnsAddress(local); !address.empty()) {
+    return Json{{"type", "https"}, {"tag", kLocalDns}, {"server", std::string(address)}};
   }
   return Json{{"type", "local"}, {"tag", kLocalDns}};
 }
@@ -342,6 +341,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
                                                                             : "cloudflare"},
           {"localDns", s.localDns == RoutingSettings::LocalDns::Google   ? "google"
                        : s.localDns == RoutingSettings::LocalDns::System ? "system"
+                       : s.localDns == RoutingSettings::LocalDns::Quad9  ? "quad9"
                                                                           : "cloudflare"},
           {"ipv4Only", s.ipv4Only},
           {"rules", std::move(rules)},
@@ -398,6 +398,7 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   const std::string local = text("localDns");
   s.localDns = local == "google"   ? RoutingSettings::LocalDns::Google
                : local == "system" ? RoutingSettings::LocalDns::System
+               : local == "quad9"  ? RoutingSettings::LocalDns::Quad9
                                    : RoutingSettings::LocalDns::Cloudflare;
   if (const auto it = json.find("rules"); it != json.end() && it->is_array()) {
     for (const auto& entry : *it) {
@@ -940,6 +941,58 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     dns.erase("strategy");
   }
   return config.dump(2, ' ', false, Json::error_handler_t::replace);
+}
+
+std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns pick) {
+  using LocalDns = RoutingSettings::LocalDns;
+  std::vector<LocalDns> order{pick};
+  for (const LocalDns dns : {LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::System}) {
+    if (dns != pick && dns != LocalDns::System) {
+      order.push_back(dns);
+    }
+  }
+  if (pick != LocalDns::System) {
+    order.push_back(LocalDns::System);
+  }
+  return order;
+}
+
+std::string_view LocalDnsAddress(RoutingSettings::LocalDns dns) {
+  switch (dns) {
+    case RoutingSettings::LocalDns::Cloudflare: return "1.1.1.1";
+    case RoutingSettings::LocalDns::Google: return "8.8.8.8";
+    case RoutingSettings::LocalDns::Quad9: return "9.9.9.9";
+    case RoutingSettings::LocalDns::System: break;
+  }
+  return {};
+}
+
+std::string_view LocalDnsName(RoutingSettings::LocalDns dns) {
+  switch (dns) {
+    case RoutingSettings::LocalDns::Cloudflare: return "Cloudflare";
+    case RoutingSettings::LocalDns::Google: return "Google";
+    case RoutingSettings::LocalDns::Quad9: return "Quad9";
+    case RoutingSettings::LocalDns::System: break;
+  }
+  return "системный";
+}
+
+bool LocalDnsUnreachable(std::string_view line, std::string_view address) {
+  if (address.empty()) {
+    return false;
+  }
+  const std::string at = std::string(address) + ":443";
+  const std::size_t found = line.find(at);
+  // The address itself, not the tail of a longer one ("11.1.1.1:443").
+  if (found == std::string_view::npos || (found > 0 && (std::isdigit(static_cast<unsigned char>(line[found - 1])) != 0 ||
+                                                        line[found - 1] == '.'))) {
+    return false;
+  }
+  return std::ranges::any_of(std::initializer_list<std::string_view>{"i/o timeout", "connection refused",
+                                                                      "actively refused", "connection reset",
+                                                                      "forcibly closed", "no route",
+                                                                      "unreachable network", "deadline exceeded"},
+                             [&](std::string_view why) { return line.find(why) != std::string_view::npos; });
 }
 
 }  // namespace sovereign::tray
