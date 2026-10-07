@@ -1886,31 +1886,51 @@ class Painter {
   // the router, a device around, or an address typed in.
   float LocalNetwork(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = Heading(l, L"Локальная сеть", x0, x1, y,
-                L"Закрыта — ни устройства сети к компьютеру, ни компьютер к ним: общие папки, принтер, панель "
-                L"роутера, телевизор, телефон по Wi-Fi. Компьютер не видно в «Сети» у других. Открыты только те, "
-                L"кого включишь ниже.\n\nИнтернет это не трогает: он идёт через роутер, но уже зашифрованный "
-                L"туннелем. Действует, пока подключение включено.");
-    y = Switches(l, {Row(L"Закрыть", {}, c.lanClosed, UiCommand::ToggleLanClosed)}, x0, x1, y) + kGap;
+                L"Фильтр только на этом компьютере. Роутер, телефоны и другие устройства работают как обычно и "
+                L"пользуются интернетом — они просто не могут связаться с этим компьютером, а он с ними: общие "
+                L"папки, принтер, трансляция на телевизор, передача файлов с телефона.\n\nИнтернет этого "
+                L"компьютера тоже идёт через роутер, но зашифрованным: роутер не видит, какие сайты открыты. "
+                L"Закрытый роутер — это только его настройки и его DNS.\n\nСовсем спрятаться нельзя: роутер "
+                L"видит, что компьютер подключён, а сканер сети на телефоне — что по его адресу есть устройство. "
+                L"Связаться с ним никто не сможет.\n\nДействует, пока подключение включено.");
+    y = Switches(l,
+                 {Row(L"Закрыть компьютер от сети", {}, c.lanClosed, UiCommand::ToggleLanClosed,
+                      c.lanClosed ? L"Никто в сети к нему, он ни к кому" : L"Компьютер виден в сети, как обычно")},
+                 x0, x1, y) +
+        kGap;
     if (!c.lanClosed) {
       return y;
     }
+    // Each one's switch opens it: the line under says what that means now.
     std::vector<SwitchRow> rows;
     for (std::size_t i = 0; i < c.lanHosts.size(); ++i) {
       const UiLanHost& h = c.lanHosts[i];
-      const std::wstring name = h.router ? L"Роутер" : h.name;
-      std::wstring detail = name.empty() ? std::wstring() : h.address;
-      if (!h.seen) {
-        detail += (detail.empty() ? L"" : L" · ") + std::wstring(L"сейчас не в сети");
-      } else if (!h.mac.empty()) {
-        detail += (detail.empty() ? L"" : L" · ") + h.mac;
+      const std::wstring title = h.router ? L"Роутер" : h.name.empty() ? h.address : h.name;
+      std::vector<std::wstring> parts;
+      if (title != h.address && !h.router) {
+        parts.push_back(h.address);
       }
-      rows.push_back(Row(name.empty() ? h.address : name, {}, h.allowed, UiCommand::ToggleLanHost, std::move(detail),
-                         static_cast<int>(i)));
+      if (h.router) {
+        parts.emplace_back(h.allowed ? L"открыт: настройки доступны" : L"закрыт, интернет работает");
+      } else {
+        parts.emplace_back(h.allowed ? L"открыт" : L"закрыт");
+        if (!h.seen) {
+          parts.emplace_back(L"не в сети");
+        } else if (!h.mac.empty() && title == h.address) {
+          parts.push_back(h.mac);  // to tell one unnamed device from another
+        }
+      }
+      std::wstring detail;
+      for (const std::wstring& part : parts) {
+        detail += (detail.empty() ? L"" : L" · ") + part;
+      }
+      rows.push_back(Row(title, {}, h.allowed, UiCommand::ToggleLanHost, std::move(detail), static_cast<int>(i)));
     }
+    y = Paragraph(l, Kind::Caption, L"Кому всё же разрешить связь с компьютером:", x0 + 4, x1, y) + 6;
     if (!rows.empty()) {
       y = Switches(l, rows, x0, x1, y) + 8;
     }
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Открыть адрес", kGlyphAdd,
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Открыть устройство по IP", kGlyphAdd,
                                   UiCommand::AddLanHost));
     return y + kButton + kGap + 4;
   }
