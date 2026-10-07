@@ -206,6 +206,10 @@ std::string WfpKillSwitch::Apply(const std::vector<KillSwitchRule>& rules) {
   if (rules.size() > kMaxFilters) {
     return "too many kill switch filters";
   }
+  // An FWP_UINT8 weight past 15 fails the whole transaction (FWP_E_INVALID_WEIGHT).
+  if (std::any_of(rules.begin(), rules.end(), [](const KillSwitchRule& r) { return r.weight > 15; })) {
+    return "a kill switch filter's weight is past 15";
+  }
   Engine engine;
   if (engine.Status() != ERROR_SUCCESS) {
     return Failed("opening the filtering engine", engine.Status());

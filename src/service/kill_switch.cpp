@@ -190,8 +190,10 @@ std::vector<KillSwitchRule> BuildKillSwitchRules(const KillSwitchSettings& setti
     std::vector<Prefix> tunnelPrefixes;
     std::copy_if(tun.begin(), tun.end(), std::back_inserter(tunnelPrefixes), [&](const Prefix& p) { return p.v6 == v6; });
 
-    // The local network closed: above everything of the kill switch's (its
-    // weights are 0..15), the core's permit included.
+    // The local network closed: above everything of the kill switch's, the
+    // core's permit included - 10..15 here, the kill switch 0..9. WFP takes
+    // no more than 0..15 for a filter's FWP_UINT8 weight (FWP_E_INVALID_WEIGHT,
+    // 0x80320025, past it).
     if (settings.lanClosed) {
       std::vector<Prefix> allowed;
       for (const std::string& text : settings.lanAllowed) {
@@ -205,31 +207,31 @@ std::vector<KillSwitchRule> BuildKillSwitchRules(const KillSwitchSettings& setti
           r.inbound = inbound;
           return r;
         };
-        KillSwitchRule loopback = lanRule(true, 21, "loopback");
+        KillSwitchRule loopback = lanRule(true, 15, "loopback");
         loopback.loopback = true;
         rules.push_back(std::move(loopback));
 
         if (!tunnelPrefixes.empty()) {
-          KillSwitchRule tunnel = lanRule(true, 20, "the tunnel");
+          KillSwitchRule tunnel = lanRule(true, 14, "the tunnel");
           tunnel.localPrefixes = tunnelPrefixes;
           rules.push_back(std::move(tunnel));
         }
 
         if (!inbound) {
-          KillSwitchRule dns = lanRule(false, 19, "no DNS");
+          KillSwitchRule dns = lanRule(false, 13, "no DNS");
           dns.remotePrefixes = LanPrefixes(v6);
           dns.remotePort = 53;
           rules.push_back(std::move(dns));
         }
 
         if (!allowed.empty()) {
-          KillSwitchRule let = lanRule(true, 18, "let in");
+          KillSwitchRule let = lanRule(true, 12, "let in");
           let.remotePrefixes = allowed;
           rules.push_back(std::move(let));
         }
 
         // DHCP: out to the server's port, back in to the client's.
-        KillSwitchRule dhcp = lanRule(true, 17, "DHCP");
+        KillSwitchRule dhcp = lanRule(true, 11, "DHCP");
         dhcp.protocol = 17;
         if (inbound) {
           dhcp.localPorts = {static_cast<std::uint16_t>(v6 ? 546 : 68)};
@@ -242,13 +244,13 @@ std::vector<KillSwitchRule> BuildKillSwitchRules(const KillSwitchSettings& setti
         // solicitation/advertisement, neighbour solicitation/advertisement,
         // redirect: types 133-137).
         if (v6) {
-          KillSwitchRule ndp = lanRule(true, 17, "neighbour discovery");
+          KillSwitchRule ndp = lanRule(true, 11, "neighbour discovery");
           ndp.protocol = 58;
           ndp.localPorts = {133, 134, 135, 136, 137};
           rules.push_back(std::move(ndp));
         }
 
-        KillSwitchRule closed = lanRule(false, 16, "closed");
+        KillSwitchRule closed = lanRule(false, 10, "closed");
         closed.remotePrefixes = LanPrefixes(v6);
         rules.push_back(std::move(closed));
       }
@@ -257,32 +259,32 @@ std::vector<KillSwitchRule> BuildKillSwitchRules(const KillSwitchSettings& setti
       continue;
     }
 
-    KillSwitchRule core = rule(true, 15, "the core");
+    KillSwitchRule core = rule(true, 9, "the core");
     core.coreApp = true;
     rules.push_back(std::move(core));
 
-    KillSwitchRule loopback = rule(true, 14, "loopback");
+    KillSwitchRule loopback = rule(true, 8, "loopback");
     loopback.loopback = true;
     rules.push_back(std::move(loopback));
 
     if (!tunnelPrefixes.empty()) {
-      KillSwitchRule tunnel = rule(true, 13, "the tunnel");
+      KillSwitchRule tunnel = rule(true, 7, "the tunnel");
       tunnel.localPrefixes = tunnelPrefixes;
       rules.push_back(std::move(tunnel));
     }
 
-    KillSwitchRule dhcp = rule(true, 12, "DHCP");
+    KillSwitchRule dhcp = rule(true, 6, "DHCP");
     dhcp.protocol = 17;
     dhcp.remotePort = v6 ? 547 : 67;
     rules.push_back(std::move(dhcp));
 
     if (settings.allowLan && !settings.lanClosed) {
-      KillSwitchRule lanDns = rule(false, 11, "no DNS in the local network");
+      KillSwitchRule lanDns = rule(false, 5, "no DNS in the local network");
       lanDns.remotePrefixes = LanPrefixes(v6);
       lanDns.remotePort = 53;
       rules.push_back(std::move(lanDns));
 
-      KillSwitchRule lan = rule(true, 10, "the local network");
+      KillSwitchRule lan = rule(true, 4, "the local network");
       lan.remotePrefixes = LanPrefixes(v6);
       rules.push_back(std::move(lan));
     }

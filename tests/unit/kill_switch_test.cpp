@@ -61,6 +61,7 @@ void TestRules() {
   // IPv4: core, loopback, tunnel, DHCP, LAN DNS block, LAN, block all; IPv6 has no tunnel address here.
   CHECK(Count(rules, false) == 7);
   CHECK(Count(rules, true) == 6);
+  CHECK(std::all_of(rules.begin(), rules.end(), [](const auto& r) { return r.weight <= 15; }));
   for (const bool v6 : {false, true}) {
     // The block-all is the lowest, the core's permit the highest.
     std::uint8_t lowest = 255;
@@ -130,8 +131,7 @@ void TestLanClosed() {
       CHECK(tunnel->permit && tunnel->weight > closed->weight);
       CHECK(dhcp->permit && dhcp->weight > closed->weight);
       CHECK(inbound ? (dhcp->localPorts.size() == 1 && !dhcp->remotePort) : (dhcp->remotePort && dhcp->localPorts.empty()));
-      // Above the kill switch's own rules (0..15): the core gets no way around it.
-      CHECK(closed->weight > 15);
+
       // Not even an address let in answers names.
       const KillSwitchRule* dns = LanRule(rules, v6, inbound, "no DNS");
       CHECK(inbound ? dns == nullptr : (dns != nullptr && !dns->permit && dns->weight > let->weight));
@@ -149,6 +149,19 @@ void TestLanClosed() {
   CHECK(std::none_of(both.begin(), both.end(), [](const auto& r) { return r.name == "the local network"; }));
   CHECK(LanRule(both, false, false, "let in") == nullptr);  // nothing let in: no such rule
   CHECK(both.size() <= 64);
+  // Above every rule of the kill switch's (the core gets no way around it),
+  // and within what WFP takes for a weight: 0..15.
+  std::uint8_t lowestLan = 255;
+  std::uint8_t highestKill = 0;
+  for (const auto& r : both) {
+    CHECK(r.weight <= 15);
+    if (r.name.starts_with("LAN")) {
+      lowestLan = std::min(lowestLan, r.weight);
+    } else {
+      highestKill = std::max(highestKill, r.weight);
+    }
+  }
+  CHECK(lowestLan > highestKill);
 }
 
 }  // namespace

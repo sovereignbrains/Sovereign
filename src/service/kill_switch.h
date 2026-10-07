@@ -71,7 +71,7 @@ std::vector<Prefix> TunPrefixes(std::string_view config);
 struct KillSwitchRule {
   bool v6 = false;
   bool permit = false;
-  std::uint8_t weight = 0;     // higher wins within the kill switch
+  std::uint8_t weight = 0;     // higher wins within the kill switch; 0..15, all WFP takes
   bool inbound = false;        // a connection to the PC (else one it makes)
   bool coreApp = false;        // the connection is sovereign-core.exe's
   bool loopback = false;
