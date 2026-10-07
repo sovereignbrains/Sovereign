@@ -120,11 +120,15 @@ void TestLanClosed() {
       const KillSwitchRule* let = LanRule(rules, v6, inbound, "let in");
       const KillSwitchRule* tunnel = LanRule(rules, v6, inbound, "the tunnel");
       const KillSwitchRule* dhcp = LanRule(rules, v6, inbound, "DHCP");
-      CHECK(closed != nullptr && !closed->permit && !closed->remotePrefixes.empty() && closed->coreApp == false);
+      CHECK(closed != nullptr && let != nullptr && tunnel != nullptr && dhcp != nullptr);
+      if (closed == nullptr || let == nullptr || tunnel == nullptr || dhcp == nullptr) {
+        continue;
+      }
+      CHECK(!closed->permit && !closed->remotePrefixes.empty() && closed->coreApp == false);
       // What's let in, the tunnel (in a private range itself) and DHCP win over the block.
-      CHECK(let != nullptr && let->permit && let->remotePrefixes.size() == 1 && let->weight > closed->weight);
-      CHECK(tunnel != nullptr && tunnel->permit && tunnel->weight > closed->weight);
-      CHECK(dhcp != nullptr && dhcp->permit && dhcp->weight > closed->weight);
+      CHECK(let->permit && let->remotePrefixes.size() == 1 && let->weight > closed->weight);
+      CHECK(tunnel->permit && tunnel->weight > closed->weight);
+      CHECK(dhcp->permit && dhcp->weight > closed->weight);
       CHECK(inbound ? (dhcp->localPorts.size() == 1 && !dhcp->remotePort) : (dhcp->remotePort && dhcp->localPorts.empty()));
       // Above the kill switch's own rules (0..15): the core gets no way around it.
       CHECK(closed->weight > 15);
@@ -140,7 +144,8 @@ void TestLanClosed() {
   const auto both =
       BuildKillSwitchRules({.enabled = true, .allowLan = true, .lanClosed = true, .lanAllowed = {}}, tun);
   const auto core = std::find_if(both.begin(), both.end(), [](const auto& r) { return r.coreApp; });
-  CHECK(core != both.end() && core->weight < LanRule(both, false, false, "closed")->weight);
+  const KillSwitchRule* bothClosed = LanRule(both, false, false, "closed");
+  CHECK(core != both.end() && bothClosed != nullptr && core->weight < bothClosed->weight);
   CHECK(std::none_of(both.begin(), both.end(), [](const auto& r) { return r.name == "the local network"; }));
   CHECK(LanRule(both, false, false, "let in") == nullptr);  // nothing let in: no such rule
   CHECK(both.size() <= 64);
