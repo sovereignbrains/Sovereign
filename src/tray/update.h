@@ -23,6 +23,9 @@ struct Version {
   auto operator<=>(const Version&) const = default;
 };
 
+// 0.0.0: a build for development (CMakeLists.txt) - no updates for it.
+inline bool IsDevelopmentBuild(const Version& v) { return v == Version{}; }
+
 // "1.2.3" or "v1.2.3"; nullopt for anything else (pre-release suffixes
 // included - the updater only follows plain releases).
 std::optional<Version> ParseVersion(std::string_view text);

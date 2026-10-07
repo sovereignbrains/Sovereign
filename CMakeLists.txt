@@ -16,7 +16,10 @@ endif()
 
 # The version the tray reports and compares with the latest release (the
 # updater); the release workflow passes the tag's. MAJOR.MINOR.PATCH.
-set(SOVEREIGN_VERSION "0.1.0" CACHE STRING "Sovereign's version, MAJOR.MINOR.PATCH")
+# 0.0.0 - not passed - is a build for development: it never checks for
+# updates (an older-looking version would be offered the release and
+# replaced by it on a click).
+set(SOVEREIGN_VERSION "0.0.0" CACHE STRING "Sovereign's version, MAJOR.MINOR.PATCH; 0.0.0: a development build")
 if (NOT SOVEREIGN_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR "SOVEREIGN_VERSION must be MAJOR.MINOR.PATCH, got '${SOVEREIGN_VERSION}'")
 endif()

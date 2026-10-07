@@ -130,6 +130,11 @@ target_link_libraries(unit-support-report PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-support-report)
 add_test(NAME unit-support-report COMMAND unit-support-report)
 
+add_executable(unit-cube cube_test.cpp check.h)
+target_link_libraries(unit-cube PRIVATE sovereign_tray_ui)
+sovereign_copy_asan_runtime(unit-cube)
+add_test(NAME unit-cube COMMAND unit-cube)
+
 add_executable(unit-lan lan_test.cpp check.h)
 target_link_libraries(unit-lan PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-lan)

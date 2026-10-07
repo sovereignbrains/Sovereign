@@ -114,6 +114,12 @@ void Updater::Set(const std::function<void(State&)>& change) {
 }
 
 void Updater::Run(const std::stop_token& stop) {
+  if (IsDevelopmentBuild(current_)) {
+    Set([](State& s) { s.status = Status::Off; });
+    std::unique_lock lock(mutex_);
+    wake_.wait(lock, stop, [] { return false; });  // asked or not: nothing to do till the end
+    return;
+  }
   auto next = std::chrono::steady_clock::now() + kFirstCheck;
   while (!stop.stop_requested()) {
     bool check = false;

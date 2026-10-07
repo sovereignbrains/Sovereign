@@ -26,7 +26,8 @@ namespace sovereign::tray {
 // updater's own thread, never the tray's worker - a download takes a while.
 class Updater {
  public:
-  enum class Status : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Ready, Failed };
+  // Off: a development build (update.h IsDevelopmentBuild) - never checks.
+  enum class Status : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Ready, Failed, Off };
   struct State {
     Status status = Status::Idle;
     std::string latest;      // the newest release's version, once known

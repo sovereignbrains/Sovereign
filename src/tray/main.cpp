@@ -3299,6 +3299,7 @@ UiContent ContentFrom(const View& v) {
       case Status::Downloading:
       case Status::Ready: c.update = sovereign::tray::UiUpdate::Downloading; break;
       case Status::Failed: c.update = sovereign::tray::UiUpdate::Failed; break;
+      case Status::Off: c.update = sovereign::tray::UiUpdate::Off; break;
     }
     c.updateVersion = Widen(update.latest);
     c.updateError = Widen(update.error);

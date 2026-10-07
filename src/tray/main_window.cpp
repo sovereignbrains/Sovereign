@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 
+#include "cube.h"
 #include "flags.h"
 #include "icons.h"
 #include "resource.h"
@@ -110,6 +111,12 @@ constexpr UINT kMenuRefreshDirect = 116;
 // An icon button's name shows when it's pointed at this long; a "?" at once.
 constexpr UINT_PTR kTipTimer = 1;
 constexpr UINT kTipDelayMs = 500;
+// The connect cube's motion (cube.h): frames while it moves, a turn into a
+// new state's pose, the turning while it connects (degrees per ms).
+constexpr UINT_PTR kCubeTimer = 2;
+constexpr UINT kCubeFrameMs = 15;
+constexpr ULONGLONG kCubeTurnMs = 520;
+constexpr float kCubeSpin = 0.12f;
 
 // Segoe Fluent Icons (Windows 11; the same code points in Segoe MDL2 Assets).
 constexpr const wchar_t* kGlyphSync = L"\xE895";
@@ -292,6 +299,7 @@ struct Interaction {
   int focus = -1;
   bool focusVisible = false;
   int tip = -1;  // the item whose tip shows: a "?" pointed at, an icon button pointed at a while
+  std::optional<CubePose> cube;  // the switch mid-motion (cube.h); none: at rest in its state's pose
 };
 
 bool Contains(const D2D1_RECT_F& r, float x, float y) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; }
@@ -446,6 +454,7 @@ std::wstring UpdateStatus(const UiContent& c) {
       return c.updateError.empty() ? L"Доступна версия " + c.updateVersion : L"Не удалось: " + c.updateError;
     case UiUpdate::Downloading: return L"Скачиваю версию " + c.updateVersion + L"…";
     case UiUpdate::Failed: return L"Не удалось проверить: " + c.updateError;
+    case UiUpdate::Off: return L"Сборка для разработки: обновления не проверяются.";
   }
   return {};
 }
@@ -573,7 +582,7 @@ class Painter {
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    glyphBig_ = MakeFormat(glyphs.c_str(), 34);  // the on/off button's
+    glyphBig_ = MakeFormat(glyphs.c_str(), 30);  // the power sign on the cube's top (cube.h: a 40-DIP box)
     glyphBig_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   }
 
@@ -627,7 +636,7 @@ class Painter {
     if (FAILED(t->CreateSolidColorBrush(Rgb(0, 0, 0), brush.put()))) {
       return;
     }
-    Canvas k{t, brush.get(), dwrite_.get(), Flags(t)};
+    Canvas k{t, brush.get(), dwrite_.get(), Flags(t), in.cube ? &*in.cube : nullptr};
     const D2D1_SIZE_F size = t->GetSize();
     t->Clear(FromColorRef(ui::kWindowColor));
 
@@ -765,6 +774,7 @@ class Painter {
     ID2D1SolidColorBrush* b;
     IDWriteFactory* dwrite;  // for text with flags in it
     ID2D1Bitmap* sprite;     // the flags (flags.h); null if it couldn't be had
+    const CubePose* cube;    // the switch's pose mid-motion; null: its state's (cube.h)
 
     ID2D1Brush* Color(D2D1_COLOR_F c) const { return SetColor(b, c); }
     void Fill(D2D1_RECT_F r, D2D1_COLOR_F c) const { t->FillRectangle(r, Color(c)); }
@@ -1995,7 +2005,7 @@ class Painter {
       Item check = CommandItem(Kind::Button, button,
                                c.update == UiUpdate::Downloading ? L"Скачиваю…" : L"Проверить обновления",
                                kGlyphRefresh, UiCommand::CheckUpdate);
-      check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading;
+      check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
       l.items.push_back(std::move(check));
     }
     y += 110 + kGap;
@@ -2344,35 +2354,11 @@ class Painter {
     k.Text(it.text, body_.get(), textBox, ink);
   }
 
+  // The switch is a cube (cube.h): in the pose the window animates it
+  // through, or - a still picture, a snapshot - the state's own.
   void DrawPower(const Canvas& k, const Item& it, const UiContent& c, bool hovered, bool pressed) const {
-    const D2D1_RECT_F r = it.rect;
-    const D2D1_POINT_2F center{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
-    const float radius = (r.right - r.left) / 2;
-    D2D1_COLOR_F ring = FromColorRef(ui::kSecondaryText, 0.5f);
-    switch (c.display) {
-      case Display::On: ring = FromColorRef(ui::kAccent); break;
-      case Display::Starting: ring = FromColorRef(RGB(235, 165, 0)); break;
-      case Display::Error: ring = FromColorRef(ui::kDanger); break;
-      case Display::ServiceDown:
-      case Display::Off: break;
-    }
-    if (it.checked) {
-      // On: a soft halo, the accent disc, a dark glyph.
-      k.t->FillEllipse(D2D1::Ellipse(center, radius, radius), k.Color(FromColorRef(ui::kAccent, 0.12f)));
-      const float inner = radius - 7;
-      k.t->FillEllipse(D2D1::Ellipse(center, inner, inner),
-                       k.Color(FromColorRef(ui::kAccent, pressed ? 0.8f : (hovered ? 0.92f : 1.0f))));
-      if (c.display != Display::On) {
-        k.t->DrawEllipse(D2D1::Ellipse(center, radius - 2, radius - 2), k.Color(ring), 3);
-      }
-      k.Text(it.glyph, glyphBig_.get(), r, Rgb(12, 20, 36));
-    } else {
-      const float inner = radius - 7;
-      k.t->FillEllipse(D2D1::Ellipse(center, inner, inner),
-                       k.Color(Rgb(255, 255, 255, pressed ? 0.05f : (hovered ? 0.10f : 0.06f))));
-      k.t->DrawEllipse(D2D1::Ellipse(center, inner, inner), k.Color(ring), 2);
-      k.Text(it.glyph, glyphBig_.get(), r, FromColorRef(ui::kPrimaryText));
-    }
+    DrawCube(k.t, k.cube != nullptr ? *k.cube : CubePoseFor(c.display), it.rect, hovered, pressed, glyphBig_.get(),
+             it.glyph);
   }
 
   wil::com_ptr<ID2D1Factory> d2d_;
@@ -2453,6 +2439,67 @@ struct MainWindow::Impl {
 
   wil::com_ptr<ID2D1HwndRenderTarget> target;
   ULONGLONG deactivatedAt = 0;  // GetTickCount64 when the window last lost the focus
+
+  // The connect cube (cube.h): from the pose it was in to its state's since
+  // cubeStart, turning while it connects. A timer only while it moves and
+  // the window shows.
+  CubePose cubeFrom;
+  CubePose cubeTo;
+  ULONGLONG cubeStart = 0;
+  Display cubeDisplay = Display::Starting;
+  bool cubeKnown = false;
+
+  // Windows' "animation effects" (Accessibility > Visual effects): off, the
+  // cube takes each pose at once.
+  static bool Motion() {
+    BOOL on = TRUE;
+    return SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &on, 0) == FALSE || on != FALSE;
+  }
+
+  CubePose CubeAt(ULONGLONG now) const {
+    if (!Motion()) {
+      return cubeTo;
+    }
+    const auto since = static_cast<float>(now - cubeStart);
+    CubePose pose = BlendPose(cubeFrom, cubeTo, EaseOut(since / static_cast<float>(kCubeTurnMs)));
+    if (cubeDisplay == Display::Starting) {
+      pose.yaw = cubeFrom.yaw + since * kCubeSpin;
+    }
+    return pose;
+  }
+
+  bool CubeMoving(ULONGLONG now) const {
+    return Motion() && (cubeDisplay == Display::Starting || now - cubeStart < kCubeTurnMs);
+  }
+
+  // A new state: a turn from wherever the cube is into its pose - forward,
+  // to the next square-on yaw (askew by the pose's own offset).
+  void CubeTo(Display display) {
+    const ULONGLONG now = GetTickCount64();
+    if (cubeKnown && display == cubeDisplay) {
+      return;
+    }
+    CubePose to = CubePoseFor(display);
+    if (!cubeKnown) {
+      cubeKnown = true;
+      cubeFrom = to;
+      cubeStart = display == Display::Starting ? now : now - kCubeTurnMs;
+    } else {
+      cubeFrom = CubeAt(now);
+      cubeFrom.yaw = std::fmod(cubeFrom.yaw, 360.0f);
+      to.yaw = NextRestYaw(cubeFrom.yaw) + (to.yaw - 45);
+      cubeStart = now;
+    }
+    cubeTo = to;
+    cubeDisplay = display;
+    KickCube();
+  }
+
+  void KickCube() {
+    if (hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && CubeMoving(GetTickCount64())) {
+      SetTimer(hwnd, kCubeTimer, kCubeFrameMs, nullptr);
+    }
+  }
 
   Impl(HINSTANCE inst, CommandHandler handler) : instance(inst), onCommand(std::move(handler)) {
     WNDCLASSW wc{};
@@ -3217,6 +3264,14 @@ struct MainWindow::Impl {
         Hover(-1);
         return 0;
       case WM_TIMER:
+        if (wParam == kCubeTimer) {
+          // One more frame after the last move: it lands on the pose exactly.
+          if (!CubeMoving(GetTickCount64()) || IsWindowVisible(w) == FALSE) {
+            KillTimer(w, kCubeTimer);
+          }
+          InvalidateRect(w, nullptr, FALSE);
+          return 0;
+        }
         if (wParam == kTipTimer) {
           KillTimer(w, kTipTimer);
           if (IsKind(in.hover, Kind::IconButton) || IsKind(in.hover, Kind::NavItem)) {
@@ -3394,6 +3449,7 @@ struct MainWindow::Impl {
       }
       target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
     }
+    in.cube = cubeKnown ? std::optional(CubeAt(GetTickCount64())) : std::nullopt;
     target->BeginDraw();
     painter.Draw(target.get(), layout, content, in, log);
     if (target->EndDraw() == D2DERR_RECREATE_TARGET) {
@@ -3438,6 +3494,7 @@ void MainWindow::Show(UiPage page) {
   m.Go(page);
   ShowWindow(m.hwnd, IsIconic(m.hwnd) ? SW_RESTORE : SW_SHOW);
   SetForegroundWindow(m.hwnd);
+  m.KickCube();  // turning while it connects: the timer stopped while hidden
 }
 
 void MainWindow::Hide() { ShowWindow(impl_->hwnd, SW_HIDE); }
@@ -3457,6 +3514,7 @@ void MainWindow::Toggle() {
 bool MainWindow::IsVisible() const { return impl_->hwnd != nullptr && IsWindowVisible(impl_->hwnd) != FALSE; }
 
 void MainWindow::Update(const UiContent& content) {
+  impl_->CubeTo(content.display);
   impl_->content = content;
   if (IsVisible()) {
     impl_->Relayout();
