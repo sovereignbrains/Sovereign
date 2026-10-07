@@ -294,7 +294,7 @@ struct Run {
     return r;
   }
 
-  static CheckResult Lan() {
+  CheckResult Lan() const {
     CheckResult r;
     const auto [gateway, rtt] = PingGateway();
     if (gateway.empty()) {
@@ -303,10 +303,28 @@ struct Run {
       r.detail = "Нет адаптера со шлюзом — проверять нечего.";
       return r;
     }
+    // Closed by the user: the router is meant to be silent unless let in.
+    if (input.lanClosed) {
+      const bool open =
+          std::find(input.lanAllowed.begin(), input.lanAllowed.end(), gateway) != input.lanAllowed.end();
+      if (!open) {
+        r.status = rtt ? Status::Fail : Status::Ok;
+        r.summary = rtt ? std::format("{} отвечает, хотя сеть закрыта", gateway) : std::string("закрыта");
+        r.detail = rtt ? "Фильтр не держит: выключи и включи «Закрыть компьютер от сети» в настройках."
+                       : "Компьютер закрыт от локальной сети (настройки), роутер в том числе — так и задумано. "
+                         "Интернет это не трогает.";
+        return r;
+      }
+      r.status = rtt ? Status::Ok : Status::Fail;
+      r.summary = rtt ? std::format("{} · {} мс", gateway, *rtt) : std::format("{} не отвечает", gateway);
+      r.detail = rtt ? "Локальная сеть закрыта, роутер открыт и отвечает."
+                     : "Роутер открыт в настройках, но не отвечает.";
+      return r;
+    }
     if (!rtt) {
       r.status = Status::Fail;
       r.summary = std::format("{} не отвечает", gateway);
-      r.detail = "Локальная сеть недоступна. Если включён kill switch — включи в нём «Локальная сеть».";
+      r.detail = "Роутер не отвечает: связь с ним (Wi-Fi, кабель) или он сам.";
       return r;
     }
     r.status = Status::Ok;
@@ -452,7 +470,7 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
       case CheckId::DnsLeak: result = run.DnsLeak(); break;
       case CheckId::WebRtc: result = run.WebRtc(); break;
       case CheckId::Ipv6: result = run.Ipv6(); break;
-      case CheckId::Lan: result = Run::Lan(); break;
+      case CheckId::Lan: result = run.Lan(); break;
       case CheckId::DnsLatency: result = Run::DnsLatency(); break;
       case CheckId::Speed: result = run.Speed(); break;
       case CheckId::Route: result = run.Route(); break;

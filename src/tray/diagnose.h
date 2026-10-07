@@ -27,6 +27,11 @@ struct DiagnoseInput {
   std::wstring userAgent;
   // The core's newest log lines (UTF-8): where Route reads the outbound.
   std::function<std::vector<std::string>()> logs;
+  // The local network closed by the user (settings.h lanClosed, in force:
+  // the connection on), and the addresses let in: Lan says the router not
+  // answering is what was asked for - and answering, that the closing leaks.
+  bool lanClosed = false;
+  std::vector<std::string> lanAllowed;
 };
 
 // Each check as it starts (Running) and as it ends.

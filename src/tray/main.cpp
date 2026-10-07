@@ -2665,6 +2665,8 @@ std::vector<std::string> RecentLogLines(std::size_t count) {
 void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) {
   auto& shared = State();
   sovereign::tray::RoutingSettings routing;
+  bool lanClosed = false;
+  std::vector<std::string> lanAllowed;
   {
     const std::scoped_lock lock(shared.mutex);
     if (shared.view.checksRunning) {
@@ -2675,9 +2677,14 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) 
       shared.view.checks[static_cast<std::size_t>(id)] = {};
     }
     routing = shared.view.routing;
+    lanClosed = shared.view.lanClosed && shared.view.wantOn;  // in force only while on (UpdateKillSwitch)
+    for (const sovereign::tray::LanHost& h : shared.view.lanAllowed) {
+      lanAllowed.push_back(h.address);
+    }
   }
   g_checks.reset();  // the last run's thread, finished
-  g_checks.emplace([which = std::move(which), host = std::move(host), routing](const std::stop_token& stop) {
+  g_checks.emplace([which = std::move(which), host = std::move(host), routing, lanClosed,
+                    lanAllowed = std::move(lanAllowed)](const std::stop_token& stop) {
     const auto post = [] {
       auto& s = State();
       HWND window = nullptr;
@@ -2687,8 +2694,12 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) 
       }
       PostMessageW(window, kViewChangedMessage, 0, 0);
     };
-    const sovereign::tray::DiagnoseInput input{
-        .routing = routing, .host = host, .userAgent = kUserAgent, .logs = [] { return RecentLogLines(400); }};
+    const sovereign::tray::DiagnoseInput input{.routing = routing,
+                                               .host = host,
+                                               .userAgent = kUserAgent,
+                                               .logs = [] { return RecentLogLines(400); },
+                                               .lanClosed = lanClosed,
+                                               .lanAllowed = lanAllowed};
     sovereign::tray::RunChecks(stop, which, input,
                                [&](sovereign::tray::CheckId id, const sovereign::tray::CheckResult& result) {
                                  {
