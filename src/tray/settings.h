@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "app_rules.h"
+#include "lan.h"
 #include "profiles.h"
 #include "routing.h"
 
@@ -22,7 +23,7 @@ namespace sovereign::tray {
 //
 //   tray.json    {"wantOn", "profiles", "protocol", "routing", "appsMode", "apps",
 //                 "appPaths", "hideExitIp", "logLevel", "killSwitch",
-//                 "killSwitchLan"}
+//                 "lanClosed", "lanAllowed"}
 //   profiles\<id>\         one configuration (profiles.h), each with:
 //     config.json            the sing-box config: the subscription's copy,
 //                            the user's edits on it, or the user's own; the
@@ -67,7 +68,12 @@ struct TraySettings {
   // The kill switch (the service's kill_switch.h): in force while the
   // connection is meant to be on, so a drop doesn't let traffic around it.
   bool killSwitch = false;
-  bool killSwitchLan = true;  // the local network stays reachable
+  // The local network closed both ways while the connection is meant to be
+  // on - nothing of it reaches the PC, the PC reaches nothing of it - but for
+  // the addresses let in. Open, the kill switch doesn't close it either. (A
+  // tray.json from before it had "killSwitchLan": false for the same wish.)
+  bool lanClosed = false;
+  std::vector<LanHost> lanAllowed;  // at most kMaxLanAllowed
   // The subscription relay (relay.h): with no connection up, subscriptions are
   // fetched through it rather than directly. tray.json keeps the key
   // encrypted for this Windows user (DPAPI); both empty = none.

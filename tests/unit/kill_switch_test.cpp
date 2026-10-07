@@ -54,10 +54,10 @@ std::size_t Count(const std::vector<KillSwitchRule>& rules, bool v6) {
 }
 
 void TestRules() {
-  CHECK(BuildKillSwitchRules({.enabled = false}, {}).empty());
+  CHECK(BuildKillSwitchRules({.enabled = false, .allowLan = true, .lanClosed = false, .lanAllowed = {}}, {}).empty());
 
   const auto tun = TunPrefixes(R"({"inbounds":[{"type":"tun","address":["172.19.0.1/30"]}]})");
-  const auto rules = BuildKillSwitchRules({.enabled = true, .allowLan = true}, tun);
+  const auto rules = BuildKillSwitchRules({.enabled = true, .allowLan = true, .lanClosed = false, .lanAllowed = {}}, tun);
   // IPv4: core, loopback, tunnel, DHCP, LAN DNS block, LAN, block all; IPv6 has no tunnel address here.
   CHECK(Count(rules, false) == 7);
   CHECK(Count(rules, true) == 6);
@@ -89,9 +89,61 @@ void TestRules() {
   CHECK(tunnel != rules.end() && tunnel->permit && tunnel->localPrefixes.size() == 1);
 
   // Without the local network: no LAN rules at all.
-  const auto strict = BuildKillSwitchRules({.enabled = true, .allowLan = false}, tun);
+  const auto strict =
+      BuildKillSwitchRules({.enabled = true, .allowLan = false, .lanClosed = false, .lanAllowed = {}}, tun);
   CHECK(std::none_of(strict.begin(), strict.end(), [](const auto& r) { return !r.remotePrefixes.empty(); }));
   CHECK(Count(strict, false) == 5);
+}
+
+// A rule of the closed local network's, by direction and name's end.
+const KillSwitchRule* LanRule(const std::vector<KillSwitchRule>& rules, bool v6, bool inbound, const std::string& name) {
+  const auto it = std::find_if(rules.begin(), rules.end(), [&](const auto& r) {
+    return r.v6 == v6 && r.inbound == inbound && r.name.starts_with("LAN") && r.name.ends_with(name);
+  });
+  return it == rules.end() ? nullptr : &*it;
+}
+
+void TestLanClosed() {
+  const auto tun = TunPrefixes(R"({"inbounds":[{"type":"tun","address":["172.19.0.1/30","fdfe:dcba:9876::1/126"]}]})");
+  // Closed without the kill switch: only the local network's rules, both ways.
+  const auto rules =
+      BuildKillSwitchRules({.enabled = false,
+                            .allowLan = true,
+                            .lanClosed = true,
+                            .lanAllowed = {"192.168.31.1", "nope", "fe80::1"}},
+                           tun);
+  CHECK(!rules.empty());
+  CHECK(std::none_of(rules.begin(), rules.end(), [](const auto& r) { return r.coreApp; }));
+  for (const bool v6 : {false, true}) {
+    for (const bool inbound : {false, true}) {
+      const KillSwitchRule* closed = LanRule(rules, v6, inbound, "closed");
+      const KillSwitchRule* let = LanRule(rules, v6, inbound, "let in");
+      const KillSwitchRule* tunnel = LanRule(rules, v6, inbound, "the tunnel");
+      const KillSwitchRule* dhcp = LanRule(rules, v6, inbound, "DHCP");
+      CHECK(closed != nullptr && !closed->permit && !closed->remotePrefixes.empty() && closed->coreApp == false);
+      // What's let in, the tunnel (in a private range itself) and DHCP win over the block.
+      CHECK(let != nullptr && let->permit && let->remotePrefixes.size() == 1 && let->weight > closed->weight);
+      CHECK(tunnel != nullptr && tunnel->permit && tunnel->weight > closed->weight);
+      CHECK(dhcp != nullptr && dhcp->permit && dhcp->weight > closed->weight);
+      CHECK(inbound ? (dhcp->localPorts.size() == 1 && !dhcp->remotePort) : (dhcp->remotePort && dhcp->localPorts.empty()));
+      // Above the kill switch's own rules (0..15): the core gets no way around it.
+      CHECK(closed->weight > 15);
+      // Not even an address let in answers names.
+      const KillSwitchRule* dns = LanRule(rules, v6, inbound, "no DNS");
+      CHECK(inbound ? dns == nullptr : (dns != nullptr && !dns->permit && dns->weight > let->weight));
+      CHECK((LanRule(rules, v6, inbound, "neighbour discovery") != nullptr) == v6);
+    }
+  }
+
+  // With the kill switch too: its rules under the closed network's, and its
+  // LAN permit gone even with allowLan.
+  const auto both =
+      BuildKillSwitchRules({.enabled = true, .allowLan = true, .lanClosed = true, .lanAllowed = {}}, tun);
+  const auto core = std::find_if(both.begin(), both.end(), [](const auto& r) { return r.coreApp; });
+  CHECK(core != both.end() && core->weight < LanRule(both, false, false, "closed")->weight);
+  CHECK(std::none_of(both.begin(), both.end(), [](const auto& r) { return r.name == "the local network"; }));
+  CHECK(LanRule(both, false, false, "let in") == nullptr);  // nothing let in: no such rule
+  CHECK(both.size() <= 64);
 }
 
 }  // namespace
@@ -101,6 +153,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestPrefixes();
     TestTunPrefixes();
     TestRules();
+    TestLanClosed();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 1;

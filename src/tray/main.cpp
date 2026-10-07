@@ -68,6 +68,7 @@
 #include "protocol_choice.h"
 #include "icons.h"
 #include "json_field.h"
+#include "lan.h"
 #include "log_lines.h"
 #include "main_window.h"
 #include "pipe_client.h"
@@ -156,6 +157,9 @@ constexpr std::chrono::minutes kAutoRetest{10};
 // screen says it once it's back).
 constexpr std::chrono::seconds kFailRecheck{30};
 constexpr std::chrono::minutes kFailRetest{5};
+
+// The local network's devices are looked at this often (lan.h).
+constexpr std::chrono::seconds kLanScan{10};
 
 // A switch of the running selector the service refused is retried this often.
 constexpr std::chrono::seconds kSelectRetry{5};
@@ -286,7 +290,9 @@ struct View {
   bool hideExitIp = false;
   std::string logLevel;
   bool killSwitch = false;
-  bool killSwitchLan = true;
+  bool lanClosed = false;
+  std::vector<sovereign::tray::LanHost> lanAllowed;
+  std::vector<sovereign::tray::LanDevice> lanDevices;  // around now (while the window may show them)
   bool killSwitchActive = false;
   std::string killSwitchError;
   std::string relayUrl;  // the subscription relay's address; never its key
@@ -402,7 +408,8 @@ struct Shared {
   bool pendingToggleExitIp = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
-  bool pendingToggleKillSwitchLan = false;
+  bool pendingToggleLanClosed = false;
+  std::vector<std::pair<sovereign::tray::LanHost, bool>> pendingLan;  // an address let in (true) or not, in order
   std::optional<AppsChange> pendingApps;
   std::optional<std::string> pendingProtocol;  // a selector option; "" = the config's own default
   std::optional<std::pair<std::string, ConfigChoice>> pendingChoice;  // a profile id and what to do
@@ -418,7 +425,7 @@ struct Shared {
            pendingRemove ||
            pendingRefresh || pendingRelay ||
            pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingToggleKillSwitch ||
-           pendingToggleKillSwitchLan || pendingApps || pendingProtocol ||
+           pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
 };
@@ -513,6 +520,14 @@ std::optional<sovereign::tray::Stats> PollStats() {
     // "gocore not loaded" and the like: the service is up, the box can't run.
     return sovereign::tray::Stats{};
   }
+  std::vector<std::string> lanAllowed;
+  if (const auto it = json.find("lan_allowed"); it != json.end() && it->is_array()) {
+    for (const auto& address : *it) {
+      if (address.is_string()) {
+        lanAllowed.push_back(address.get<std::string>());
+      }
+    }
+  }
   return sovereign::tray::Stats{
       .running = sovereign::tray::Field<bool>(json, "running", false),
       .uplinkBytes = sovereign::tray::Field<std::int64_t>(json, "uplink", 0),
@@ -522,6 +537,8 @@ std::optional<sovereign::tray::Stats> PollStats() {
       .configSha256 = sovereign::tray::Field<std::string>(json, "config_sha256", {}),
       .killSwitch = sovereign::tray::Field<bool>(json, "kill_switch", false),
       .killSwitchLan = sovereign::tray::Field<bool>(json, "kill_switch_lan", true),
+      .lanClosed = sovereign::tray::Field<bool>(json, "lan_closed", false),
+      .lanAllowed = std::move(lanAllowed),
   };
 }
 
@@ -572,7 +589,8 @@ class Worker {
       bool toggleExitIp = false;
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
-      bool toggleKillSwitchLan = false;
+      bool toggleLanClosed = false;
+      std::vector<std::pair<sovereign::tray::LanHost, bool>> lan;
       {
         const std::scoped_lock lock(shared.mutex);
         want = std::exchange(shared.pendingWant, std::nullopt);
@@ -591,7 +609,8 @@ class Worker {
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
-        toggleKillSwitchLan = std::exchange(shared.pendingToggleKillSwitchLan, false);
+        toggleLanClosed = std::exchange(shared.pendingToggleLanClosed, false);
+        lan = std::exchange(shared.pendingLan, {});
       }
       if (want) {
         settings_.wantOn = *want;
@@ -688,12 +707,24 @@ class Worker {
         lastKillSwitchTry_.reset();
         Save();
       }
-      if (toggleKillSwitchLan) {
-        settings_.killSwitchLan = !settings_.killSwitchLan;
+      if (toggleLanClosed || !lan.empty()) {
+        if (toggleLanClosed) {
+          settings_.lanClosed = !settings_.lanClosed;
+        }
+        for (auto& [host, allow] : lan) {
+          auto& list = settings_.lanAllowed;
+          const auto same = [&](const sovereign::tray::LanHost& h) { return h.address == host.address; };
+          if (!allow) {
+            std::erase_if(list, same);
+          } else if (std::none_of(list.begin(), list.end(), same) && list.size() < sovereign::tray::kMaxLanAllowed) {
+            list.push_back(std::move(host));
+          }
+        }
         killSwitchError_.clear();
         lastKillSwitchTry_.reset();
         Save();
       }
+      ScanLan();
       UpdateKillSwitch(stats);
       if (logLevel && *logLevel != settings_.logLevel) {
         settings_.logLevel = *logLevel;
@@ -1559,15 +1590,34 @@ class Worker {
   // The kill switch as it should be - on while the connection is meant to be
   // on - against what the service reports; told when they differ (a failure
   // is retried now and then, not every second).
+  // The devices around on the local network (the PC's neighbour table): for
+  // the window's list to let them in from. Cheap - a table the system keeps.
+  void ScanLan() {
+    const auto now = TrayModel::Clock::now();
+    if (lastLanScan_ && now - *lastLanScan_ < kLanScan) {
+      return;
+    }
+    lastLanScan_ = now;
+    lanDevices_ = sovereign::tray::LanDevices();
+  }
+
   void UpdateKillSwitch(const std::optional<sovereign::tray::Stats>& stats) {
     if (!stats) {
       killSwitchActive_ = false;
       return;
     }
     killSwitchActive_ = stats->killSwitch;
+    // Both while the connection is meant to be on. Open, the local network
+    // stays reachable with the kill switch too; closed, only what's let in.
     const bool enabled = settings_.killSwitch && settings_.wantOn;
-    const bool differs =
-        stats->killSwitch != enabled || (enabled && stats->killSwitchLan != settings_.killSwitchLan);
+    const bool lanClosed = settings_.lanClosed && settings_.wantOn;
+    std::vector<std::string> allowed;
+    allowed.reserve(settings_.lanAllowed.size());
+    for (const sovereign::tray::LanHost& host : settings_.lanAllowed) {
+      allowed.push_back(host.address);
+    }
+    const bool differs = stats->killSwitch != enabled || stats->lanClosed != lanClosed ||
+                         (enabled && !stats->killSwitchLan) || (lanClosed && stats->lanAllowed != allowed);
     if (!differs) {
       killSwitchError_.clear();
       return;
@@ -1578,7 +1628,11 @@ class Worker {
     }
     lastKillSwitchTry_ = now;
     killSwitchError_ = ServiceCall(
-        nlohmann::json{{"cmd", "kill_switch"}, {"enabled", enabled}, {"allow_lan", settings_.killSwitchLan}},
+        nlohmann::json{{"cmd", "kill_switch"},
+                       {"enabled", enabled},
+                       {"allow_lan", true},
+                       {"lan_closed", lanClosed},
+                       {"lan_allowed", allowed}},
         "kill_switch");
     if (killSwitchError_.empty()) {
       killSwitchActive_ = enabled;
@@ -2006,7 +2060,9 @@ class Worker {
       v.hideExitIp = settings_.hideExitIp;
       v.logLevel = settings_.logLevel;
       v.killSwitch = settings_.killSwitch;
-      v.killSwitchLan = settings_.killSwitchLan;
+      v.lanClosed = settings_.lanClosed;
+      v.lanAllowed = settings_.lanAllowed;
+      v.lanDevices = lanDevices_;
       v.relayUrl = settings_.relayUrl;
       v.relayKeySet = !settings_.relayKey.empty();
       v.killSwitchActive = killSwitchActive_;
@@ -2043,6 +2099,8 @@ class Worker {
   std::vector<std::string> runningHosts_;
   std::uint64_t logSince_ = 0;  // box_logs cursor
   std::string loggedError_;     // the model's error last put into the log
+  std::vector<sovereign::tray::LanDevice> lanDevices_;
+  std::optional<TrayModel::Clock::time_point> lastLanScan_;
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
   std::vector<std::string> testedTags_;                   // in the test that runs or ran last
@@ -2966,6 +3024,12 @@ void RequestToggleExitIp() {
 
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
+// The local network's list as the settings show it - the index a click on
+// it carries is into this.
+std::vector<sovereign::tray::LanEntry> LanEntriesOf(const View& v) {
+  return sovereign::tray::LanEntries(v.lanDevices, v.lanAllowed);
+}
+
 // A support report asked for while the box runs: written once a fresh test
 // of the servers is over (View::delaysRound moves past `round`) - not from
 // whatever the last test said, hours ago.
@@ -3198,7 +3262,15 @@ UiContent ContentFrom(const View& v) {
   c.hideExitIp = v.hideExitIp;
   c.logLevel = Widen(v.logLevel);
   c.killSwitch = v.killSwitch;
-  c.killSwitchLan = v.killSwitchLan;
+  c.lanClosed = v.lanClosed;
+  for (const sovereign::tray::LanEntry& e : LanEntriesOf(v)) {
+    c.lanHosts.push_back({.address = Widen(e.address),
+                          .name = Widen(e.name),
+                          .mac = Widen(e.mac),
+                          .router = e.router,
+                          .allowed = e.allowed,
+                          .seen = e.seen});
+  }
   c.relayHost = v.relayUrl.empty() ? std::wstring() : sovereign::tray::UrlHost(Widen(v.relayUrl));
   c.relaySet = !v.relayUrl.empty() && v.relayKeySet;
   c.killSwitchActive = v.killSwitchActive;
@@ -3258,6 +3330,23 @@ void ShowMainWindow(UiPage page) {
   if (g_mainWindow != nullptr) {
     g_mainWindow->Update(ContentFrom(CurrentView()));
     g_mainWindow->Show(page);
+  }
+}
+
+// An address let into the closed local network (true) or shut out again.
+void RequestLan(sovereign::tray::LanHost host, bool allow) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingLan.emplace_back(std::move(host), allow);
+  }
+  Wake();
+}
+
+// Why an address can't be let in: a balloon, like the routing's typed rules.
+void TellLan(const std::wstring& text) {
+  if (g_trayIcon != nullptr) {
+    g_trayIcon->Balloon(L"Sovereign", text);
   }
 }
 
@@ -3671,14 +3760,51 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     }
     case UiCommand::ToggleKillSwitch:
-    case UiCommand::ToggleKillSwitchLan: {
+    case UiCommand::ToggleLanClosed: {
       {
         auto& shared = State();
         const std::scoped_lock lock(shared.mutex);
-        (command == UiCommand::ToggleKillSwitch ? shared.pendingToggleKillSwitch : shared.pendingToggleKillSwitchLan) =
+        (command == UiCommand::ToggleKillSwitch ? shared.pendingToggleKillSwitch : shared.pendingToggleLanClosed) =
             true;
       }
       Wake();
+      break;
+    }
+    case UiCommand::ToggleLanHost: {  // let in or not; the router keeps its name
+      const auto entries = LanEntriesOf(view);
+      if (args.index < 0 || static_cast<std::size_t>(args.index) >= entries.size()) {
+        break;
+      }
+      const sovereign::tray::LanEntry& e = entries[static_cast<std::size_t>(args.index)];
+      if (!e.allowed && view.lanAllowed.size() >= sovereign::tray::kMaxLanAllowed) {
+        TellLan(std::format(L"Открыть можно не больше {} адресов.", sovereign::tray::kMaxLanAllowed));
+        break;
+      }
+      RequestLan({.address = e.address, .name = e.name.empty() && e.router ? "Роутер" : e.name}, !e.allowed);
+      break;
+    }
+    case UiCommand::AddLanHost:  // the address, typed over the button
+      if (g_mainWindow != nullptr) {
+        g_mainWindow->EditInPlace(UiCommand::AddLanHost, 0, UiCommand::AddLanHostText, L"", false);
+      }
+      break;
+    case UiCommand::AddLanHostText: {
+      const std::string text = Narrow(args.text);
+      if (text.empty()) {
+        break;
+      }
+      const auto address = sovereign::tray::LanAddress(text);
+      if (!address) {
+        TellLan(L"«" + args.text +
+                L"» — не адрес локальной сети. Нужен вида 192.168.1.20 или подсеть 192.168.1.0/24 "
+                L"(10.x, 172.16–31.x, 192.168.x, 169.254.x).");
+        break;
+      }
+      if (view.lanAllowed.size() >= sovereign::tray::kMaxLanAllowed) {
+        TellLan(std::format(L"Открыть можно не больше {} адресов.", sovereign::tray::kMaxLanAllowed));
+        break;
+      }
+      RequestLan({.address = *address, .name = {}}, true);
       break;
     }
     case UiCommand::ChooseLogLevel:

@@ -137,6 +137,12 @@ class Conditions {
       c.conditionValue.type = FWP_UINT16;
       c.conditionValue.uint16 = *rule.remotePort;
     }
+    // For ICMP the local port's field is its type (FWPM_CONDITION_ICMP_TYPE).
+    for (const std::uint16_t port : rule.localPorts) {
+      FWPM_FILTER_CONDITION0& c = Next(FWPM_CONDITION_IP_LOCAL_PORT, FWP_MATCH_EQUAL);
+      c.conditionValue.type = FWP_UINT16;
+      c.conditionValue.uint16 = port;
+    }
     if (rule.protocol) {
       FWPM_FILTER_CONDITION0& c = Next(FWPM_CONDITION_IP_PROTOCOL, FWP_MATCH_EQUAL);
       c.conditionValue.type = FWP_UINT8;
@@ -254,14 +260,15 @@ std::string WfpKillSwitch::Apply(const std::vector<KillSwitchRule>& rules) {
       freeAppId();
       return "a kill switch filter with too many conditions";
     }
-    std::wstring name = L"Sovereign kill switch: ";
+    std::wstring name = L"Sovereign: ";
     name.append(rule.name.begin(), rule.name.end());
     FWPM_FILTER0 filter{};
     filter.filterKey = FilterKey(i);
     filter.displayData.name = name.data();
     filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
     filter.providerKey = &providerKey;
-    filter.layerKey = rule.v6 ? FWPM_LAYER_ALE_AUTH_CONNECT_V6 : FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+    filter.layerKey = rule.inbound ? (rule.v6 ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6 : FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4)
+                                   : (rule.v6 ? FWPM_LAYER_ALE_AUTH_CONNECT_V6 : FWPM_LAYER_ALE_AUTH_CONNECT_V4);
     filter.subLayerKey = kSublayerKey;
     filter.weight.type = FWP_UINT8;
     filter.weight.uint8 = rule.weight;

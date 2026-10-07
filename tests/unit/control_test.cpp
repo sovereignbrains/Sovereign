@@ -287,7 +287,7 @@ void TestKillSwitch() {
 
   // On: the rules go in, without a tunnel yet (no config ran).
   json answer = Send(handler, R"({"cmd":"kill_switch","enabled":true})");
-  CHECK(answer == json::parse(R"({"cmd":"kill_switch","active":true,"allow_lan":true})"));
+  CHECK(answer == json::parse(R"({"cmd":"kill_switch","active":true,"allow_lan":true,"lan_closed":false})"));
   CHECK(killSwitch.applied == 1 && !killSwitch.last.empty());
   CHECK(std::none_of(killSwitch.last.begin(), killSwitch.last.end(), [](const auto& r) { return !r.localPrefixes.empty(); }));
   // The same again: nothing to do.
@@ -313,6 +313,21 @@ void TestKillSwitch() {
   answer = Send(handler, R"({"cmd":"kill_switch","enabled":false})");
   CHECK(answer.value("active", true) == false && killSwitch.last.empty());
   CHECK(Send(handler, R"({"cmd":"box_stats"})").value("kill_switch", true) == false);
+
+  // The local network closed, without the kill switch: filters in place,
+  // the switch itself reported off; the addresses let in come back as sent.
+  CHECK(IsError(Send(handler, R"({"cmd":"kill_switch","enabled":false,"lan_closed":true,"lan_allowed":["nope"]})"),
+                "every lan_allowed entry must be an address or a subnet"));
+  answer = Send(handler,
+                R"({"cmd":"kill_switch","enabled":false,"lan_closed":true,"lan_allowed":["192.168.31.1"]})");
+  CHECK(answer.value("active", true) == false && answer.value("lan_closed", false) == true);
+  CHECK(!killSwitch.last.empty());
+  json closed = Send(handler, R"({"cmd":"box_stats"})");
+  CHECK(closed.value("kill_switch", true) == false && closed.value("lan_closed", false) == true);
+  CHECK(closed["lan_allowed"] == json::array({"192.168.31.1"}));
+  // Open again: nothing left.
+  Send(handler, R"({"cmd":"kill_switch","enabled":false,"lan_closed":false})");
+  CHECK(killSwitch.last.empty() && Send(handler, R"({"cmd":"box_stats"})").value("lan_closed", true) == false);
 
   // A restart finds persistent filters in place: reported active until told.
   FakeKillSwitch leftover;

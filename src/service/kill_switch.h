@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -23,6 +24,15 @@
 //   - with allowLan, private and link-local destinations (printers, NAS) -
 //     but not DNS there: the router answering names would be a leak.
 //
+// The local network closed (lanClosed) is the same filters' other job, with
+// the kill switch or without: nothing of the local network gets to the PC
+// and the PC gets to nothing of it - the core included, inbound too - but
+// for the addresses the user let in (lanAllowed), and what the network can't
+// work without: DHCP, IPv6's neighbour discovery. The tunnel's own addresses
+// sit in a private range (172.19.0.1/30) and stay open. DNS to the local
+// network stays shut even to an address let in: the router answering names
+// would be a leak.
+//
 // This header is the part that isn't Windows': the rules as data, built from
 // the settings and the config - unit-tested in tests/unit/kill_switch_test.cpp.
 
@@ -31,8 +41,14 @@ namespace sovereign::service {
 struct KillSwitchSettings {
   bool enabled = false;
   bool allowLan = true;
+  bool lanClosed = false;
+  std::vector<std::string> lanAllowed;  // addresses or subnets ("192.168.31.1"), each ParsePrefix's
   friend bool operator==(const KillSwitchSettings&, const KillSwitchSettings&) = default;
 };
+
+// At most this many addresses are let into a closed local network (a filter
+// holds that many alternatives).
+inline constexpr std::size_t kMaxLanAllowed = 12;
 
 // An address prefix: 4 or 16 bytes, network byte order.
 struct Prefix {
@@ -56,17 +72,19 @@ struct KillSwitchRule {
   bool v6 = false;
   bool permit = false;
   std::uint8_t weight = 0;     // higher wins within the kill switch
+  bool inbound = false;        // a connection to the PC (else one it makes)
   bool coreApp = false;        // the connection is sovereign-core.exe's
   bool loopback = false;
   std::vector<Prefix> localPrefixes;
   std::vector<Prefix> remotePrefixes;
   std::optional<std::uint16_t> remotePort;
-  std::optional<std::uint8_t> protocol;  // IPPROTO_*: 6 TCP, 17 UDP
+  std::vector<std::uint16_t> localPorts;  // alternatives; for ICMP, its types
+  std::optional<std::uint8_t> protocol;  // IPPROTO_*: 6 TCP, 17 UDP, 58 ICMPv6
   std::string name;            // for the filter's display name
 };
 
 // The filters for `settings` over a tunnel with `tun`'s addresses; none when
-// the switch is off.
+// the switch is off and the local network open.
 std::vector<KillSwitchRule> BuildKillSwitchRules(const KillSwitchSettings& settings, const std::vector<Prefix>& tun);
 
 // What enforces the rules - WfpKillSwitch in the service, a fake in tests.

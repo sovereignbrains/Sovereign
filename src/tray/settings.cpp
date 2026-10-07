@@ -227,8 +227,19 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("killSwitch"); v != json.end() && v->is_boolean()) {
     settings.killSwitch = v->get<bool>();
   }
-  if (const auto v = json.find("killSwitchLan"); v != json.end() && v->is_boolean()) {
-    settings.killSwitchLan = v->get<bool>();
+  if (const auto v = json.find("lanClosed"); v != json.end() && v->is_boolean()) {
+    settings.lanClosed = v->get<bool>();
+  } else if (const auto old = json.find("killSwitchLan"); old != json.end() && old->is_boolean()) {
+    // Before: the kill switch without the local network - the same wish.
+    settings.lanClosed = settings.killSwitch && !old->get<bool>();
+  }
+  if (const auto v = json.find("lanAllowed"); v != json.end() && v->is_array()) {
+    for (const auto& host : *v) {
+      const std::string address = host.is_object() ? host.value("address", std::string()) : std::string();
+      if (!address.empty() && settings.lanAllowed.size() < kMaxLanAllowed) {
+        settings.lanAllowed.push_back({.address = address, .name = host.value("name", std::string())});
+      }
+    }
   }
   if (const auto v = json.find("logLevel"); v != json.end() && v->is_string() && IsLogLevel(v->get<std::string>())) {
     settings.logLevel = v->get<std::string>();
@@ -277,7 +288,11 @@ void SaveSettings(const TraySettings& settings) {
   json["hideExitIp"] = settings.hideExitIp;
   json["logLevel"] = settings.logLevel;
   json["killSwitch"] = settings.killSwitch;
-  json["killSwitchLan"] = settings.killSwitchLan;
+  json["lanClosed"] = settings.lanClosed;
+  json["lanAllowed"] = nlohmann::json::array();
+  for (const LanHost& host : settings.lanAllowed) {
+    json["lanAllowed"].push_back({{"address", host.address}, {"name", host.name}});
+  }
   if (!settings.relayUrl.empty() && !settings.relayKey.empty()) {
     json["relay"] = {{"url", settings.relayUrl}, {"key", ProtectSecret(settings.relayKey)}};
   }

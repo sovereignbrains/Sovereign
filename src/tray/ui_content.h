@@ -38,6 +38,17 @@ struct UiLocation {
   std::wstring ip;       // the exit's address, for copying
 };
 
+// A device of the local network, or an address let into it, as the
+// settings list them (lan.h LanEntry).
+struct UiLanHost {
+  std::wstring address;
+  std::wstring name;  // what it was let in under; may be empty
+  std::wstring mac;
+  bool router = false;
+  bool allowed = false;
+  bool seen = false;  // around now
+};
+
 // A server of a configuration, as its page lists it.
 struct UiServer {
   std::wstring name;   // its tag
@@ -155,7 +166,8 @@ struct UiContent {
   bool hideExitIp = false;              // the country only
   std::wstring logLevel;                // what the core writes; empty = the config's
   bool killSwitch = false;              // the setting
-  bool killSwitchLan = true;
+  bool lanClosed = false;               // the local network closed both ways (settings.h)
+  std::vector<UiLanHost> lanHosts;      // the router, what's let in, the rest around (lan.h LanEntries)
   // The subscription relay (relay.h): its host only - the key never reaches the UI.
   std::wstring relayHost;
   bool relaySet = false;
@@ -220,7 +232,10 @@ enum class UiCommand : std::uint8_t {
   ToggleExitIp,        // show or hide the exit's address
   ChooseLogLevel,      // anchor: where to open the menu of levels
   ToggleKillSwitch,
-  ToggleKillSwitchLan,
+  ToggleLanClosed,
+  ToggleLanHost,      // index into lanHosts: let in or not
+  AddLanHost,         // starts typing an address over the button
+  AddLanHostText,     // text: the address
   EditRelayUrl,       // starts typing the relay's address over its row
   EditRelayUrlText,   // text: the address ("" clears the relay)
   EditRelayKey,       // starts typing the relay's key over its row (shown empty)

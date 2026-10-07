@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace sovereign::tray {
 
@@ -27,6 +28,8 @@ struct Stats {
   std::string configSha256;  // of the config the box runs; empty if unknown
   bool killSwitch = false;     // the kill switch's filters are in place
   bool killSwitchLan = true;   // and let the local network through
+  bool lanClosed = false;      // the local network's filters are in place
+  std::vector<std::string> lanAllowed;  // with these addresses let in
 };
 
 enum class Action : std::uint8_t { None, Start, Stop };

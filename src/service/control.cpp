@@ -124,7 +124,7 @@ std::string ControlHandler::ApplyKillSwitch(const KillSwitchSettings& settings) 
   std::string error = killSwitch_->Apply(BuildKillSwitchRules(settings, tun));
   if (error.empty()) {
     killSettings_ = settings;
-    killActive_ = settings.enabled;
+    killActive_ = settings.enabled || settings.lanClosed;
   }
   return error;
 }
@@ -231,7 +231,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     response["cmd"] = "box_started";
     // A new config may bring a tunnel of other addresses: the kill switch
     // follows. Its failure doesn't undo the start - it's reported with it.
-    if (killSwitch_ != nullptr && killSettings_.enabled) {
+    if (killSwitch_ != nullptr && killActive_) {
       if (const std::string killError = ApplyKillSwitch(killSettings_); !killError.empty()) {
         response["kill_switch_error"] = killError;
       }
@@ -260,8 +260,13 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     if (lastConfig_) {
       response["config_sha256"] = Sha256Hex(*lastConfig_);
     }
-    response["kill_switch"] = killActive_;
+    // Filters found in place by a service that just started are taken for
+    // the kill switch's (killSettings_ from the constructor): the tray tells
+    // it what it wants either way.
+    response["kill_switch"] = killActive_ && killSettings_.enabled;
     response["kill_switch_lan"] = killSettings_.allowLan;
+    response["lan_closed"] = killActive_ && killSettings_.lanClosed;
+    response["lan_allowed"] = killSettings_.lanAllowed;
     return Dump(response);
   }
 
@@ -272,19 +277,35 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     }
     const Json enabled = parsed.value("enabled", Json());
     const Json allowLan = parsed.value("allow_lan", Json(true));
-    if (!enabled.is_boolean() || !allowLan.is_boolean()) {
-      return fail("enabled and allow_lan must be booleans");
+    const Json lanClosed = parsed.value("lan_closed", Json(false));
+    const Json lanAllowed = parsed.value("lan_allowed", Json::array());
+    if (!enabled.is_boolean() || !allowLan.is_boolean() || !lanClosed.is_boolean()) {
+      return fail("enabled, allow_lan and lan_closed must be booleans");
     }
-    const KillSwitchSettings settings{.enabled = enabled.get<bool>(), .allowLan = allowLan.get<bool>()};
-    if (settings != killSettings_ || settings.enabled != killActive_) {
+    if (!lanAllowed.is_array() || lanAllowed.size() > kMaxLanAllowed) {
+      return fail("lan_allowed must be an array of up to " + std::to_string(kMaxLanAllowed) + " addresses");
+    }
+    KillSwitchSettings settings{.enabled = enabled.get<bool>(),
+                                .allowLan = allowLan.get<bool>(),
+                                .lanClosed = lanClosed.get<bool>(),
+                                .lanAllowed = {}};
+    for (const Json& address : lanAllowed) {
+      if (!address.is_string() || !ParsePrefix(address.get<std::string>())) {
+        return fail("every lan_allowed entry must be an address or a subnet");
+      }
+      settings.lanAllowed.push_back(address.get<std::string>());
+    }
+    const bool wantActive = settings.enabled || settings.lanClosed;
+    if (settings != killSettings_ || wantActive != killActive_) {
       if (const std::string error = ApplyKillSwitch(settings); !error.empty()) {
         return fail(error);
       }
     }
     Json response;
     response["cmd"] = "kill_switch";
-    response["active"] = killActive_;
+    response["active"] = killActive_ && killSettings_.enabled;
     response["allow_lan"] = killSettings_.allowLan;
+    response["lan_closed"] = killActive_ && killSettings_.lanClosed;
     return Dump(response);
   }
 

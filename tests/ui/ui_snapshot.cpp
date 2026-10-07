@@ -37,6 +37,11 @@ UiContent SampleContent() {
   c.display = sovereign::tray::Display::On;
   c.on = true;
   c.hasConfig = true;
+  c.lanClosed = true;
+  c.lanHosts = {
+      {.address = L"192.168.31.1", .name = {}, .mac = L"a4:39:b3:00:11:22", .router = true, .allowed = false, .seen = true},
+      {.address = L"192.168.31.200", .name = L"Принтер", .mac = {}, .router = false, .allowed = true, .seen = false},
+      {.address = L"192.168.31.45", .name = {}, .mac = L"3c:22:fb:aa:bb:cc", .router = false, .allowed = false, .seen = true}};
   using sovereign::tray::UiServer;
   sovereign::tray::UiProfile packetlab;
   packetlab.id = "p1";

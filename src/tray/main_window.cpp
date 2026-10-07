@@ -682,11 +682,13 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 31> kNames = {
+    static constexpr std::array<const wchar_t*, 30> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Nav",      L"NavBar",   L"Server", L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
-        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Stat",   L"Value"};
+        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value"};
+    // One per Kind, in its order: a kind added or gone shifts every name after it.
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::ValueRow) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -1880,6 +1882,39 @@ class Painter {
     return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
+  // The local network: closed both ways, but for what the user lets in -
+  // the router, a device around, or an address typed in.
+  float LocalNetwork(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    y = Heading(l, L"Локальная сеть", x0, x1, y,
+                L"Закрыта — ни устройства сети к компьютеру, ни компьютер к ним: общие папки, принтер, панель "
+                L"роутера, телевизор, телефон по Wi-Fi. Компьютер не видно в «Сети» у других. Открыты только те, "
+                L"кого включишь ниже.\n\nИнтернет это не трогает: он идёт через роутер, но уже зашифрованный "
+                L"туннелем. Действует, пока подключение включено.");
+    y = Switches(l, {Row(L"Закрыть", {}, c.lanClosed, UiCommand::ToggleLanClosed)}, x0, x1, y) + kGap;
+    if (!c.lanClosed) {
+      return y;
+    }
+    std::vector<SwitchRow> rows;
+    for (std::size_t i = 0; i < c.lanHosts.size(); ++i) {
+      const UiLanHost& h = c.lanHosts[i];
+      const std::wstring name = h.router ? L"Роутер" : h.name;
+      std::wstring detail = name.empty() ? std::wstring() : h.address;
+      if (!h.seen) {
+        detail += (detail.empty() ? L"" : L" · ") + std::wstring(L"сейчас не в сети");
+      } else if (!h.mac.empty()) {
+        detail += (detail.empty() ? L"" : L" · ") + h.mac;
+      }
+      rows.push_back(Row(name.empty() ? h.address : name, {}, h.allowed, UiCommand::ToggleLanHost, std::move(detail),
+                         static_cast<int>(i)));
+    }
+    if (!rows.empty()) {
+      y = Switches(l, rows, x0, x1, y) + 8;
+    }
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Открыть адрес", kGlyphAdd,
+                                  UiCommand::AddLanHost));
+    return y + kButton + kGap + 4;
+  }
+
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Настройки", nullptr, x0, x1, y, UiPage::Overview,
                   L"«Папка данных» — %LOCALAPPDATA%\\Sovereign: настройки, конфиги, их история.\n\n«Выйти» "
@@ -1892,19 +1927,18 @@ class Painter {
                  x0, x1, y) +
         kGap;
 
-    // The kill switch and what it lets through.
     y = Switches(l,
                  {Row(L"Kill switch",
                       L"Если подключение оборвётся, трафик не пойдёт мимо прокси: интернет закрыт, пока оно не "
                       L"восстановится.",
-                      c.killSwitch, UiCommand::ToggleKillSwitch),
-                  Row(L"Локальная сеть", L"Принтер, NAS, роутер доступны и при обрыве — kill switch их не закрывает.",
-                      c.killSwitchLan, UiCommand::ToggleKillSwitchLan, {}, 0, c.killSwitch)},
+                      c.killSwitch, UiCommand::ToggleKillSwitch)},
                  x0, x1, y) +
         kGap;
     if (!c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
+
+    y = LocalNetwork(l, c, x0, x1, y);
 
     // The subscription relay (relay.h): the address and the key, each typed
     // over its row; the key is never shown.

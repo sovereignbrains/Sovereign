@@ -43,6 +43,8 @@ add_library(sovereign_tray_lib STATIC
   diagnostics.h
   support_report.cpp
   support_report.h
+  lan.cpp
+  lan.h
   import_formats.cpp
   import_formats.h
   qr_codes.cpp
@@ -89,13 +91,15 @@ add_library(sovereign_tray_settings STATIC
 target_include_directories(sovereign_tray_settings PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_settings PUBLIC sovereign_tray_lib sovereign_common crypt32)
 
-# The tray's requests over the network: subscriptions, downloads, the checks -
-# linked by the tray and by tests/unit's diagnose-probe.
+# The tray's requests over the network: subscriptions, downloads, the checks;
+# the devices of the local network (lan.h) - linked by the tray and by
+# tests/unit's diagnose-probe.
 add_library(sovereign_tray_net STATIC
   fetch.cpp
   fetch.h
   diagnose.cpp
   diagnose.h
+  lan_devices.cpp
 )
 target_include_directories(sovereign_tray_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_net PUBLIC sovereign_tray_lib sovereign_common winhttp iphlpapi ws2_32 dnsapi)

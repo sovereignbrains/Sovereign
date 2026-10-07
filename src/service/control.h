@@ -39,7 +39,8 @@ using CommandObserver = std::function<void(const CommandRecord&)>;
 //
 // Commands: ping (echo), box_ping, box_start {config}, box_stop,
 // box_stats, box_logs {since}, box_urltest {tags, url?, timeout_ms?},
-// box_delays, box_exitip {tag, refresh?}, kill_switch {enabled, allow_lan?}.
+// box_delays, box_exitip {tag, refresh?},
+// kill_switch {enabled, allow_lan?, lan_closed?, lan_allowed?}.
 class ControlHandler {
  public:
   // box_urltest's limits: what one test may ask of the core.
