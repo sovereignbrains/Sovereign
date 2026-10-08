@@ -4,8 +4,38 @@
 // The night: the main screen's backdrop (generated with Qwen for this app,
 // monochrome: a night valley, a path of light from the foot of the picture
 // to a glow on the horizon - from the switch, which stands at the foot).
+// SVC_<ID>: a service's logo (assets/services, icons.h ServiceLogo).
 #include "resource.h"
 
 IDI_SOVEREIGN ICON "../../assets/sovereign.ico"
 IDR_FLAGS RCDATA "../../assets/flags/flags.png"
 IDR_NIGHT RCDATA "../../assets/backdrop/night.jpg"
+
+SVC_NETFLIX RCDATA "../../assets/services/netflix.svg"
+SVC_YOUTUBE RCDATA "../../assets/services/youtube.svg"
+SVC_CHATGPT RCDATA "../../assets/services/chatgpt.svg"
+SVC_GEMINI RCDATA "../../assets/services/gemini.svg"
+SVC_CLAUDE RCDATA "../../assets/services/claude.svg"
+SVC_SPOTIFY RCDATA "../../assets/services/spotify.svg"
+SVC_DISNEY RCDATA "../../assets/services/disney.svg"
+SVC_HBO RCDATA "../../assets/services/hbo.svg"
+SVC_PRIMEVIDEO RCDATA "../../assets/services/primevideo.svg"
+SVC_TWITCH RCDATA "../../assets/services/twitch.svg"
+SVC_TIKTOK RCDATA "../../assets/services/tiktok.svg"
+SVC_INSTAGRAM RCDATA "../../assets/services/instagram.svg"
+SVC_FACEBOOK RCDATA "../../assets/services/facebook.svg"
+SVC_X RCDATA "../../assets/services/x.svg"
+SVC_DISCORD RCDATA "../../assets/services/discord.svg"
+SVC_TELEGRAM RCDATA "../../assets/services/telegram.svg"
+SVC_WHATSAPP RCDATA "../../assets/services/whatsapp.svg"
+SVC_GOOGLE RCDATA "../../assets/services/google.svg"
+SVC_PERPLEXITY RCDATA "../../assets/services/perplexity.svg"
+SVC_GROK RCDATA "../../assets/services/grok.svg"
+SVC_GITHUB RCDATA "../../assets/services/github.svg"
+SVC_REDDIT RCDATA "../../assets/services/reddit.svg"
+SVC_LINKEDIN RCDATA "../../assets/services/linkedin.svg"
+SVC_SOUNDCLOUD RCDATA "../../assets/services/soundcloud.svg"
+SVC_STEAM RCDATA "../../assets/services/steam.svg"
+SVC_EPICGAMES RCDATA "../../assets/services/epicgames.svg"
+SVC_MICROSOFT RCDATA "../../assets/services/microsoft.svg"
+SVC_APPLE RCDATA "../../assets/services/apple.svg"

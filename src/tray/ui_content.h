@@ -110,6 +110,7 @@ struct UiChip {
   std::wstring text;    // "Netflix", "bank.ru", "chrome.exe", "Российские сайты"
   std::wstring detail;  // through a country: "США"
   std::wstring icon;    // a program's exe, for its icon; empty: none known
+  std::string logo;     // a service's id, for its logo (icons.h ServiceLogo); empty: none
 };
 inline constexpr int kBucketDirect = 0;
 inline constexpr int kBucketProxy = 1;

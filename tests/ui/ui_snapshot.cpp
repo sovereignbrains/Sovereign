@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <fstream>
@@ -24,7 +25,9 @@
 #include <utility>
 #include <vector>
 
+#include "icons.h"
 #include "main_window.h"
+#include "routing.h"
 #include "ui_content.h"
 
 namespace {
@@ -36,20 +39,20 @@ using sovereign::tray::UiPage;
 std::vector<sovereign::tray::UiChip> SampleBoard() {
   using sovereign::tray::UiChip;
   return {
-      {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}},
-      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}},
-      {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}},
-      {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}},
-      {.kind = UiChip::Kind::Service, .index = 2, .bucket = 1, .text = L"YouTube", .detail = L"США", .icon = {}},
-      {.kind = UiChip::Kind::Service, .index = 3, .bucket = 0, .text = L"Steam", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = {}},
+      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = {}},
+      {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}, .logo = "netflix"},
+      {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}, .logo = "chatgpt"},
+      {.kind = UiChip::Kind::Service, .index = 2, .bucket = 1, .text = L"YouTube", .detail = L"США", .icon = {}, .logo = "youtube"},
+      {.kind = UiChip::Kind::Service, .index = 3, .bucket = 0, .text = L"Steam", .detail = {}, .icon = {}, .logo = "steam"},
       {.kind = UiChip::Kind::Rule, .index = 0, .bucket = 0, .text = L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com",
-       .detail = {}, .icon = {}},
+       .detail = {}, .icon = {}, .logo = {}},
       {.kind = UiChip::Kind::Rule, .index = 1, .bucket = 1, .text = L"10.9.0.0/16, steam.exe", .detail = {},
-       .icon = {}},
-      {.kind = UiChip::Kind::Rule, .index = 2, .bucket = 2, .text = L"~tracker", .detail = {}, .icon = {}},
-      {.kind = UiChip::Kind::Rule, .index = 3, .bucket = 3, .text = L"chatgpt.com", .detail = {}, .icon = {}},
+       .icon = {}, .logo = {}},
+      {.kind = UiChip::Kind::Rule, .index = 2, .bucket = 2, .text = L"~tracker", .detail = {}, .icon = {}, .logo = {}},
+      {.kind = UiChip::Kind::Rule, .index = 3, .bucket = 3, .text = L"chatgpt.com", .detail = {}, .icon = {}, .logo = {}},
       {.kind = UiChip::Kind::Rule, .index = 4, .bucket = 0,
-       .text = L"очень-длинный-поддомен.какой-то-банк-с-длинным-именем.example.ru", .detail = {}, .icon = {}},
+       .text = L"очень-длинный-поддомен.какой-то-банк-с-длинным-именем.example.ru", .detail = {}, .icon = {}, .logo = {}},
   };
 }
 
@@ -258,6 +261,19 @@ int Snapshots(const std::wstring& dir) {
   merged.profiles[0].mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};
   sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Profile, logs, 400, 620, 96,
                                             dir + L"\\profile-merged.png");
+
+  // Every service's logo draws (assets/services: what Direct2D's SVG can't
+  // draw comes out empty) - at the menus' 16 px and at 150 %.
+  for (const auto& service : sovereign::tray::ServiceCatalog()) {
+    for (const int size : {16, 24}) {
+      const std::vector<std::uint32_t> logo = sovereign::tray::ServiceLogo(service.id, size);
+      if (std::none_of(logo.begin(), logo.end(), [](std::uint32_t pixel) { return (pixel >> 24) > 128; })) {
+        std::fprintf(stderr, "ui-snapshot: no logo for %.*s at %d px\n", static_cast<int>(service.id.size()),
+                     service.id.data(), size);
+        return 1;
+      }
+    }
+  }
   return 0;
 }
 

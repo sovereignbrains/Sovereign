@@ -1,10 +1,15 @@
 #include "icons.h"
 
+#include <d2d1_3.h>
+#include <shlwapi.h>
+#include <wincodec.h>
+#include <wil/com.h>
 #include <wil/result.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "resource.h"
@@ -115,6 +120,80 @@ COLORREF StateColor(Display display) {
   return RGB(150, 150, 150);
 }
 
+std::vector<std::uint32_t> ServiceLogo(std::string_view id, int size) {
+  if (id.empty() || size <= 0) {
+    return {};
+  }
+  std::wstring name = L"SVC_";
+  for (const char c : id) {
+    name += static_cast<wchar_t>(c);  // FindResource matches names case-blind
+  }
+  const HMODULE module = GetModuleHandleW(nullptr);
+  const HRSRC found = FindResourceW(module, name.c_str(), MAKEINTRESOURCEW(10));  // RT_RCDATA
+  const HGLOBAL loaded = found != nullptr ? LoadResource(module, found) : nullptr;
+  const auto* data = static_cast<const BYTE*>(loaded != nullptr ? LockResource(loaded) : nullptr);
+  if (data == nullptr) {
+    return {};
+  }
+  wil::com_ptr<IStream> stream;
+  stream.attach(SHCreateMemStream(data, SizeofResource(module, found)));
+  const auto side = static_cast<UINT>(size);
+  wil::com_ptr<ID2D1Factory> d2d;
+  wil::com_ptr<IWICImagingFactory> wic;
+  wil::com_ptr<IWICBitmap> bitmap;
+  wil::com_ptr<ID2D1RenderTarget> target;
+  wil::com_ptr<ID2D1DeviceContext5> context;  // the SVG's: Windows 10 1703 on
+  wil::com_ptr<ID2D1SvgDocument> svg;
+  const auto properties = D2D1::RenderTargetProperties(
+      D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+      96, 96);
+  if (!stream || FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d.put())) ||
+      FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(wic.put()))) ||
+      FAILED(wic->CreateBitmap(side, side, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, bitmap.put())) ||
+      FAILED(d2d->CreateWicBitmapRenderTarget(bitmap.get(), properties, target.put()))) {
+    return {};
+  }
+  context = target.try_query<ID2D1DeviceContext5>();
+  if (!context || FAILED(context->CreateSvgDocument(stream.get(), D2D1::SizeF(static_cast<float>(size),
+                                                                               static_cast<float>(size)),
+                                                    svg.put()))) {
+    return {};
+  }
+  context->BeginDraw();
+  context->Clear(D2D1::ColorF(0, 0));
+  context->DrawSvgDocument(svg.get());
+  if (FAILED(context->EndDraw())) {
+    return {};
+  }
+  std::vector<std::uint32_t> pixels(static_cast<std::size_t>(side) * side);
+  if (FAILED(bitmap->CopyPixels(nullptr, side * 4, static_cast<UINT>(pixels.size() * 4),
+                                reinterpret_cast<BYTE*>(pixels.data())))) {
+    return {};
+  }
+  return pixels;
+}
+
+wil::unique_hbitmap ServiceMenuIcon(std::string_view id, int size) {
+  const std::vector<std::uint32_t> pixels = ServiceLogo(id, size);
+  if (pixels.empty()) {
+    return {};
+  }
+  // Menus take a 32-bit bitmap's alpha premultiplied - as drawn.
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = size;
+  info.bmiHeader.biHeight = -size;  // top-down
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  wil::unique_hbitmap bitmap(CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0));
+  if (!bitmap || bits == nullptr) {
+    return {};
+  }
+  std::copy(pixels.begin(), pixels.end(), static_cast<std::uint32_t*>(bits));
+  return bitmap;
+}
 wil::unique_hicon LoadAppIcon(int size) {
   return wil::unique_hicon(static_cast<HICON>(
       LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_SOVEREIGN), IMAGE_ICON, size, size, 0)));

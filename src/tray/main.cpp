@@ -2974,16 +2974,8 @@ void RequestRoutingChange(RoutingChange change) {
   Wake();
 }
 
-// A program's icon from its exe as a menu's bitmap: 32-bit with alpha, the
-// menu's small icon size; null if there's none to be had.
-wil::unique_hbitmap MenuIcon(const std::wstring& exe) {
-  const int size = GetSystemMetrics(SM_CXSMICON);
-  HICON extracted = nullptr;
-  if (exe.empty() || FAILED(SHDefExtractIconW(exe.c_str(), 0, 0, &extracted, nullptr, static_cast<UINT>(size))) ||
-      extracted == nullptr) {
-    return {};
-  }
-  const wil::unique_hicon icon(extracted);
+// An icon as a menu's bitmap: 32-bit with alpha, `size` pixels.
+wil::unique_hbitmap MenuBitmap(HICON icon, int size) {
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   info.bmiHeader.biWidth = size;
@@ -2998,31 +2990,62 @@ wil::unique_hbitmap MenuIcon(const std::wstring& exe) {
     return {};
   }
   const auto old = wil::SelectObject(dc.get(), bitmap.get());
-  DrawIconEx(dc.get(), 0, 0, icon.get(), size, size, 0, nullptr, DI_NORMAL);
+  DrawIconEx(dc.get(), 0, 0, icon, size, size, 0, nullptr, DI_NORMAL);
   return bitmap;
 }
 
+// One of Windows' own icons (a program, a folder) as a menu's bitmap.
+wil::unique_hbitmap StockMenuIcon(SHSTOCKICONID id) {
+  SHSTOCKICONINFO info{};
+  info.cbSize = sizeof info;
+  if (FAILED(SHGetStockIconInfo(id, SHGSI_ICON | SHGSI_SMALLICON, &info))) {
+    return {};
+  }
+  const wil::unique_hicon icon(info.hIcon);
+  return MenuBitmap(icon.get(), GetSystemMetrics(SM_CXSMICON));
+}
+
+// A program's icon from its exe as a menu's bitmap, the menu's small icon
+// size; Windows' plain program icon if the exe has none of its own (the
+// windows' hosts: ApplicationFrameHost, TextInputHost).
+wil::unique_hbitmap MenuIcon(const std::wstring& exe) {
+  const int size = GetSystemMetrics(SM_CXSMICON);
+  HICON extracted = nullptr;
+  if (!exe.empty() && SUCCEEDED(SHDefExtractIconW(exe.c_str(), 0, 0, &extracted, nullptr, static_cast<UINT>(size))) &&
+      extracted != nullptr) {
+    const wil::unique_hicon icon(extracted);
+    return MenuBitmap(icon.get(), size);
+  }
+  return StockMenuIcon(SIID_APPLICATION);
+}
+
+// The services' logos for a menu of them (ServiceCatalog's ids).
+std::vector<wil::unique_hbitmap> ServiceMenuIcons(const std::vector<std::string>& ids) {
+  std::vector<wil::unique_hbitmap> icons;
+  icons.reserve(ids.size());
+  for (const std::string& id : ids) {
+    icons.push_back(sovereign::tray::ServiceMenuIcon(id, GetSystemMetrics(SM_CXSMICON)));
+  }
+  return icons;
+}
+
 // A popup menu of `items` at `at`: the one picked (its index), or nullopt.
-// `icons`: an exe per item whose icon it shows (empty: none).
+// `icons`: a picture per item (none: no picture), alive while the menu is.
 std::optional<std::size_t> PickFromMenu(HWND window, POINT at, const std::vector<std::wstring>& items, int checked,
-                                        const std::vector<std::wstring>& icons = {}) {
+                                        const std::vector<wil::unique_hbitmap>& icons = {}) {
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
     return std::nullopt;
   }
-  std::vector<wil::unique_hbitmap> bitmaps;  // alive while the menu is
   for (std::size_t i = 0; i < items.size(); ++i) {
     AppendMenuW(menu.get(), MF_STRING | (static_cast<int>(i) == checked ? MF_CHECKED : MF_UNCHECKED),
                 static_cast<UINT>(i + 1), items[i].c_str());
-    if (i < icons.size()) {
-      if (auto bitmap = MenuIcon(icons[i])) {
-        MENUITEMINFOW item{};
-        item.cbSize = sizeof item;
-        item.fMask = MIIM_BITMAP;
-        item.hbmpItem = bitmap.get();
-        SetMenuItemInfoW(menu.get(), static_cast<UINT>(i + 1), FALSE, &item);
-        bitmaps.push_back(std::move(bitmap));
-      }
+    if (i < icons.size() && icons[i]) {
+      MENUITEMINFOW item{};
+      item.cbSize = sizeof item;
+      item.fMask = MIIM_BITMAP;
+      item.hbmpItem = icons[i].get();
+      SetMenuItemInfoW(menu.get(), static_cast<UINT>(i + 1), FALSE, &item);
     }
   }
   SetForegroundWindow(window);
@@ -3082,17 +3105,20 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   std::vector<UiChip> board;
   if (r.russiaDirect) {
     board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
-                     .text = L"Российские сайты", .detail = {}, .icon = {}});
+                     .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = {}});
   }
   if (r.blockAds) {
     board.push_back({.kind = UiChip::Kind::Ads, .index = 0, .bucket = sovereign::tray::kBucketBlock,
-                     .text = L"Реклама", .detail = {}, .icon = {}});
+                     .text = L"Реклама", .detail = {}, .icon = {}, .logo = {}});
   }
   for (std::size_t n = 0; n < r.services.size(); ++n) {
     const ServiceRoute& s = r.services[n];
     const auto* info = sovereign::tray::FindService(s.id);
     UiChip chip{.kind = UiChip::Kind::Service, .index = static_cast<int>(n), .bucket = sovereign::tray::kBucketWarp,
-                .text = info != nullptr ? Widen(std::string(info->name)) : Widen(s.id), .detail = {}, .icon = {}};
+                .text = info != nullptr ? Widen(std::string(info->name)) : Widen(s.id), .detail = {}, .icon = {}, .logo = {}};
+    if (info != nullptr) {
+      chip.logo = info->id;
+    }
     switch (s.way) {
       case ServiceRoute::Way::Warp: break;
       case ServiceRoute::Way::Country:
@@ -3108,7 +3134,7 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   for (std::size_t n = 0; n < r.rules.size(); ++n) {
     const sovereign::tray::RouteRule& rule = r.rules[n];
     UiChip chip{.kind = UiChip::Kind::Rule, .index = static_cast<int>(n), .bucket = static_cast<int>(rule.action),
-                .text = Widen(sovereign::tray::RuleText(rule)), .detail = {}, .icon = {}};
+                .text = Widen(sovereign::tray::RuleText(rule)), .detail = {}, .icon = {}, .logo = {}};
     if (rule.processes.size() == 1 && rule.domains.empty() && rule.keywords.empty() && rule.ips.empty()) {
       for (const auto& [name, path] : v.programPaths) {
         if (SameName(name, rule.processes.front())) {
@@ -3250,13 +3276,14 @@ void AddProgram(HWND window, POINT at, int bucket) {
   }
   const std::vector<RunningApp> running = RunningApps(named);
   std::vector<std::wstring> items;
-  std::vector<std::wstring> icons;
+  std::vector<wil::unique_hbitmap> icons;
   items.reserve(running.size() + 1);
-  icons.reserve(running.size());
+  icons.reserve(running.size() + 1);
   for (const RunningApp& app : running) {
     items.push_back(Widen(app.name));
-    icons.push_back(Widen(app.path));
+    icons.push_back(MenuIcon(Widen(app.path)));
   }
+  icons.push_back(StockMenuIcon(SIID_FOLDER));
   items.emplace_back(L"Файл .exe…");
   const auto picked = PickFromMenu(window, at, items, -1, icons);
   if (!picked) {
@@ -4006,7 +4033,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           ids.emplace_back(s.id);
         }
       }
-      if (const auto picked = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1)) {
+      if (const auto picked =
+              names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1, ServiceMenuIcons(ids))) {
         send(What::AddService, true, sovereign::tray::kBucketWarp, 0, ids[*picked]);
       }
       break;
@@ -4044,7 +4072,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
               ids.emplace_back(s.id);
             }
           }
-          if (const auto service = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1)) {
+          if (const auto service =
+                  names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1, ServiceMenuIcons(ids))) {
             send(What::AddService, true, bucket, 0, ids[*service]);
           }
           break;

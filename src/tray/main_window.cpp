@@ -213,6 +213,7 @@ struct Item {
   std::wstring text;
   std::wstring detail;
   std::wstring text2;  // a third line where a kind has one (CheckRow: what the result means)
+  std::string logo;    // a Tag's service logo (icons.h ServiceLogo): the service's id
   ItemAction action = ItemAction::None;
   UiCommand command = UiCommand::Toggle;
   int index = 0;
@@ -763,6 +764,7 @@ class Painter {
   // needs new ones.
   void ForgetIcons() const {
     icons_.clear();
+    logos_.clear();
     flags_.reset();
     flagsLoaded_ = false;
     night_.reset();  // the old target's bitmap
@@ -858,6 +860,28 @@ class Painter {
         SUCCEEDED(converter->Initialize(source.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr,
                                         0, WICBitmapPaletteTypeCustom))) {
       target->CreateBitmapFromWicBitmap(converter.get(), nullptr, it->second.put());
+    }
+    return it->second.get();
+  }
+
+  // A service's logo (icons.h ServiceLogo), 16 DIPs at the target's DPI;
+  // null if it has none. Drawn once per id (a miss too).
+  ID2D1Bitmap* Logo(ID2D1RenderTarget* target, const std::string& id) const {
+    const auto [it, fresh] = logos_.try_emplace(id);
+    if (!fresh) {
+      return it->second.get();
+    }
+    FLOAT dpiX = 96;
+    FLOAT dpiY = 96;
+    target->GetDpi(&dpiX, &dpiY);
+    const auto size = static_cast<int>(std::lround(16 * dpiX / 96.0f));
+    const std::vector<std::uint32_t> pixels = ServiceLogo(id, size);
+    if (!pixels.empty()) {
+      const auto side = static_cast<UINT32>(size);
+      target->CreateBitmap({side, side}, pixels.data(), side * 4,
+                           D2D1::BitmapProperties(
+                               D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), dpiX, dpiY),
+                           it->second.put());
     }
     return it->second.get();
   }
@@ -1071,7 +1095,7 @@ class Painter {
         if (chip.bucket != b.id) {
           continue;
         }
-        float w = 20 + TextWidth(chip.text, body_.get()) + (chip.icon.empty() ? 0.0f : 22.0f) +
+        float w = 20 + TextWidth(chip.text, body_.get()) + (chip.icon.empty() && chip.logo.empty() ? 0.0f : 22.0f) +
                   (chip.detail.empty() ? 0.0f : 6 + TextWidth(chip.detail, caption_.get()));
         if (w > right - left) {
           w = right - left;
@@ -1101,6 +1125,7 @@ class Painter {
                                nullptr, UiCommand::ChipMenu, static_cast<int>(n));
         tag.detail = chip.detail;
         tag.text2 = chip.icon;
+        tag.logo = chip.logo;
         l.items.push_back(std::move(tag));
       }
       y += h + 8;
@@ -2335,7 +2360,7 @@ class Painter {
         k.Outline(r, 8, Rgb(255, 255, 255, 0.10f));
         const float cy = (r.top + r.bottom) / 2;
         float left = r.left + 10;
-        if (ID2D1Bitmap* icon = ProgramIcon(k.t, it.text2); icon != nullptr) {
+        if (ID2D1Bitmap* icon = it.logo.empty() ? ProgramIcon(k.t, it.text2) : Logo(k.t, it.logo); icon != nullptr) {
           k.t->DrawBitmap(icon, {left, cy - 8, left + 16, cy + 8});
           left += 22;
         }
@@ -2570,6 +2595,7 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> navGlyph_;
   // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
   mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
+  mutable std::map<std::string, wil::com_ptr<ID2D1Bitmap>> logos_;  // Logo's, by service; ForgetIcons too
   mutable wil::com_ptr<ID2D1Bitmap> flags_;  // Flags'
   mutable bool flagsLoaded_ = false;
   mutable wil::com_ptr<ID2D1Bitmap> night_;  // Night's
