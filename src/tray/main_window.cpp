@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "cube.h"
+#include "world_map.h"
 #include "flags.h"
 #include "icons.h"
 #include "resource.h"
@@ -69,8 +70,12 @@ constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
-constexpr float kPower = 104;      // the on/off button's diameter
 constexpr float kNav = 62;         // the overview's navigation under the page
+// The switch (the cube) in the navigation's middle: the room it takes in the
+// bar, its size, how far it stands up over the bar.
+constexpr float kNavSwitch = 100;
+constexpr float kSwitch = 88;
+constexpr float kSwitchRise = kSwitch + 6 - kNav;
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
@@ -224,7 +229,14 @@ struct Layout {
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
   std::optional<D2D1_RECT_F> logBox;
-  std::optional<D2D1_POINT_2F> blueprint;  // the main screen's drawing (cube.h DrawBlueprint) round this point
+  // The main screen's stage (world_map.h): the map centered on the route's
+  // middle, in the room between the cards; the route's arch this high.
+  struct Stage {
+    float cx = 0;
+    float cy = 0;
+    float arc = 0;
+  };
+  std::optional<Stage> stage;
 };
 
 // The log's level groups, as its filter shows them.
@@ -592,6 +604,15 @@ class Painter {
       l.logBox->top -= scroll;
       l.logBox->bottom -= scroll;
     }
+    // The switch: the navigation's middle, bigger than its neighbours and
+    // standing up over the bar - last, so nothing scrolled is drawn over it.
+    if (page == UiPage::Overview) {
+      Item power = CommandItem(Kind::Power, {width / 2 - kSwitch / 2, height - 6 - kSwitch, width / 2 + kSwitch / 2, height - 6},
+                               {}, kGlyphPower, UiCommand::Toggle);
+      power.checked = c.on;
+      power.scrolls = false;
+      l.items.push_back(std::move(power));
+    }
     return l;
   }
 
@@ -601,11 +622,11 @@ class Painter {
     if (FAILED(t->CreateSolidColorBrush(Rgb(0, 0, 0), brush.put()))) {
       return;
     }
-    Canvas k{t, brush.get(), dwrite_.get(), Flags(t), in.cube ? &*in.cube : nullptr};
+    Canvas k{t, brush.get(), dwrite_.get(), Flags(t), in.cube ? &*in.cube : nullptr, l.stage.has_value()};
     const D2D1_SIZE_F size = t->GetSize();
     t->Clear(FromColorRef(ui::kWindowColor));
-    if (l.blueprint) {
-      DrawBlueprint(t, size, *l.blueprint);
+    if (l.stage) {
+      DrawStage(t, size, *l.stage, c);
     }
 
     bool clipped = false;
@@ -731,6 +752,7 @@ class Painter {
     icons_.clear();
     flags_.reset();
     flagsLoaded_ = false;
+    stageCache_ = {};  // the old target's bitmap
   }
 
  private:
@@ -744,6 +766,7 @@ class Painter {
     IDWriteFactory* dwrite;  // for text with flags in it
     ID2D1Bitmap* sprite;     // the flags (flags.h); null if it couldn't be had
     const CubePose* cube;    // the switch's pose mid-motion; null: its state's (cube.h)
+    bool glass;              // over the main screen's stage: cards let it show through
 
     ID2D1Brush* Color(D2D1_COLOR_F c) const { return SetColor(b, c); }
     void Fill(D2D1_RECT_F r, D2D1_COLOR_F c) const { t->FillRectangle(r, Color(c)); }
@@ -1030,7 +1053,6 @@ class Painter {
   // where it comes out. The rest of the window - the kill switch
   // too, in the settings - is a tap away in the navigation under it (Nav).
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
-    const float cx = (x0 + x1) / 2;
 
     // The state is the cube's: words only when there's something to say.
     if (const std::wstring detail = StateDetail(c); !detail.empty()) {
@@ -1087,57 +1109,25 @@ class Painter {
       y += h + kGap;
     }
 
-    // The switch.
-    y += 6;
-    const std::size_t hero = l.items.size();
-    Item power = CommandItem(Kind::Power, {cx - kPower / 2, y, cx + kPower / 2, y + kPower}, {}, kGlyphPower,
-                             UiCommand::Toggle);
-    power.checked = c.on;
-    l.items.push_back(std::move(power));
-    y += kPower + 20;
-
-    // The server it runs on: where it really is, its network, its latency.
-    y = ServerCard(l, c, x0, x1, y);
-
     // A subscription in trouble: said here, its report for support a click
     // away - not three pages deep. Nothing while all is fine.
     if (!c.trouble.empty() && c.troubleProfile >= 0) {
-      y = Paragraph(l, Kind::ErrorText, c.trouble, x0, x1, y + 10) + 8;
+      y = Paragraph(l, Kind::ErrorText, c.trouble, x0, x1, y) + 8;
       l.items.push_back(ReportButton(c, c.troubleSupport, {x0, y, x1, y + kButton}, c.troubleProfile));
-      y += kButton;
+      y += kButton + kGap;
     }
-
     if (!c.killSwitchError.empty()) {
-      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y + kGap);
+      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
-    // Room to spare in a tall window: the cube grows into some of it (up to
-    // 1.7 times), then it and what's under it move down into half of the
-    // rest - to the middle, not stuck to the top.
-    if (float spare = bottom - y; spare > 8) {
-      const float grow = std::min(spare * 0.4f, kPower * 0.7f);
-      Item& cube = l.items[hero];
-      cube.rect.left -= grow / 2;
-      cube.rect.right += grow / 2;
-      cube.rect.bottom += grow;
-      for (std::size_t i = hero + 1; i < l.items.size(); ++i) {
-        l.items[i].rect.top += grow;
-        l.items[i].rect.bottom += grow;
-      }
-      y += grow;
-      spare -= grow;
-      const float shift = std::min(spare / 2, 110.0f);
-      for (std::size_t i = hero; i < l.items.size(); ++i) {
-        l.items[i].rect.top += shift;
-        l.items[i].rect.bottom += shift;
-      }
-      y += shift;
-    }
-    // The drawing under it all, its axes through the cube (cube.cpp: its
-    // center a little above the box's).
-    const D2D1_RECT_F& cube = l.items[hero].rect;
-    l.blueprint = D2D1_POINT_2F{(cube.left + cube.right) / 2, cube.top + (cube.right - cube.left) * 0.48f};
-    return y;
+    // The server it runs on at the page's foot, clear of the switch standing
+    // up out of the navigation; the map in the room between.
+    constexpr float kServerCard = 60;
+    const float serverTop = std::max(y + 140, bottom + kPad - kSwitchRise - 10 - kServerCard);
+    l.stage = Layout::Stage{.cx = (x0 + x1) / 2,
+                            .cy = (y + serverTop) / 2,
+                            .arc = std::clamp((serverTop - y) * 0.3f, 24.0f, 80.0f)};
+    return ServerCard(l, c, x0, x1, serverTop);
   }
 
   // What it connects with, over the switch: the subscription (the first one
@@ -1320,9 +1310,10 @@ class Painter {
         {kGlyphSettings, L"Настройки", UiPage::Settings,
          L"Настройки · Sovereign " + c.version.substr(0, c.version.find(L' ')), c.update == UiUpdate::Available},
     }};
-    const float step = width / static_cast<float>(entries.size());
+    // Two each side of the switch (Build puts it in the middle, over the bar).
+    const float step = (width - kNavSwitch) / static_cast<float>(entries.size());
     for (std::size_t i = 0; i < entries.size(); ++i) {
-      const float left = static_cast<float>(i) * step;
+      const float left = static_cast<float>(i) * step + (i >= entries.size() / 2 ? kNavSwitch : 0.0f);
       Item nav = Make(Kind::NavItem, {left, top + 6, left + step, height - 6}, entries[i].label,
                       entries[i].glyph);
       nav.action = ItemAction::Page;
@@ -2097,7 +2088,8 @@ class Painter {
     const float hoverAlpha = pressed ? 0.04f : (hovered ? 0.08f : 0.0f);
     switch (it.kind) {
       case Kind::Card:
-        k.Round(r, kRadius, FromColorRef(ui::kCardColor));
+        // Dark glass over the stage, the map showing through; solid elsewhere.
+        k.Round(r, kRadius, FromColorRef(ui::kCardColor, k.glass ? 0.72f : 1.0f));
         if (hoverAlpha > 0 && it.action != ItemAction::None) {  // a card that is a link
           k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha * 0.5f));
         }
@@ -2438,6 +2430,75 @@ class Painter {
     }
     const D2D1_RECT_F textBox{left + glyphWidth, r.top, left + glyphWidth + textWidth + 2, r.bottom};
     k.Text(it.text, body_.get(), textBox, ink);
+  }
+
+  // The stage, drawn once into a bitmap the window's size - thousands of
+  // dots, and every frame of the cube's motion would redraw them all - and
+  // again only when it changes: the size, where the cube stands, the
+  // countries. The bitmap is the target's: a new target, a new one.
+  struct StageCache {
+    ID2D1RenderTarget* target = nullptr;
+    D2D1_SIZE_F size{};
+    Layout::Stage stage{};
+    std::wstring home;
+    std::wstring exit;
+    bool on = false;
+    wil::com_ptr<ID2D1Bitmap> bitmap;
+  };
+  mutable StageCache stageCache_;
+
+  void DrawStage(ID2D1RenderTarget* t, D2D1_SIZE_F size, const Layout::Stage& stage, const UiContent& c) const {
+    StageCache& cache = stageCache_;
+    const bool on = c.display == Display::On;
+    const bool same = cache.bitmap && cache.target == t && cache.size.width == size.width &&
+                      cache.size.height == size.height && cache.stage.cx == stage.cx &&
+                      cache.stage.cy == stage.cy && cache.stage.arc == stage.arc &&
+                      cache.home == c.homeCountry && cache.exit == c.exitCountry && cache.on == on;
+    if (!same) {
+      cache = StageCache{.target = t, .size = size, .stage = stage, .home = c.homeCountry, .exit = c.exitCountry,
+                         .on = on, .bitmap = nullptr};
+      wil::com_ptr<ID2D1BitmapRenderTarget> layer;
+      if (SUCCEEDED(t->CreateCompatibleRenderTarget(size, layer.put()))) {
+        layer->BeginDraw();
+        layer->Clear(FromColorRef(ui::kWindowColor));  // opaque: the window's own target ignores alpha
+        DrawStageOn(layer.get(), size, stage, c);
+        if (SUCCEEDED(layer->EndDraw())) {
+          layer->GetBitmap(cache.bitmap.put());
+        }
+      }
+    }
+    if (cache.bitmap) {
+      t->DrawBitmap(cache.bitmap.get(), D2D1::RectF(0, 0, size.width, size.height));
+    } else {
+      DrawStageOn(t, size, stage, c);
+    }
+  }
+
+  // The main screen's stage: the world on the floor, the route from the
+  // user's country (the Windows region's) to the exit's while connected;
+  // without the user's, centered on the exit's (or on Europe).
+  static void DrawStageOn(ID2D1RenderTarget* t, D2D1_SIZE_F size, const Layout::Stage& stage, const UiContent& c) {
+    const auto ascii = [](const std::wstring& w) {
+      std::string s;
+      for (const wchar_t ch : w) {
+        s += static_cast<char>(ch < 128 ? ch : '?');
+      }
+      return s;
+    };
+    const std::optional<LatLon> home = CapitalOf(ascii(c.homeCountry));
+    const std::optional<LatLon> exit =
+        c.display == Display::On && !c.exitCountry.empty() ? CapitalOf(ascii(c.exitCountry)) : std::nullopt;
+    const LatLon from = home.value_or(exit.value_or(LatLon{.lat = 50, .lon = 20}));
+    const std::optional<LatLon> to = home && exit && (home->lat != exit->lat || home->lon != exit->lon)
+                                         ? exit
+                                         : std::nullopt;
+    // The route across most of the window's width.
+    const MapView view = FitMap(from, to, {stage.cx, stage.cy}, size.width * 0.62f);
+    DrawWorld(t, size, view, from, to, Mix(FromColorRef(ui::kAccent), Rgb(255, 255, 255), 0.15f), stage.arc);
+  }
+
+  static D2D1_COLOR_F Mix(D2D1_COLOR_F a, D2D1_COLOR_F b, float t) {
+    return D2D1::ColorF(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
   }
 
   // An icon button as a key: its face lit from above, a bright edge along

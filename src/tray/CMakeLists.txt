@@ -67,6 +67,9 @@ add_library(sovereign_tray_ui STATIC
   main_window.h
   cube.cpp
   cube.h
+  world_map.cpp
+  world_map.h
+  world_map.gen.h
   icons.cpp
   icons.h
   ui_content.h

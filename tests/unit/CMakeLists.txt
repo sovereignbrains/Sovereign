@@ -135,6 +135,11 @@ target_link_libraries(unit-cube PRIVATE sovereign_tray_ui)
 sovereign_copy_asan_runtime(unit-cube)
 add_test(NAME unit-cube COMMAND unit-cube)
 
+add_executable(unit-world-map world_map_test.cpp check.h)
+target_link_libraries(unit-world-map PRIVATE sovereign_tray_ui)
+sovereign_copy_asan_runtime(unit-world-map)
+add_test(NAME unit-world-map COMMAND unit-world-map)
+
 add_executable(unit-lan lan_test.cpp check.h)
 target_link_libraries(unit-lan PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-lan)

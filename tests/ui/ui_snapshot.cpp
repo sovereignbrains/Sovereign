@@ -95,6 +95,7 @@ UiContent SampleContent() {
   c.exitIp = L"185.12.34.56";
   c.exitCountry = L"NL";
   c.exitCountryName = L"Нидерланды";
+  c.homeCountry = L"RU";
   c.update = sovereign::tray::UiUpdate::Available;
   c.updateVersion = L"0.3.0";
   c.autostart = true;

@@ -3095,6 +3095,19 @@ std::vector<sovereign::tray::LanEntry> LanEntriesOf(const View& v) {
   return sovereign::tray::LanEntries(v.lanDevices, v.lanAllowed);
 }
 
+// The user's country as Windows knows it (Settings > Time & language >
+// Region): "RU" - where the main screen's route starts. Nothing asked of the
+// network; the region, not where the user really is.
+std::wstring HomeCountry() {
+  const GEOID nation = GetUserGeoID(GEOCLASS_NATION);
+  std::array<wchar_t, 8> iso{};
+  if (nation == GEOID_NOT_AVAILABLE ||
+      GetGeoInfoW(nation, GEO_ISO2, iso.data(), static_cast<int>(iso.size()), 0) <= 1) {
+    return {};
+  }
+  return iso.data();
+}
+
 // A support report asked for while the box runs: written once a fresh test
 // of the servers is over (View::delaysRound moves past `round`) - not from
 // whatever the last test said, hours ago.
@@ -3147,8 +3160,10 @@ UiContent ContentFrom(const View& v) {
     }
     if (profile.trafficTotal > 0) {
       shown.trafficTotal = Widen(sovereign::tray::BytesText(profile.trafficTotal));
-      shown.trafficShare = std::min(1.0f, static_cast<float>(static_cast<double>(profile.trafficUsed) /
-                                                             static_cast<double>(profile.trafficTotal)));
+      // clamp, not min: windows.h's min macro breaks std::min here (CI's clang-tidy).
+      shown.trafficShare = std::clamp(static_cast<float>(static_cast<double>(profile.trafficUsed) /
+                                                         static_cast<double>(profile.trafficTotal)),
+                                      0.0f, 1.0f);
     }
     if (profile.expire > 0) {
       shown.paidTill = Widen(sovereign::tray::DateText(profile.expire, UtcOffsetMinutes()));
@@ -3339,6 +3354,7 @@ UiContent ContentFrom(const View& v) {
   c.exitIp = Widen(v.exitIp.ip);
   c.exitCountry = Widen(v.exitIp.country);
   c.exitCountryName = CountryName(c.exitCountry);
+  c.homeCountry = HomeCountry();
   c.exitPending = v.exitIp.pending;
   c.hideExitIp = v.hideExitIp;
   c.logLevel = Widen(v.logLevel);

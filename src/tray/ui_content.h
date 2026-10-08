@@ -170,6 +170,7 @@ struct UiContent {
   std::wstring exitIp;                  // empty until known
   std::wstring exitCountry;             // "NL", or empty
   std::wstring exitCountryName;         // "Нидерланды" - the system's name for it
+  std::wstring homeCountry;             // the Windows region (ISO alpha-2, "RU"): where the main screen's route starts
   bool exitPending = false;             // being looked up
   bool hideExitIp = false;              // the country only
   std::wstring logLevel;                // what the core writes; empty = the config's
