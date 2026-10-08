@@ -5,3 +5,5 @@
 #define IDI_SOVEREIGN 1
 // The country flags sprite (flags.h).
 #define IDR_FLAGS 101
+// The main screen's backdrop picture (assets/backdrop/night.jpg).
+#define IDR_NIGHT 102

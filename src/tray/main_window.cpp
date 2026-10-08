@@ -73,8 +73,9 @@ constexpr float kNav = 62;         // the overview's navigation under the page
 // The switch (the cube) in the navigation's middle: the room it takes in the
 // bar, its size, how far it stands up over the bar.
 constexpr float kNavSwitch = 100;
-constexpr float kSwitch = 88;
-constexpr float kSwitchRise = kSwitch + 6 - kNav;
+// The switch's size grows with a tall window (88 at the usual 660, up to 124).
+float SwitchSize(float height) { return std::clamp(88 + (height - 660) * 0.12f, 88.0f, 124.0f); }
+float SwitchRise(float height) { return SwitchSize(height) + 6 - kNav; }
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
@@ -228,7 +229,7 @@ struct Layout {
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
   std::optional<D2D1_RECT_F> logBox;
-  bool night = false;  // the main screen's backdrop under it all (cube.h DrawNight)
+  bool night = false;  // the main screen's backdrop picture under it all (DrawBackdrop)
 };
 
 // The log's level groups, as its filter shows them.
@@ -602,7 +603,8 @@ class Painter {
     // The switch: the navigation's middle, bigger than its neighbours and
     // standing up over the bar - last, so nothing scrolled is drawn over it.
     if (page == UiPage::Overview) {
-      Item power = CommandItem(Kind::Power, {width / 2 - kSwitch / 2, height - 6 - kSwitch, width / 2 + kSwitch / 2, height - 6},
+      const float size = SwitchSize(height);
+      Item power = CommandItem(Kind::Power, {width / 2 - size / 2, height - 6 - size, width / 2 + size / 2, height - 6},
                                {}, kGlyphPower, UiCommand::Toggle);
       power.checked = c.on;
       power.scrolls = false;
@@ -761,7 +763,8 @@ class Painter {
     icons_.clear();
     flags_.reset();
     flagsLoaded_ = false;
-    backdrop_ = {};  // the old target's bitmap
+    night_.reset();  // the old target's bitmap
+    nightLoaded_ = false;
   }
 
  private:
@@ -861,16 +864,33 @@ class Painter {
   // `target` at 96 DPI - so a flag's source rectangle is its pixels. Null if
   // it can't be had; tried once per target.
   ID2D1Bitmap* Flags(ID2D1RenderTarget* target) const {
-    if (flagsLoaded_ || !wic_) {
-      return flags_.get();
+    if (!flagsLoaded_) {
+      flagsLoaded_ = true;
+      flags_ = ResourceBitmap(target, IDR_FLAGS);
     }
-    flagsLoaded_ = true;
+    return flags_.get();
+  }
+
+  // The main screen's backdrop picture (IDR_NIGHT), as a bitmap of `target`;
+  // null if it can't be had. Tried once per target.
+  ID2D1Bitmap* Night(ID2D1RenderTarget* target) const {
+    if (!nightLoaded_) {
+      nightLoaded_ = true;
+      night_ = ResourceBitmap(target, IDR_NIGHT);
+    }
+    return night_.get();
+  }
+
+  // A picture in the exe's resources (RCDATA: PNG or JPEG) as a bitmap of
+  // `target` at 96 DPI - its pixels are DIPs. Null if it can't be had.
+  wil::com_ptr<ID2D1Bitmap> ResourceBitmap(ID2D1RenderTarget* target, int id) const {
+    wil::com_ptr<ID2D1Bitmap> bitmap;
     HMODULE module = GetModuleHandleW(nullptr);
-    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(IDR_FLAGS), MAKEINTRESOURCEW(10));  // RT_RCDATA
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));  // RT_RCDATA
     HGLOBAL data = resource != nullptr ? LoadResource(module, resource) : nullptr;
     void* bytes = data != nullptr ? LockResource(data) : nullptr;
-    if (bytes == nullptr) {
-      return nullptr;
+    if (bytes == nullptr || !wic_) {
+      return bitmap;
     }
     wil::com_ptr<IWICStream> stream;
     wil::com_ptr<IWICBitmapDecoder> decoder;
@@ -884,9 +904,9 @@ class Painter {
                                         0, WICBitmapPaletteTypeCustom))) {
       const D2D1_BITMAP_PROPERTIES props =
           D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
-      target->CreateBitmapFromWicBitmap(converter.get(), &props, flags_.put());
+      target->CreateBitmapFromWicBitmap(converter.get(), &props, bitmap.put());
     }
-    return flags_.get();
+    return bitmap;
   }
 
   // The height `text` takes wrapped to `width` in `format`.
@@ -1131,7 +1151,7 @@ class Painter {
     // The server it runs on at the page's foot, over the switch standing up
     // out of the navigation.
     constexpr float kServerCard = 60;
-    const float serverTop = std::max(y + 140, bottom + kPad - kSwitchRise - 10 - kServerCard);
+    const float serverTop = std::max(y + 140, bottom + kPad - SwitchRise(bottom + kPad + kNav) - 10 - kServerCard);
     return ServerCard(l, c, x0, x1, serverTop);
   }
 
@@ -1315,10 +1335,13 @@ class Painter {
         {kGlyphSettings, L"Настройки", UiPage::Settings,
          L"Настройки · Sovereign " + c.version.substr(0, c.version.find(L' ')), c.update == UiUpdate::Available},
     }};
-    // Two each side of the switch (Build puts it in the middle, over the bar).
-    const float step = (width - kNavSwitch) / static_cast<float>(entries.size());
+    // Two each side of the switch (Build puts it in the middle, over the bar),
+    // kept to the page's width: in a wide window they stay by it, not at the edges.
+    const float band = std::min(width, kMaxPage);
+    const float start = (width - band) / 2;
+    const float step = (band - kNavSwitch) / static_cast<float>(entries.size());
     for (std::size_t i = 0; i < entries.size(); ++i) {
-      const float left = static_cast<float>(i) * step + (i >= entries.size() / 2 ? kNavSwitch : 0.0f);
+      const float left = start + static_cast<float>(i) * step + (i >= entries.size() / 2 ? kNavSwitch : 0.0f);
       Item nav = Make(Kind::NavItem, {left, top + 6, left + step, height - 6}, entries[i].label,
                       entries[i].glyph);
       nav.action = ItemAction::Page;
@@ -2445,36 +2468,36 @@ class Painter {
     k.Text(it.text, body_.get(), textBox, ink);
   }
 
-  // The main screen's backdrop (cube.h DrawNight), drawn once into a bitmap
-  // the window's size - thousands of lines, and every frame of the cube's
-  // motion would redraw them all - and again only when the size changes.
-  // The bitmap is the target's: a new target, a new one.
-  struct BackdropCache {
-    ID2D1RenderTarget* target = nullptr;
-    D2D1_SIZE_F size{};
-    wil::com_ptr<ID2D1Bitmap> bitmap;
-  };
-  mutable BackdropCache backdrop_;
-
+  // The main screen's backdrop: the night picture (Night) filling the window
+  // - cropped, never stretched - its light on the horizon kept at the middle
+  // and a little under the upper half; darkened at the top and the foot so
+  // the cards and the navigation read on it.
   void DrawBackdrop(ID2D1RenderTarget* t, D2D1_SIZE_F size) const {
-    BackdropCache& cache = backdrop_;
-    if (!cache.bitmap || cache.target != t || cache.size.width != size.width || cache.size.height != size.height) {
-      cache = BackdropCache{.target = t, .size = size, .bitmap = nullptr};
-      wil::com_ptr<ID2D1BitmapRenderTarget> layer;
-      if (SUCCEEDED(t->CreateCompatibleRenderTarget(size, layer.put()))) {
-        layer->BeginDraw();
-        layer->Clear(FromColorRef(ui::kWindowColor));  // opaque: the window's own target ignores alpha
-        DrawNight(layer.get(), size);
-        if (SUCCEEDED(layer->EndDraw())) {
-          layer->GetBitmap(cache.bitmap.put());
-        }
+    ID2D1Bitmap* night = Night(t);
+    if (night == nullptr) {
+      return;
+    }
+    const D2D1_SIZE_F picture = night->GetSize();
+    constexpr D2D1_POINT_2F kLight{0.5f, 0.5f};  // where the light is in the picture: the path's far end
+    const float scale = std::max(size.width / picture.width, size.height / picture.height);
+    const float w = picture.width * scale;
+    const float h = picture.height * scale;
+    const float left = std::clamp(size.width / 2 - kLight.x * w, size.width - w, 0.0f);
+    const float top = std::clamp(size.height * 0.45f - kLight.y * h, size.height - h, 0.0f);
+    // A little dimmed: a backdrop, not the subject - the light mustn't outshine the cards.
+    t->DrawBitmap(night, D2D1::RectF(left, top, left + w, top + h), 0.82f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    const auto shade = [&](float from, float to, float fromAlpha, float toAlpha) {
+      const std::array<D2D1_GRADIENT_STOP, 2> stops{{{0, Rgb(0, 0, 0, fromAlpha)}, {1, Rgb(0, 0, 0, toAlpha)}}};
+      wil::com_ptr<ID2D1GradientStopCollection> collection;
+      wil::com_ptr<ID2D1LinearGradientBrush> brush;
+      if (SUCCEEDED(t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
+          SUCCEEDED(t->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties({0, from}, {0, to}),
+                                                 collection.get(), brush.put()))) {
+        t->FillRectangle(D2D1::RectF(0, std::min(from, to), size.width, std::max(from, to)), brush.get());
       }
-    }
-    if (cache.bitmap) {
-      t->DrawBitmap(cache.bitmap.get(), D2D1::RectF(0, 0, size.width, size.height));
-    } else {
-      DrawNight(t, size);
-    }
+    };
+    shade(0, size.height * 0.30f, 0.45f, 0.0f);                          // under the subscription's card
+    shade(size.height * 0.62f, size.height, 0.0f, 0.78f);                 // under the server's card and the navigation
   }
   // An icon button as a key: its face lit from above, a bright edge along
   // its top, on a dark base that gives it height - up a little under the
@@ -2541,6 +2564,8 @@ class Painter {
   mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
   mutable wil::com_ptr<ID2D1Bitmap> flags_;  // Flags'
   mutable bool flagsLoaded_ = false;
+  mutable wil::com_ptr<ID2D1Bitmap> night_;  // Night's
+  mutable bool nightLoaded_ = false;
 };
 
 int Scale(float dip, UINT dpi) { return static_cast<int>(std::lround(dip * static_cast<float>(dpi) / 96.0f)); }

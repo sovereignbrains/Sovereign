@@ -144,6 +144,8 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(content, static_cast<UiPage>(p), logs, 400, 620, 96, path);
   }
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\overview-150.png");
+  // Maximized on a laptop: the navigation kept to the page's width, the switch grown with the window.
+  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 1280, 800, 96, dir + L"\\overview-wide.png");
   // The first screen: nothing yet - what the clipboard holds offered, or the ways to bring one.
   UiContent first = content;
   first.profiles.clear();
