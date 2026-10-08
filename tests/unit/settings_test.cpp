@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -47,7 +48,12 @@ void TestMigration(const fs::path& data) {
 
   const TraySettings settings = LoadSettings();
   CHECK(settings.wantOn);
-  CHECK(settings.apps.size() == 1);
+  // The apps around the proxy: a rule each, directly (MoveAppsToRules).
+  CHECK(settings.apps.empty());
+  CHECK(std::any_of(settings.routing.rules.begin(), settings.routing.rules.end(), [](const RouteRule& r) {
+    return r.processes == std::vector<std::string>{"steam.exe"} && r.action == RouteRule::Action::Direct &&
+           r.domains.empty();
+  }));
   CHECK(settings.profiles.size() == 1);
   CHECK(settings.protocol == "NL");  // the pick is one for all now
   if (!settings.profiles.empty()) {

@@ -269,7 +269,20 @@ TraySettings LoadSettings() {
       }
     }
   }
+  MoveAppsToRules(settings);
   return settings;
+}
+
+void MoveAppsToRules(TraySettings& settings) {
+  if (settings.appsMode != AppsMode::Exclude) {
+    return;  // only the listed through the proxy: a mode of its own, kept as it is
+  }
+  for (std::string& app : settings.apps) {
+    MergeRules(settings.routing.rules,
+               {RouteRule{.domains = {}, .keywords = {}, .ips = {}, .processes = {std::move(app)},
+                          .action = RouteRule::Action::Direct}});
+  }
+  settings.apps.clear();
 }
 
 void SaveSettings(const TraySettings& settings) {

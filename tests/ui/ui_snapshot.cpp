@@ -32,6 +32,27 @@ namespace {
 using sovereign::tray::UiContent;
 using sovereign::tray::UiPage;
 
+// The routing board with a bit of everything, a long site among it.
+std::vector<sovereign::tray::UiChip> SampleBoard() {
+  using sovereign::tray::UiChip;
+  return {
+      {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Service, .index = 2, .bucket = 1, .text = L"YouTube", .detail = L"США", .icon = {}},
+      {.kind = UiChip::Kind::Service, .index = 3, .bucket = 0, .text = L"Steam", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Rule, .index = 0, .bucket = 0, .text = L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com",
+       .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Rule, .index = 1, .bucket = 1, .text = L"10.9.0.0/16, steam.exe", .detail = {},
+       .icon = {}},
+      {.kind = UiChip::Kind::Rule, .index = 2, .bucket = 2, .text = L"~tracker", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Rule, .index = 3, .bucket = 3, .text = L"chatgpt.com", .detail = {}, .icon = {}},
+      {.kind = UiChip::Kind::Rule, .index = 4, .bucket = 0,
+       .text = L"очень-длинный-поддомен.какой-то-банк-с-длинным-именем.example.ru", .detail = {}, .icon = {}},
+  };
+}
+
 UiContent SampleContent() {
   UiContent c;
   c.display = sovereign::tray::Display::On;
@@ -175,6 +196,7 @@ int Snapshots(const std::wstring& dir) {
   routed.routing.warpAddress = L"172.16.0.2";
   routed.routing.warpState = L"работает через «4G | Whitelist №1»";
   routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
+  routed.routing.board = SampleBoard();
   routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
   sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1400, 96, dir + L"\\routing.png");
   routed.routing.lists = L"Списки правил не скачались: сервер ответил 503. Пока работают зоны .ru/.рф/.su.";
@@ -355,6 +377,7 @@ int LayoutTest(const std::wstring& dir) {
   routed.routing.warpRegistered = true;
   routed.routing.warpAddress = L"172.16.0.2";
   routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
+  routed.routing.board = SampleBoard();
   const std::array<std::pair<UiPage, const wchar_t*>, 8> pages = {{{UiPage::Overview, L"overview"},
                                                                    {UiPage::Servers, L"servers"},
                                                                    {UiPage::Subscription, L"subscription"},

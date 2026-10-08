@@ -44,8 +44,11 @@ struct ServiceRoute {
   // Warp: through WARP. Country: through the fastest server whose measured
   // exit is in `country`, whatever the provider named it - picked by the
   // tray as the exits and delays come in (PickCountryServer), switched with
-  // box_select, no restart; none there: as usual.
-  enum class Way : std::uint8_t { Warp, Country };
+  // box_select, no restart; none there: as usual. Direct: around the proxy,
+  // its names resolved here too. Proxy: through the proxy whatever else says
+  // otherwise (Russian sites directly, everything else directly). Block: not
+  // at all.
+  enum class Way : std::uint8_t { Warp, Country, Direct, Proxy, Block };
   std::string id;       // ServiceCatalog's, "netflix"
   Way way = Way::Warp;
   std::string country;  // Country: "US"

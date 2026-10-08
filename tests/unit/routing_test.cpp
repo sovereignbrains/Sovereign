@@ -441,6 +441,62 @@ void TestServices() {
   }
 }
 
+// The routing board: a service directly, through the proxy or blocked, kept
+// in tray.json; a site the user sent somewhere wins over a program sent
+// elsewhere - the program rules after the site rules, whatever the order
+// they were added in.
+void TestBoard() {
+  for (const ServiceRoute::Way way : {ServiceRoute::Way::Direct, ServiceRoute::Way::Proxy, ServiceRoute::Way::Block}) {
+    RoutingSettings s;
+    s.services.push_back({.id = "netflix", .way = way, .country = {}});
+    const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
+    CHECK(back.services.size() == 1 && back.services[0].way == way);
+    CHECK(!WarpReady(s));
+    const auto combined = CombineConfigs({{"keys", Keys(), {}}}, OwnFrame(s));
+    const std::string text = ApplyRouting(combined.config.value_or("{}"), s, Files());
+    Checked().emplace_back("board", text);
+    if (!Files().empty()) {
+      const json c = json::parse(text);
+      bool routed = false;
+      for (const json& r : c["route"]["rules"]) {
+        if (r.value("rule_set", json()) != "sov-svc-netflix") {
+          continue;
+        }
+        routed = way == ServiceRoute::Way::Block   ? r.value("action", "") == "reject"
+                 : way == ServiceRoute::Way::Proxy ? r.value("outbound", "") != "direct" && r.contains("outbound")
+                                                   : r.value("outbound", "") == "direct";
+      }
+      CHECK(routed);
+      // Directly: asked here (AnswerTyposAtOnce makes it evaluate, then
+      // respond); blocked: no addresses; through the proxy: the config's own DNS.
+      bool asked = false;
+      bool empty = false;
+      for (const json& r : c["dns"]["rules"]) {
+        if (r.value("rule_set", json()) == "sov-svc-netflix") {
+          asked = asked || r.value("server", "") == "sov-local";
+          empty = empty || r.value("action", "") == "predefined";
+        }
+      }
+      CHECK(asked == (way == ServiceRoute::Way::Direct));
+      CHECK(empty == (way == ServiceRoute::Way::Block));
+    }
+  }
+
+  RoutingSettings s;
+  s.rules.push_back(*ParseRule("chrome.exe", RouteRule::Action::Proxy));
+  s.rules.push_back(*ParseRule("bank.example", RouteRule::Action::Direct));
+  const auto combined = CombineConfigs({{"keys", Keys(), {}}}, OwnFrame(s));
+  const json c = json::parse(ApplyRouting(combined.config.value_or("{}"), s, Files()));
+  int site = -1;
+  int program = -1;
+  for (std::size_t i = 0; i < c["route"]["rules"].size(); ++i) {
+    const std::string r = c["route"]["rules"][i].dump();
+    site = r.find("bank.example") != std::string::npos ? static_cast<int>(i) : site;
+    program = r.find("chrome.exe") != std::string::npos ? static_cast<int>(i) : program;
+  }
+  CHECK(site >= 0 && program > site);
+}
+
 // A service through a country: its own selector (the main group by default,
 // then the servers), switched by the tray to the fastest server measured
 // there; none there - as usual.
@@ -632,6 +688,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestTypos();
     TestServices();
     TestServiceCountry();
+    TestBoard();
     TestWarp();
     TestNaiveInsecure();
     TestLocalDnsFallback();

@@ -77,6 +77,7 @@ constexpr float kNavSwitch = 100;
 float SwitchSize(float height) { return std::clamp(88 + (height - 660) * 0.12f, 88.0f, 124.0f); }
 float SwitchRise(float height) { return SwitchSize(height) + 6 - kNav; }
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
+constexpr float kTag = 30;         // a thing on the routing board
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
 // The log page: a line's height, and how many lines it keeps (the tray keeps
@@ -188,6 +189,7 @@ enum class Kind : std::uint8_t {
   Hint,          // a "?": pointed at, its text shows in a tip
   ValueRow,      // a setting with its value on the right and a chevron: a click picks another
   Meter,         // a thin bar: how much is used (index: per mille)
+  Tag,           // a thing on the routing board: a program's icon (text2: its exe), its name, a detail after it
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
@@ -691,13 +693,13 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 31> kNames = {
+    static constexpr std::array<const wchar_t*, 32> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Nav",      L"NavBar",   L"Server", L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
-        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter"};
+        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter",  L"Tag"};
     // One per Kind, in its order: a kind added or gone shifts every name after it.
-    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Meter) + 1);
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Tag) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -1036,36 +1038,74 @@ class Painter {
     return y + h;
   }
 
-  // The user's rules in a card, a row each (a click: its menu). `warp`: only
-  // the ones through WARP - its own card; else the rest, and WARP's too while
-  // WARP is off (its card is hidden then). An empty list says `empty`.
-  static float RuleList(Layout& l, const UiRouting& r, bool warp, const wchar_t* empty, float x0, float x1, float y) {
-    std::vector<std::size_t> shown;
-    for (std::size_t i = 0; i < r.rules.size(); ++i) {
-      if (warp ? r.rules[i].warp : !(r.rules[i].warp && r.warp)) {
-        shown.push_back(i);
+  // The board: a bucket a way - through the proxy, directly, through WARP,
+  // blocked - with what goes there in it: services, sites, programs, the
+  // Russian sites and the ads lists, wrapped in rows. A click on one: where it
+  // goes instead, or away (ChipMenu); the "+" in a bucket's corner: what can
+  // go there, a site typed across the bucket (BoardAdd).
+  float Board(Layout& l, const UiRouting& r, float x0, float x1, float y) const {
+    struct Bucket {
+      int id;
+      const wchar_t* name;
+      std::wstring note;
+      const wchar_t* empty;
+    };
+    const std::wstring rest = L"и всё остальное";
+    const std::array<Bucket, 4> buckets = {{
+        {kBucketProxy, L"Через прокси", r.finalDirect ? std::wstring() : rest, L"Пока ничего отдельно"},
+        {kBucketDirect, L"Напрямую", r.finalDirect ? rest : std::wstring(), L"Пока ничего"},
+        {kBucketWarp, L"Через WARP", r.warpState, L"Сюда — то, что не пускает с адресов VPN"},
+        {kBucketBlock, L"Блок", std::wstring(), L"Пока ничего"},
+    }};
+    constexpr float kHead = 42;
+    constexpr float kChipGap = 6;
+    const float left = x0 + 12;
+    const float right = x1 - 12;
+    for (const Bucket& b : buckets) {
+      // Its things in rows from the card's left, wrapped at its right.
+      std::vector<std::pair<std::size_t, D2D1_RECT_F>> placed;
+      float cx = left;
+      float cy = 0;  // from the first row's top
+      for (std::size_t n = 0; n < r.board.size(); ++n) {
+        const UiChip& chip = r.board[n];
+        if (chip.bucket != b.id) {
+          continue;
+        }
+        float w = 20 + TextWidth(chip.text, body_.get()) + (chip.icon.empty() ? 0.0f : 22.0f) +
+                  (chip.detail.empty() ? 0.0f : 6 + TextWidth(chip.detail, caption_.get()));
+        if (w > right - left) {
+          w = right - left;
+        }
+        if (cx > left && cx + w > right) {
+          cx = left;
+          cy += kTag + kChipGap;
+        }
+        placed.emplace_back(n, D2D1_RECT_F{cx, cy, cx + w, cy + kTag});
+        cx += w + kChipGap;
       }
-    }
-    if (shown.empty()) {
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 48}));
-      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 48}, empty));
-      return y + 48 + 8;
-    }
-    const float h = static_cast<float>(shown.size()) * kProfileRow;
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-    for (std::size_t n = 0; n < shown.size(); ++n) {
-      const UiRule& rule = r.rules[shown[n]];
-      const float top = y + static_cast<float>(n) * kProfileRow;
-      if (n > 0) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      const float h = kHead + cy + kTag + 12;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      const float nameWidth = TextWidth(b.name, heading_.get());
+      l.items.push_back(Make(Kind::Heading, {left + 2, y + 6, left + 2 + nameWidth + 4, y + kHead - 4}, b.name));
+      if (!b.note.empty()) {
+        l.items.push_back(Make(Kind::Muted, {left + nameWidth + 16, y + 6, right - 40, y + kHead - 4}, b.note));
       }
-      Item item = CommandItem(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 4, top + kProfileRow - 3}, rule.text,
-                              kGlyphChevron, UiCommand::RuleMenu, static_cast<int>(shown[n]));
-      item.detail = rule.action;
-      item.checked = true;
-      l.items.push_back(std::move(item));
+      l.items.push_back(CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd,
+                                    UiCommand::BoardAdd, b.id));
+      if (placed.empty()) {
+        l.items.push_back(Make(Kind::Muted, {left + 2, y + kHead, right, y + kHead + kTag}, b.empty));
+      }
+      for (const auto& [n, at] : placed) {
+        const UiChip& chip = r.board[n];
+        Item tag = CommandItem(Kind::Tag, {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom}, chip.text,
+                               nullptr, UiCommand::ChipMenu, static_cast<int>(n));
+        tag.detail = chip.detail;
+        tag.text2 = chip.icon;
+        l.items.push_back(std::move(tag));
+      }
+      y += h + 8;
     }
-    return y + h + 8;
+    return y;
   }
 
   float Paragraph(Layout& l, Kind kind, const std::wstring& text, float x0, float x1, float y) const {
@@ -1695,28 +1735,22 @@ class Painter {
     y = PageTitle(l, L"Маршруты и DNS", nullptr, x0, x1, y, UiPage::Overview,
                   L"Куда идёт трафик и через какой DNS узнаются адреса. Всё это решает Sovereign: из подписок "
                   L"берутся только серверы, их правила и DNS не используются.");
-    const float mid = (x0 + x1) / 2;
+    // Where everything goes: the board; under it the fine settings - God
+    // Mode's, once it's there.
+    y = Board(l, r, x0, x1, y);
+    if (!r.lists.empty()) {
+      y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0 + 4, x1, y) + 4;
+    }
+    y += kGap;
 
-    // The traffic: the switches, and how the lists they use are doing.
-    y = Heading(l, L"Трафик", x0, x1, y,
-                L"Российские зоны, реклама — по спискам правил (geosite/geoip): трей скачивает их сам и "
-                L"обновляет раз в сутки; пока их нет, работают зоны .ru/.рф/.su.");
+    y = Heading(l, L"Тонкая настройка", x0, x1, y, L"То, что обычно трогать не нужно.");
     std::vector<SwitchRow> toggles = {
-        Row(L"Российское напрямую",
-            L"Сайты .ru/.рф/.su, российские сервисы и IP идут мимо прокси: они не увидят адрес сервера "
-            L"(и не свяжут его с тобой), их DNS — тоже напрямую.",
-            r.russiaDirect, UiCommand::ToggleRussiaDirect),
-        Row(L"Блокировать рекламу", L"Рекламные и следящие домены не открываются — ни через прокси, ни напрямую.",
-            r.blockAds, UiCommand::ToggleBlockAds),
         Row(L"Блокировать QUIC", L"Браузеры перейдут с QUIC (HTTP/3 по UDP) на TCP — через прокси так стабильнее.",
             r.blockQuic, UiCommand::ToggleBlockQuic),
-        Row(L"Остальное напрямую", L"Через прокси пойдёт только то, что в правилах; всё прочее — напрямую.",
+        Row(L"Остальное напрямую", L"Через прокси пойдёт только то, что лежит в «Через прокси»; всё прочее — напрямую.",
             r.finalDirect, UiCommand::ToggleFinalDirect),
     };
     y = Switches(l, toggles, x0, x1, y);
-    if (!r.lists.empty()) {
-      y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0 + 4, x1, y + 6);
-    }
     y += kGap + 4;
 
     // DNS: the client's own - its two resolvers and IPv4 in one card.
@@ -1747,79 +1781,31 @@ class Painter {
       y += h + kGap + 4;
     }
 
-    // Services: a whole service its own way, by its list - none shown until
-    // one is added (one button, not a row per service).
-    y = Heading(l, L"Сервисы", x0, x1, y,
-                L"Сервис целиком — по готовому списку его адресов, без ручного ввода сайтов. Например, Netflix "
-                L"через WARP: с адреса сервера в Германии он урезает каталог или не пускает вовсе.");
-    if (!r.services.empty()) {
-      const float h = static_cast<float>(r.services.size()) * kProfileRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      for (std::size_t n = 0; n < r.services.size(); ++n) {
-        const float top = y + static_cast<float>(n) * kProfileRow;
-        if (n > 0) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-        }
-        Item item = CommandItem(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 4, top + kProfileRow - 3}, r.services[n].name,
-                                kGlyphChevron, UiCommand::ServiceMenu, static_cast<int>(n));
-        item.detail = r.services[n].way;
-        item.checked = true;
-        l.items.push_back(std::move(item));
+    // WARP's way to Cloudflare - over the proxy, or directly.
+    if (r.warp) {
+      y = Heading(l, L"WARP", x0, x1, y,
+                  L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
+                  L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nПоверх прокси — "
+                  L"WireGuard идёт к Cloudflare через твой сервер: провайдер его не видит и не может заблокировать. "
+                  L"Если WARP не проходит ни через один сервер, Sovereign сам переводит его на «напрямую».");
+      Item via = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Подключение", nullptr, UiCommand::ChooseWarpVia);
+      via.detail = r.warpViaProxy ? L"поверх прокси" : L"напрямую";
+      l.items.push_back(Make(Kind::Card, via.rect));
+      via.rect = {x0 + 4, via.rect.top + 2, x1 - 4, via.rect.bottom - 2};
+      l.items.push_back(std::move(via));
+      y += kRow + 8;
+      if (!r.warpAddress.empty()) {
+        y = Paragraph(l, Kind::Caption, L"Адрес устройства в WARP: " + r.warpAddress + L".", x0 + 4, x1, y) + 4;
       }
-      y += h + 8;
-    }
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Добавить сервис", kGlyphAdd,
-                                  UiCommand::AddService));
-    y += kButton + kGap + 4;
-
-    // WARP: a way out of its own for chosen sites - listed right here.
-    y = Heading(l, L"WARP", x0, x1, y,
-                L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
-                L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nЧерез WARP идут "
-                L"только сайты из его списка (например, те, что не пускают с адресов VPN-серверов); всё остальное "
-                L"идёт как шло.\n\nПоверх прокси — WireGuard идёт к Cloudflare через твой сервер: "
-                L"провайдер его не видит и не может заблокировать.");
-    {
-      y = Switches(l,
-                   {Row(L"WARP", {}, r.warp, UiCommand::ToggleWarp,
-                        r.warp ? (r.warpViaProxy ? L"поверх прокси" : L"напрямую") +
-                                     (r.warpAddress.empty() ? std::wstring() : L" · " + r.warpAddress)
-                               : std::wstring(r.warpRegistered ? L"выключен" : L"при включении зарегистрирует устройство"))},
-                   x0, x1, y);
-      if (r.warp) {
-        Item via = CommandItem(Kind::ValueRow, {x0, y + 8, x1, y + 8 + kRow}, L"Подключение", nullptr,
-                               UiCommand::ChooseWarpVia);
-        via.detail = r.warpViaProxy ? L"поверх прокси" : L"напрямую";
-        l.items.push_back(Make(Kind::Card, via.rect));
-        via.rect = {x0 + 4, via.rect.top + 2, x1 - 4, via.rect.bottom - 2};
-        l.items.push_back(std::move(via));
-        y += 8 + kRow + 8;
-        if (!r.warpState.empty()) {  // how its tunnel is: under the row, whole
-          const std::wstring state = L"Сейчас: " + r.warpState + L".";
-          const float h = TextHeight(state, captionWrap_.get(), x1 - x0 - 8);
-          l.items.push_back(Make(Kind::Caption, {x0 + 4, y - 2, x1 - 4, y - 2 + h}, state));
-          y += h + 6;
-        }
-        y = RuleList(l, r, /*warp=*/true, L"Пока пусто — добавь сайт, который должен открываться через WARP.", x0,
-                     x1, y);
-        l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Добавить сайт", kGlyphAdd,
-                                      UiCommand::AddWarpSite));
-        y += kButton;
-      }
-      y += kGap + 4;
+      y += kGap;
     }
 
-    // The user's rules.
-    y = Heading(l, L"Свои правила", x0, x1, y,
-                L"Сайты, IP-подсети или программы (.exe) — напрямую, через прокси, через WARP или в блок. Работают раньше "
-                L"всех остальных правил. Клик или правый клик по правилу — изменить или удалить.");
-    y = RuleList(l, r, /*warp=*/false, L"Пока нет — добавь сайт, подсеть или программу.", x0, x1, y);
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Добавить", kGlyphAdd,
-                                  UiCommand::AddRule));
-    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Из подписки…", kGlyphDownload,
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Правила из подписки…", kGlyphDownload,
                                   UiCommand::ImportRules));
     y += kButton + kGap + 4;
-    return Apps(l, c, x0, x1, y);
+    // Only the listed programs through the proxy: a mode of its own (the
+    // others are on the board).
+    return c.appsInclude ? Apps(l, c, x0, x1, y) : y;
   }
 
   // The checks: what the internet sees, leaks, the local network, DNS, and -
@@ -2344,6 +2330,22 @@ class Painter {
         k.Text(it.text, body_.get(), {r.left + 48, r.top, r.right, r.bottom}, primary);
         break;
       }
+      case Kind::Tag: {
+        k.Round(r, 8, Rgb(255, 255, 255, 0.05f + hoverAlpha * 0.6f));
+        k.Outline(r, 8, Rgb(255, 255, 255, 0.10f));
+        const float cy = (r.top + r.bottom) / 2;
+        float left = r.left + 10;
+        if (ID2D1Bitmap* icon = ProgramIcon(k.t, it.text2); icon != nullptr) {
+          k.t->DrawBitmap(icon, {left, cy - 8, left + 16, cy + 8});
+          left += 22;
+        }
+        k.Text(it.text, body_.get(), {left, r.top, r.right - 10, r.bottom}, primary);
+        if (!it.detail.empty()) {
+          const float after = left + TextWidth(it.text, body_.get()) + 6;
+          k.Text(it.detail, caption_.get(), {after, r.top, r.right - 10, r.bottom}, secondary);
+        }
+        break;
+      }
       case Kind::LogBox: break;  // DrawLog
     }
   }
@@ -2849,6 +2851,15 @@ struct MainWindow::Impl {
       const bool button = it.action == ItemAction::Command && it.command == anchor && it.index == index;
       if (title || button) {
         D2D1_RECT_F rect = it.rect;
+        if (anchor == UiCommand::BoardAdd) {
+          // Its button is a "+" in a bucket's corner: a site is typed across the bucket.
+          for (const Item& card : layout.items) {
+            if (card.kind == Kind::Card && card.rect.top <= it.rect.top && card.rect.bottom >= it.rect.bottom &&
+                card.rect.left <= it.rect.left && card.rect.right >= it.rect.right) {
+              rect = {card.rect.left + 8, it.rect.top, it.rect.left - 4, it.rect.bottom};
+            }
+          }
+        }
         if (anchor == UiCommand::CheckRoute) {
           // Its button is an icon: the address is typed over the line's result.
           for (const Item& row : layout.items) {

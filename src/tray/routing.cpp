@@ -30,8 +30,9 @@ constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kServicePrefix = "sov-svc-";  // a service's list: sov-svc-<id>
 
 // What people want sent elsewhere: shut to a VPS's country (video, AI) or
-// wanted apart. Each list checked to exist in sing-geosite (06.10.2026).
-constexpr std::array<ServiceInfo, 15> kServices = {{
+// wanted apart, or wanted directly (games, the system's updates). Each list
+// checked to exist in sing-geosite (06.10.2026, the second half 08.10.2026).
+constexpr std::array<ServiceInfo, 28> kServices = {{
     {"netflix", "Netflix", "netflix"},
     {"youtube", "YouTube", "youtube"},
     {"chatgpt", "ChatGPT", "openai"},
@@ -47,6 +48,19 @@ constexpr std::array<ServiceInfo, 15> kServices = {{
     {"facebook", "Facebook", "facebook"},
     {"x", "X (Twitter)", "twitter"},
     {"discord", "Discord", "discord"},
+    {"telegram", "Telegram", "telegram"},
+    {"whatsapp", "WhatsApp", "whatsapp"},
+    {"google", "Google", "google"},
+    {"perplexity", "Perplexity", "perplexity"},
+    {"grok", "Grok", "xai"},
+    {"github", "GitHub", "github"},
+    {"reddit", "Reddit", "reddit"},
+    {"linkedin", "LinkedIn", "linkedin"},
+    {"soundcloud", "SoundCloud", "soundcloud"},
+    {"steam", "Steam", "steam"},
+    {"epicgames", "Epic Games", "epicgames"},
+    {"microsoft", "Microsoft", "microsoft"},
+    {"apple", "Apple", "apple"},
 }};
 
 constexpr std::string_view kGeositeBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/";
@@ -102,6 +116,17 @@ const char* ActionName(RouteRule::Action action) {
     case RouteRule::Action::Warp: return "warp";
   }
   return "direct";
+}
+
+const char* WayName(ServiceRoute::Way way) {
+  switch (way) {
+    case ServiceRoute::Way::Warp: return "warp";
+    case ServiceRoute::Way::Country: return "country";
+    case ServiceRoute::Way::Direct: return "direct";
+    case ServiceRoute::Way::Proxy: return "proxy";
+    case ServiceRoute::Way::Block: return "block";
+  }
+  return "warp";
 }
 
 bool IsIpToken(std::string_view token) {
@@ -325,7 +350,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
   }
   nlohmann::json services = nlohmann::json::array();
   for (const ServiceRoute& r : s.services) {
-    nlohmann::json service = {{"id", r.id}, {"way", r.way == ServiceRoute::Way::Country ? "country" : "warp"}};
+    nlohmann::json service = {{"id", r.id}, {"way", WayName(r.way)}};
     if (r.way == ServiceRoute::Way::Country) {
       service["country"] = r.country;
     }
@@ -380,7 +405,12 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
         if (way == "country" && IsCountryCode(country)) {
           s.services.push_back({.id = id, .way = ServiceRoute::Way::Country, .country = country});
         } else {
-          s.services.push_back({.id = id, .way = ServiceRoute::Way::Warp, .country = {}});
+          // "country" without one, or a way unknown: through WARP, as before 0.4.50.
+          const ServiceRoute::Way parsed = way == "direct"  ? ServiceRoute::Way::Direct
+                                           : way == "proxy" ? ServiceRoute::Way::Proxy
+                                           : way == "block" ? ServiceRoute::Way::Block
+                                                            : ServiceRoute::Way::Warp;
+          s.services.push_back({.id = id, .way = parsed, .country = {}});
         }
       }
     }
@@ -823,7 +853,18 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
     return m;
   };
-  for (const RouteRule& r : settings.rules) {
+  // Sites before programs: a site the user sent somewhere goes there from
+  // every program - the bank directly even from a browser sent through WARP.
+  std::vector<const RouteRule*> ordered;
+  for (const bool programs : {false, true}) {
+    for (const RouteRule& r : settings.rules) {
+      if (r.processes.empty() != programs) {
+        ordered.push_back(&r);
+      }
+    }
+  }
+  for (const RouteRule* each : ordered) {
+    const RouteRule& r = *each;
     Json rule = match(r);
     if (r.action == RouteRule::Action::Block) {
       rule["action"] = "reject";
@@ -850,6 +891,12 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
     if (s.way == ServiceRoute::Way::Warp && !warp.empty()) {
       rules.push_back(Json{{"rule_set", tag}, {"outbound", warp}});
+    } else if (s.way == ServiceRoute::Way::Direct) {
+      rules.push_back(Json{{"rule_set", tag}, {"outbound", direct}});
+    } else if (s.way == ServiceRoute::Way::Proxy && !proxy.empty()) {
+      rules.push_back(Json{{"rule_set", tag}, {"outbound", proxy}});
+    } else if (s.way == ServiceRoute::Way::Block) {
+      rules.push_back(Json{{"rule_set", tag}, {"action", "reject"}});
     } else if (s.way == ServiceRoute::Way::Country && !proxy.empty()) {
       // A selector of its own: the main group first (its default - as usual
       // until the tray knows which server is in that country), then the
@@ -916,6 +963,21 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       continue;  // through the proxy or WARP: the config's own DNS
     }
     dnsRules.push_back(std::move(rule));
+  }
+  // A service sent directly: its names here too (through the proxy's DNS
+  // they'd get the proxy country's addresses); blocked: no addresses.
+  for (const ServiceRoute& s : settings.services) {
+    const std::string tag = std::string(kServicePrefix) + s.id;
+    if (!lists.contains(tag)) {
+      continue;
+    }
+    if (s.way == ServiceRoute::Way::Direct) {
+      dnsRules.push_back(Json{{"rule_set", tag}, {"server", kLocalDns}});
+    } else if (s.way == ServiceRoute::Way::Block) {
+      Json blocked{{"rule_set", tag}};
+      SetNoAddress(blocked);
+      dnsRules.push_back(std::move(blocked));
+    }
   }
   if (settings.blockAds && lists.contains(std::string(kAds))) {
     Json ads{{"rule_set", kAds}};

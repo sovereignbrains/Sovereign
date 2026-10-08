@@ -85,6 +85,13 @@ struct TraySettings {
 const std::string* AppPath(const TraySettings& settings, const std::string& app);
 void SetAppPath(TraySettings& settings, const std::string& app, std::string path);
 
+// The apps sent around the proxy (AppsMode::Exclude) as routing rules, one a
+// program, directly - since 0.4.51 a program goes any way a rule can (through
+// WARP, blocked), and sites the user sent somewhere win over it. Only the
+// listed through the proxy (Include) stays a mode of its own. Done by
+// LoadSettings.
+void MoveAppsToRules(TraySettings& settings);
+
 // A missing or unreadable tray.json gives the defaults: a broken settings file
 // must not keep the tray from starting. Moves a tray's single configuration
 // from before profiles into one (see above).

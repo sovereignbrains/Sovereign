@@ -302,6 +302,7 @@ struct View {
   AppsMode appsMode = AppsMode::Exclude;
   std::vector<std::string> apps;
   std::vector<std::string> appPaths;   // per app, "" if not known
+  std::vector<std::pair<std::string, std::string>> programPaths;  // every program's exe known, by its name
   std::vector<std::string> protocols;  // the config selector's options
   int protocol = -1;                   // the one in use
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
@@ -362,14 +363,14 @@ struct RoutingChange {
     Ipv4Only,       // on
     RemoteDns,      // value: RoutingSettings::RemoteDns
     LocalDns,       // value: RoutingSettings::LocalDns
-    AddRule,        // text: what was typed; value: RouteRule::Action
-    SetRuleAction,  // index; value: RouteRule::Action
+    AddRule,        // text: what was typed; value: RouteRule::Action (WARP: turned on); path: a program's exe
+    SetRuleAction,  // index; value: RouteRule::Action (WARP: turned on)
     RemoveRule,     // index
     ImportFrom,     // text: a configuration's id - its rules copied
     Warp,           // on (a device registered first if there's none)
-    AddService,     // text: the service's id - through WARP (WARP turned on)
+    AddService,     // text: the service's id; value: the board's bucket (WARP: turned on)
     RemoveService,  // index
-    SetServiceWay,  // index; text: "warp" (WARP turned on) or a country code
+    SetServiceWay,  // index; text: "warp" (WARP turned on), "direct", "proxy", "block" or a country code
     WarpVia,        // on: over the proxy; off: directly
   };
   What what = What::RussiaDirect;
@@ -377,7 +378,19 @@ struct RoutingChange {
   int value = 0;
   int index = 0;
   std::string text;
+  std::string path;
 };
+
+// A service's way for a bucket of the board (ui_content.h UiChip::bucket).
+sovereign::tray::ServiceRoute::Way WayOfBucket(int bucket) {
+  using Way = sovereign::tray::ServiceRoute::Way;
+  switch (bucket) {
+    case sovereign::tray::kBucketDirect: return Way::Direct;
+    case sovereign::tray::kBucketProxy: return Way::Proxy;
+    case sovereign::tray::kBucketBlock: return Way::Block;
+    default: return Way::Warp;
+  }
+}
 
 // A config of the user's own to add as a configuration, and what to call it.
 struct LocalImport {
@@ -684,8 +697,9 @@ class Worker {
         for (auto& [name, path] : apps->paths) {
           sovereign::tray::SetAppPath(settings_, name, std::move(path));
         }
+        const std::vector<std::string> programs = Programs();
         std::erase_if(settings_.appPaths, [&](const auto& entry) {
-          return std::find(settings_.apps.begin(), settings_.apps.end(), entry.first) == settings_.apps.end();
+          return std::find(programs.begin(), programs.end(), entry.first) == programs.end();
         });
         Save();  // the effective config changes: the model restarts the box
       }
@@ -900,8 +914,23 @@ class Worker {
 
   // A change to the routing from its page.
   void ChangeRouting(const RoutingChange& change) {
+    using sovereign::tray::RouteRule;
     using sovereign::tray::RoutingSettings;
+    using sovereign::tray::ServiceRoute;
     RoutingSettings& r = settings_.routing;
+    // Something sent through WARP: WARP on - a device registered first, if there's none.
+    const auto warpOn = [&] {
+      if (!r.warpAccount) {
+        auto account = RegisterWarp();
+        if (!account) {
+          Notify(L"Sovereign: WARP не включился", Widen(account.error()), true, UiPage::Routing);
+          return false;
+        }
+        r.warpAccount = std::move(*account);
+      }
+      r.warp = true;
+      return true;
+    };
     switch (change.what) {
       case RoutingChange::What::RussiaDirect: r.russiaDirect = change.on; break;
       case RoutingChange::What::BlockAds: r.blockAds = change.on; break;
@@ -928,17 +957,11 @@ class Worker {
         if (!known || twice) {
           break;
         }
-        // Through WARP: WARP on - a device registered first, if there's none.
-        if (!r.warpAccount) {
-          auto account = RegisterWarp();
-          if (!account) {
-            Notify(L"Sovereign: WARP не включился", Widen(account.error()), true, UiPage::Routing);
-            break;
-          }
-          r.warpAccount = std::move(*account);
+        const ServiceRoute::Way way = WayOfBucket(change.value);
+        if (way == ServiceRoute::Way::Warp && !warpOn()) {
+          break;
         }
-        r.warp = true;
-        r.services.push_back({.id = change.text, .way = sovereign::tray::ServiceRoute::Way::Warp, .country = {}});
+        r.services.push_back({.id = change.text, .way = way, .country = {}});
         break;
       }
       case RoutingChange::What::RemoveService:
@@ -952,20 +975,18 @@ class Worker {
         }
         sovereign::tray::ServiceRoute& s = r.services[static_cast<std::size_t>(change.index)];
         if (sovereign::tray::IsCountryCode(change.text)) {
-          s.way = sovereign::tray::ServiceRoute::Way::Country;
+          s.way = ServiceRoute::Way::Country;
           s.country = change.text;
           break;
         }
-        if (!r.warpAccount) {  // through WARP: WARP on - a device registered first, if there's none
-          auto account = RegisterWarp();
-          if (!account) {
-            Notify(L"Sovereign: WARP не включился", Widen(account.error()), true, UiPage::Routing);
-            break;
-          }
-          r.warpAccount = std::move(*account);
+        const ServiceRoute::Way way = change.text == "direct"  ? ServiceRoute::Way::Direct
+                                      : change.text == "proxy" ? ServiceRoute::Way::Proxy
+                                      : change.text == "block" ? ServiceRoute::Way::Block
+                                                               : ServiceRoute::Way::Warp;
+        if (way == ServiceRoute::Way::Warp && !warpOn()) {
+          break;
         }
-        r.warp = true;
-        s.way = sovereign::tray::ServiceRoute::Way::Warp;
+        s.way = way;
         s.country.clear();
         break;
       }
@@ -981,16 +1002,24 @@ class Worker {
         dnsInstead_.reset();  // picked by hand: that one, from now
         dnsFailures_.clear();
         break;
-      case RoutingChange::What::AddRule:
-        if (auto rule = sovereign::tray::ParseRule(change.text, static_cast<sovereign::tray::RouteRule::Action>(
-                                                                     std::clamp(change.value, 0, 3)))) {
-          sovereign::tray::MergeRules(r.rules, {*rule});
+      case RoutingChange::What::AddRule: {
+        const auto action = static_cast<RouteRule::Action>(std::clamp(change.value, 0, 3));
+        auto rule = sovereign::tray::ParseRule(change.text, action);
+        if (!rule || (action == RouteRule::Action::Warp && !warpOn())) {
+          break;
         }
+        if (!change.path.empty() && rule->processes.size() == 1) {  // a program picked: its icon
+          sovereign::tray::SetAppPath(settings_, rule->processes.front(), change.path);
+        }
+        sovereign::tray::MergeRules(r.rules, {*rule});
         break;
+      }
       case RoutingChange::What::SetRuleAction:
         if (change.index >= 0 && static_cast<std::size_t>(change.index) < r.rules.size()) {
-          r.rules[static_cast<std::size_t>(change.index)].action =
-              static_cast<sovereign::tray::RouteRule::Action>(std::clamp(change.value, 0, 3));
+          const auto action = static_cast<RouteRule::Action>(std::clamp(change.value, 0, 3));
+          if (action != RouteRule::Action::Warp || warpOn()) {
+            r.rules[static_cast<std::size_t>(change.index)].action = action;
+          }
         }
         break;
       case RoutingChange::What::RemoveRule:
@@ -2090,6 +2119,15 @@ class Worker {
     shared.logsAdded += fresh.size();
   }
 
+  // The programs the user named: the per-app list's, and the routing rules'.
+  std::vector<std::string> Programs() const {
+    std::vector<std::string> names = settings_.apps;
+    for (const sovereign::tray::RouteRule& rule : settings_.routing.rules) {
+      names.insert(names.end(), rule.processes.begin(), rule.processes.end());
+    }
+    return names;
+  }
+
   // Listed apps whose exe hasn't been seen: looked for among the running
   // processes now and then, so their icons show once they've run.
   void FindAppPaths() {
@@ -2099,7 +2137,7 @@ class Worker {
     }
     lastPathLookup_ = now;
     std::vector<std::wstring> missing;
-    for (const std::string& app : settings_.apps) {
+    for (const std::string& app : Programs()) {
       if (sovereign::tray::AppPath(settings_, app) == nullptr) {
         missing.push_back(Widen(app));
       }
@@ -2206,6 +2244,7 @@ class Worker {
       v.noticePage = noticePage_;
       v.appsMode = settings_.appsMode;
       v.apps = settings_.apps;
+      v.programPaths = settings_.appPaths;
       v.appPaths.clear();
       for (const std::string& app : settings_.apps) {
         const std::string* path = sovereign::tray::AppPath(settings_, app);
@@ -2990,6 +3029,58 @@ bool SameName(const std::string& a, const std::string& b) {
   return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
+// The routing board's things (ui_content.h UiChip): the two lists, the
+// services, then the sites and programs - each in the bucket it goes to.
+std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
+  using sovereign::tray::ServiceRoute;
+  using sovereign::tray::UiChip;
+  const auto& r = v.routing;
+  std::vector<UiChip> board;
+  if (r.russiaDirect) {
+    board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
+                     .text = L"Российские сайты", .detail = {}, .icon = {}});
+  }
+  if (r.blockAds) {
+    board.push_back({.kind = UiChip::Kind::Ads, .index = 0, .bucket = sovereign::tray::kBucketBlock,
+                     .text = L"Реклама", .detail = {}, .icon = {}});
+  }
+  for (std::size_t n = 0; n < r.services.size(); ++n) {
+    const ServiceRoute& s = r.services[n];
+    const auto* info = sovereign::tray::FindService(s.id);
+    UiChip chip{.kind = UiChip::Kind::Service, .index = static_cast<int>(n), .bucket = sovereign::tray::kBucketWarp,
+                .text = info != nullptr ? Widen(std::string(info->name)) : Widen(s.id), .detail = {}, .icon = {}};
+    switch (s.way) {
+      case ServiceRoute::Way::Warp: break;
+      case ServiceRoute::Way::Country:
+        chip.bucket = sovereign::tray::kBucketProxy;
+        chip.detail = Widen(sovereign::tray::CountryName(s.country));
+        break;
+      case ServiceRoute::Way::Direct: chip.bucket = sovereign::tray::kBucketDirect; break;
+      case ServiceRoute::Way::Proxy: chip.bucket = sovereign::tray::kBucketProxy; break;
+      case ServiceRoute::Way::Block: chip.bucket = sovereign::tray::kBucketBlock; break;
+    }
+    board.push_back(std::move(chip));
+  }
+  for (std::size_t n = 0; n < r.rules.size(); ++n) {
+    const sovereign::tray::RouteRule& rule = r.rules[n];
+    UiChip chip{.kind = UiChip::Kind::Rule, .index = static_cast<int>(n), .bucket = static_cast<int>(rule.action),
+                .text = Widen(sovereign::tray::RuleText(rule)), .detail = {}, .icon = {}};
+    if (rule.processes.size() == 1 && rule.domains.empty() && rule.keywords.empty() && rule.ips.empty()) {
+      for (const auto& [name, path] : v.programPaths) {
+        if (SameName(name, rule.processes.front())) {
+          chip.icon = Widen(path);
+        }
+      }
+    }
+    board.push_back(std::move(chip));
+  }
+  return board;
+}
+
+// A program for a bucket of the board: one with a window now, or an exe
+// picked from a file - its rule added, its exe kept for the icon.
+void AddProgram(HWND window, POINT at, int bucket);
+
 struct RunningApp {
   std::string name;  // the exe's, what the rule matches
   std::string path;  // the exe's full path, for its icon
@@ -3105,6 +3196,38 @@ void AddExe(HWND window) {
       RequestApps(std::move(change));
     }
   }
+}
+
+void AddProgram(HWND window, POINT at, int bucket) {
+  const View view = CurrentView();
+  std::vector<std::string> named;  // on the board already
+  for (const auto& rule : view.routing.rules) {
+    named.insert(named.end(), rule.processes.begin(), rule.processes.end());
+  }
+  const std::vector<RunningApp> running = RunningApps(named);
+  std::vector<std::wstring> items;
+  items.reserve(running.size() + 1);
+  for (const RunningApp& app : running) {
+    items.push_back(Widen(app.name));
+  }
+  items.emplace_back(L"Файл .exe…");
+  const auto picked = PickFromMenu(window, at, items, -1);
+  if (!picked) {
+    return;
+  }
+  std::string name;
+  std::string path;
+  if (*picked < running.size()) {
+    name = running[*picked].name;
+    path = running[*picked].path;
+  } else if (const auto exe = PickExe(window)) {
+    path = Narrow(*exe);
+    name = Narrow(exe->substr(exe->find_last_of(L'\\') + 1));
+  } else {
+    return;
+  }
+  RequestRoutingChange(
+      {.what = RoutingChange::What::AddRule, .on = false, .value = bucket, .index = 0, .text = name, .path = path});
 }
 
 void RequestUrlTest() {
@@ -3449,6 +3572,7 @@ UiContent ContentFrom(const View& v) {
     c.routing.services.push_back({.name = info != nullptr ? Widen(std::string(info->name)) : Widen(s.id),
                                   .way = std::move(way)});
   }
+  c.routing.board = BoardOf(v);
   if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
     c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
     c.routing.listsFailed = true;
@@ -3743,7 +3867,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   using What = RoutingChange::What;
   const auto& r = view.routing;
   const auto send = [](What what, bool on = false, int value = 0, int index = 0, std::string text = {}) {
-    RequestRoutingChange({.what = what, .on = on, .value = value, .index = index, .text = std::move(text)});
+    RequestRoutingChange(
+        {.what = what, .on = on, .value = value, .index = index, .text = std::move(text), .path = {}});
   };
   POINT cursor{};
   GetCursorPos(&cursor);
@@ -3832,7 +3957,120 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
       }
       if (const auto picked = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1)) {
-        send(What::AddService, true, 0, 0, ids[*picked]);
+        send(What::AddService, true, sovereign::tray::kBucketWarp, 0, ids[*picked]);
+      }
+      break;
+    }
+    case UiCommand::BoardAdd: {
+      // What can go to this bucket: a list that's off, a service, a program, a site.
+      enum class Add : std::uint8_t { Russia, Ads, Service, Program, Site };
+      const int bucket = args.index;
+      std::vector<std::wstring> items;
+      std::vector<Add> adds;
+      if (bucket == sovereign::tray::kBucketDirect && !r.russiaDirect) {
+        items.emplace_back(L"Российские сайты");
+        adds.push_back(Add::Russia);
+      }
+      if (bucket == sovereign::tray::kBucketBlock && !r.blockAds) {
+        items.emplace_back(L"Реклама");
+        adds.push_back(Add::Ads);
+      }
+      items.insert(items.end(), {L"Сервис…", L"Программа…", L"Сайт или адрес…"});
+      adds.insert(adds.end(), {Add::Service, Add::Program, Add::Site});
+      const auto picked = PickFromMenu(owner, args.anchor, items, -1);
+      if (!picked) {
+        break;
+      }
+      switch (adds[*picked]) {
+        case Add::Russia: send(What::RussiaDirect, true); break;
+        case Add::Ads: send(What::BlockAds, true); break;
+        case Add::Service: {
+          std::vector<std::wstring> names;
+          std::vector<std::string> ids;
+          for (const auto& s : sovereign::tray::ServiceCatalog()) {
+            if (std::none_of(r.services.begin(), r.services.end(),
+                             [&](const sovereign::tray::ServiceRoute& x) { return x.id == s.id; })) {
+              names.push_back(Widen(std::string(s.name)));
+              ids.emplace_back(s.id);
+            }
+          }
+          if (const auto service = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1)) {
+            send(What::AddService, true, bucket, 0, ids[*service]);
+          }
+          break;
+        }
+        case Add::Program: AddProgram(owner, args.anchor, bucket); break;
+        case Add::Site:
+          if (g_mainWindow != nullptr) {
+            g_mainWindow->EditInPlace(UiCommand::BoardAdd, bucket, UiCommand::BoardSiteText, L"", false);
+          }
+          break;
+      }
+      break;
+    }
+    case UiCommand::BoardSiteText:
+      if (Narrow(args.text).empty()) {
+        break;
+      }
+      if (!sovereign::tray::ParseRule(Narrow(args.text), sovereign::tray::RouteRule::Action::Direct)) {
+        if (g_trayIcon != nullptr) {
+          g_trayIcon->Balloon(L"Sovereign", L"Не понял: нужны сайты (example.com), IP-подсети или программы (.exe).");
+        }
+      } else {
+        send(What::AddRule, false, args.index, 0, Narrow(args.text));
+      }
+      break;
+    case UiCommand::ChipMenu: {
+      using sovereign::tray::UiChip;
+      const std::vector<UiChip> board = BoardOf(view);
+      if (args.index < 0 || static_cast<std::size_t>(args.index) >= board.size()) {
+        break;
+      }
+      const UiChip& chip = board[static_cast<std::size_t>(args.index)];
+      if (chip.kind == UiChip::Kind::Russia || chip.kind == UiChip::Kind::Ads) {
+        const bool russia = chip.kind == UiChip::Kind::Russia;
+        if (PickFromMenu(owner, cursor, {russia ? L"Убрать: пусть идут как всё остальное" : L"Не блокировать"}, -1)) {
+          send(russia ? What::RussiaDirect : What::BlockAds, false);
+        }
+        break;
+      }
+      // The buckets in the board's order, then (a service) the countries, then away.
+      static constexpr std::array kOrder = {sovereign::tray::kBucketProxy, sovereign::tray::kBucketDirect,
+                                            sovereign::tray::kBucketWarp, sovereign::tray::kBucketBlock};
+      std::vector<std::wstring> items = {L"Через прокси", L"Напрямую", L"Через WARP", L"Блок"};
+      const auto at = std::find(kOrder.begin(), kOrder.end(), chip.bucket);
+      int current = at == kOrder.end() ? -1 : static_cast<int>(at - kOrder.begin());
+      std::vector<std::string> countries;
+      if (chip.kind == UiChip::Kind::Service) {
+        const sovereign::tray::ServiceRoute& s = r.services[static_cast<std::size_t>(chip.index)];
+        current = s.way == sovereign::tray::ServiceRoute::Way::Country ? -1 : current;
+        countries = KnownExitCountries(view);
+        for (const std::string& code : countries) {
+          current = s.way == sovereign::tray::ServiceRoute::Way::Country && s.country == code
+                        ? static_cast<int>(items.size())
+                        : current;
+          items.push_back(L"Через " + Widen(sovereign::tray::CountryName(code)));
+        }
+      }
+      items.emplace_back(L"Убрать");
+      const auto picked = PickFromMenu(owner, cursor, items, current);
+      if (!picked) {
+        break;
+      }
+      const bool away = *picked == items.size() - 1;
+      if (chip.kind == UiChip::Kind::Rule) {
+        if (away) {
+          send(What::RemoveRule, false, 0, chip.index);
+        } else {
+          send(What::SetRuleAction, false, kOrder.at(*picked), chip.index);
+        }
+      } else if (away) {
+        send(What::RemoveService, false, 0, chip.index);
+      } else if (*picked < kOrder.size()) {
+        static constexpr std::array<const char*, 4> kWays = {"proxy", "direct", "warp", "block"};
+        send(What::SetServiceWay, true, 0, chip.index, kWays.at(*picked));
+      } else {
+        send(What::SetServiceWay, true, 0, chip.index, countries.at(*picked - kOrder.size()));
       }
       break;
     }
@@ -3941,6 +4179,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::AddService:
     case UiCommand::ServiceMenu:
     case UiCommand::ImportRules:
+    case UiCommand::BoardAdd:
+    case UiCommand::BoardSiteText:
+    case UiCommand::ChipMenu:
       OnRoutingCommand(owner, command, args, view);
       break;
     case UiCommand::ToggleProfile:

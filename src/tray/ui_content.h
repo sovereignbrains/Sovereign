@@ -98,6 +98,24 @@ struct UiService {
   std::wstring name;  // "Netflix"
   std::wstring way;   // "через WARP"
 };
+// A thing on the routing board: a service, a site or a program (a rule), or
+// one of the two lists - Russian sites, ads. Its bucket is where it goes, a
+// RouteRule::Action's number: 0 directly, 1 through the proxy, 2 blocked,
+// 3 through WARP.
+struct UiChip {
+  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads };
+  Kind kind = Kind::Rule;
+  int index = 0;        // Service: into the routing's services; Rule: into its rules
+  int bucket = 1;
+  std::wstring text;    // "Netflix", "bank.ru", "chrome.exe", "Российские сайты"
+  std::wstring detail;  // through a country: "США"
+  std::wstring icon;    // a program's exe, for its icon; empty: none known
+};
+inline constexpr int kBucketDirect = 0;
+inline constexpr int kBucketProxy = 1;
+inline constexpr int kBucketBlock = 2;
+inline constexpr int kBucketWarp = 3;
+
 struct UiRouting {
   bool russiaDirect = true;
   bool blockAds = true;
@@ -118,6 +136,7 @@ struct UiRouting {
   // "сейчас напрямую: через прокси не прошёл"; empty: not checked yet.
   std::wstring warpState;
   std::vector<UiService> services;  // sent their own way, in order
+  std::vector<UiChip> board;        // everything sent somewhere, as the board shows it
 };
 
 // The checks' page (diagnostics.h): one row each.
@@ -232,6 +251,9 @@ enum class UiCommand : std::uint8_t {
   AddService,         // anchor: the menu of services not sent their own way yet
   ServiceMenu,        // index into the services; anchor
   ImportRules,        // anchor: the menu of configurations to take rules from
+  BoardAdd,           // index: a bucket (UiChip::bucket); anchor: what can go there - a site typed across it
+  BoardSiteText,      // index: the bucket; text: sites (or subnets) typed
+  ChipMenu,           // index: into the board; anchor: where it goes instead, or away
   // The checks':
   RunChecks,          // everything but speed and an address
   RunSpeed,
