@@ -37,6 +37,12 @@ struct ConfigCheck {
 };
 ConfigCheck CheckSubscriptionConfig(std::string_view body);
 
+// A panel's message dressed as a server - the subscription's one server named
+// "🔴 Приложение не поддерживает HWID", "лимит устройств" and the like: its
+// name, for the user; empty for a real subscription. Taking it would replace
+// the working servers with one that connects nowhere.
+std::string ProviderNotice(std::string_view config);
+
 // Profile-Update-Interval (hours), the de-facto header subscription servers
 // send (packetlab's does). nullopt if absent or not a sane number; clamped
 // to 1 h .. 7 days.

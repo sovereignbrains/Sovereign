@@ -91,6 +91,17 @@ void TestPanelHeaders() {
   CHECK(!ParseLinkHeader(""));
 }
 
+// A panel's stub dressed as a server is told apart from a subscription.
+void TestProviderNotice() {
+  CHECK(ProviderNotice(R"({"outbounds":[{"type":"vless","tag":"🔴 Приложение не поддерживает HWID"},)"
+                       R"({"type":"direct","tag":"direct"}]})") == "🔴 Приложение не поддерживает HWID");
+  CHECK(ProviderNotice(R"({"outbounds":[{"type":"vless","tag":"Превышен лимит устройств"}]})") ==
+        "Превышен лимит устройств");
+  CHECK(ProviderNotice(R"({"outbounds":[{"type":"vless","tag":"🇩🇪 Germany"}]})").empty());  // one real server
+  CHECK(ProviderNotice(R"({"outbounds":[{"type":"vless","tag":"🔴 a"},{"type":"trojan","tag":"b"}]})").empty());
+  CHECK(ProviderNotice("not json").empty());
+}
+
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestPanelHeaders();
@@ -99,6 +110,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestConfigCheck();
     TestUpdateInterval();
     TestTunDetection();
+    TestProviderNotice();
     CHECK(!sovereign::tray::ConfigHasTun(R"({"inbounds":[{"type":7}]})"));  // found by tests/fuzz: no exception
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

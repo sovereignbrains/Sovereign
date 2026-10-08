@@ -5,8 +5,11 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cwctype>
+#include <string>
+#include <vector>
 
 namespace sovereign::tray {
 
@@ -54,6 +57,35 @@ ConfigCheck CheckSubscriptionConfig(std::string_view body) {
     return {.error = "в конфиге нет outbounds"};
   }
   return {.ok = true, .outbounds = outbounds->size(), .error = {}};
+}
+
+std::string ProviderNotice(std::string_view config) {
+  const auto json = nlohmann::json::parse(config, nullptr, /*allow_exceptions=*/false);
+  if (!json.is_object() || !json.contains("outbounds") || !json["outbounds"].is_array()) {
+    return {};
+  }
+  std::vector<std::string> servers;
+  for (const auto& o : json["outbounds"]) {
+    const std::string type = Field<std::string>(o, "type", {});
+    if (!type.empty() && type != "selector" && type != "urltest" && type != "direct" && type != "block" &&
+        type != "dns") {
+      servers.push_back(Field<std::string>(o, "tag", {}));
+    }
+  }
+  if (servers.size() != 1) {
+    return {};
+  }
+  // Panels' stubs (08.10.2026, SPACE VPN: "🔴 Приложение не поддерживает
+  // HWID"): a warning sign, or the words such messages are made of.
+  static constexpr std::array<std::string_view, 16> kMarks = {
+      "\xF0\x9F\x94\xB4" /* 🔴 */, "\xE2\x9A\xA0" /* ⚠ */,      "\xE2\x9D\x8C" /* ❌ */, "\xE2\x9B\x94" /* ⛔ */,
+      "\xF0\x9F\x9A\xAB" /* 🚫 */, "HWID",                       "hwid",                  "не поддерж",
+      "лимит",                     "истек",                      "истёк",                 "обновите",
+      "продлите",                  "оплатите",                   "заблокир",              "expired"};
+  const std::string& name = servers.front();
+  const bool notice = std::any_of(kMarks.begin(), kMarks.end(),
+                                  [&](std::string_view mark) { return name.find(mark) != std::string::npos; });
+  return notice ? name : std::string();
 }
 
 std::optional<std::chrono::hours> ParseUpdateInterval(std::string_view header) {

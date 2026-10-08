@@ -1269,6 +1269,9 @@ class Worker {
       }
       check = sovereign::tray::CheckSubscriptionConfig(fetched->body);
       error = check.error;
+      if (const std::string notice = sovereign::tray::ProviderNotice(fetched->body); error.empty() && !notice.empty()) {
+        error = "провайдер прислал вместо серверов сообщение: «" + notice + "»";
+      }
     }
     if (!error.empty()) {
       if (!state.heldBack) {  // held back: tried again as soon as there's a way, no back-off
@@ -2971,15 +2974,56 @@ void RequestRoutingChange(RoutingChange change) {
   Wake();
 }
 
+// A program's icon from its exe as a menu's bitmap: 32-bit with alpha, the
+// menu's small icon size; null if there's none to be had.
+wil::unique_hbitmap MenuIcon(const std::wstring& exe) {
+  const int size = GetSystemMetrics(SM_CXSMICON);
+  HICON extracted = nullptr;
+  if (exe.empty() || FAILED(SHDefExtractIconW(exe.c_str(), 0, 0, &extracted, nullptr, static_cast<UINT>(size))) ||
+      extracted == nullptr) {
+    return {};
+  }
+  const wil::unique_hicon icon(extracted);
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = size;
+  info.bmiHeader.biHeight = -size;  // top-down
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  const wil::unique_hdc dc(CreateCompatibleDC(nullptr));
+  wil::unique_hbitmap bitmap(CreateDIBSection(dc.get(), &info, DIB_RGB_COLORS, &bits, nullptr, 0));
+  if (!dc || !bitmap) {
+    return {};
+  }
+  const auto old = wil::SelectObject(dc.get(), bitmap.get());
+  DrawIconEx(dc.get(), 0, 0, icon.get(), size, size, 0, nullptr, DI_NORMAL);
+  return bitmap;
+}
+
 // A popup menu of `items` at `at`: the one picked (its index), or nullopt.
-std::optional<std::size_t> PickFromMenu(HWND window, POINT at, const std::vector<std::wstring>& items, int checked) {
+// `icons`: an exe per item whose icon it shows (empty: none).
+std::optional<std::size_t> PickFromMenu(HWND window, POINT at, const std::vector<std::wstring>& items, int checked,
+                                        const std::vector<std::wstring>& icons = {}) {
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
     return std::nullopt;
   }
+  std::vector<wil::unique_hbitmap> bitmaps;  // alive while the menu is
   for (std::size_t i = 0; i < items.size(); ++i) {
     AppendMenuW(menu.get(), MF_STRING | (static_cast<int>(i) == checked ? MF_CHECKED : MF_UNCHECKED),
                 static_cast<UINT>(i + 1), items[i].c_str());
+    if (i < icons.size()) {
+      if (auto bitmap = MenuIcon(icons[i])) {
+        MENUITEMINFOW item{};
+        item.cbSize = sizeof item;
+        item.fMask = MIIM_BITMAP;
+        item.hbmpItem = bitmap.get();
+        SetMenuItemInfoW(menu.get(), static_cast<UINT>(i + 1), FALSE, &item);
+        bitmaps.push_back(std::move(bitmap));
+      }
+    }
   }
   SetForegroundWindow(window);
   const auto command = static_cast<UINT>(
@@ -3206,12 +3250,15 @@ void AddProgram(HWND window, POINT at, int bucket) {
   }
   const std::vector<RunningApp> running = RunningApps(named);
   std::vector<std::wstring> items;
+  std::vector<std::wstring> icons;
   items.reserve(running.size() + 1);
+  icons.reserve(running.size());
   for (const RunningApp& app : running) {
     items.push_back(Widen(app.name));
+    icons.push_back(Widen(app.path));
   }
   items.emplace_back(L"Файл .exe…");
-  const auto picked = PickFromMenu(window, at, items, -1);
+  const auto picked = PickFromMenu(window, at, items, -1, icons);
   if (!picked) {
     return;
   }
@@ -3485,6 +3532,9 @@ UiContent ContentFrom(const View& v) {
           profile.expire, std::time(nullptr));
       if (!trouble.empty()) {
         c.trouble = L"«" + Widen(profile.name) + L"»: " + Widen(trouble);
+        if (!profile.error.empty() && trouble == "подписка не обновляется") {
+          c.trouble += L" — " + Widen(profile.error);  // why, said where it's looked at
+        }
         c.troubleProfile = static_cast<int>(c.profiles.size());  // this one's index, before it's added
         c.troubleSupport = !profile.supportUrl.empty();
       }
