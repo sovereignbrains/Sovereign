@@ -67,9 +67,11 @@ void DrawCube(ID2D1RenderTarget* target, const CubePose& pose, D2D1_RECT_F box, 
 // The lever's angle off upright, degrees (negative: to the left) for a press.
 float LeverAngle(float press);
 
-// The drawing the main screen sits on: a faint grid square to `focus` (the
-// cube's center), the isometric axes through it in dashes, a cross where
-// every third grid line meets.
-void DrawBlueprint(ID2D1RenderTarget* target, D2D1_SIZE_F size, D2D1_POINT_2F focus);
+// The main screen's night: a wireframe land of rolling hills running off to
+// a horizon, rising toward the window's sides; two ranges of mountains on
+// the horizon, their ridges catching the light; a glow at the horizon's
+// middle lighting the land nearest it; mist and stars in the sky. All in the
+// cube's greys, no colour; the same every time for a window of a size.
+void DrawNight(ID2D1RenderTarget* target, D2D1_SIZE_F size);
 
 }  // namespace sovereign::tray

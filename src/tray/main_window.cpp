@@ -69,8 +69,12 @@ constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
-constexpr float kPower = 104;      // the on/off button's diameter
 constexpr float kNav = 62;         // the overview's navigation under the page
+// The switch (the cube) in the navigation's middle: the room it takes in the
+// bar, its size, how far it stands up over the bar.
+constexpr float kNavSwitch = 100;
+constexpr float kSwitch = 88;
+constexpr float kSwitchRise = kSwitch + 6 - kNav;
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
@@ -224,7 +228,7 @@ struct Layout {
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
   std::optional<D2D1_RECT_F> logBox;
-  std::optional<D2D1_POINT_2F> blueprint;  // the main screen's drawing (cube.h DrawBlueprint) round this point
+  bool night = false;  // the main screen's backdrop under it all (cube.h DrawNight)
 };
 
 // The log's level groups, as its filter shows them.
@@ -547,6 +551,8 @@ class Painter {
     nav_ = MakeFormat(kText, 10.5f);
     nav_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
+    navGlyph_ = MakeFormat(glyphs.c_str(), 21);  // the navigation's icons: alone, no button round them
+    navGlyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
   }
@@ -566,6 +572,7 @@ class Painter {
     if (page == UiPage::Overview) {
       Nav(l, c, width, height);  // fixed: before the page's items, which scroll
       l.viewBottom = height - kNav;
+      l.night = true;
     }
     const std::size_t first = l.items.size();
 
@@ -592,6 +599,15 @@ class Painter {
       l.logBox->top -= scroll;
       l.logBox->bottom -= scroll;
     }
+    // The switch: the navigation's middle, bigger than its neighbours and
+    // standing up over the bar - last, so nothing scrolled is drawn over it.
+    if (page == UiPage::Overview) {
+      Item power = CommandItem(Kind::Power, {width / 2 - kSwitch / 2, height - 6 - kSwitch, width / 2 + kSwitch / 2, height - 6},
+                               {}, kGlyphPower, UiCommand::Toggle);
+      power.checked = c.on;
+      power.scrolls = false;
+      l.items.push_back(std::move(power));
+    }
     return l;
   }
 
@@ -604,20 +620,16 @@ class Painter {
     Canvas k{t, brush.get(), dwrite_.get(), Flags(t), in.cube ? &*in.cube : nullptr};
     const D2D1_SIZE_F size = t->GetSize();
     t->Clear(FromColorRef(ui::kWindowColor));
-    if (l.blueprint) {
-      DrawBlueprint(t, size, *l.blueprint);
+    if (l.night) {
+      DrawBackdrop(t, size);
     }
 
     bool clipped = false;
-    for (std::size_t i = 0; i < l.items.size(); ++i) {
+    // Fixed items after the page's (the switch standing up over the
+    // navigation): drawn once the page's clip is off, over everything.
+    std::vector<std::size_t> over;
+    const auto draw = [&](std::size_t i) {
       const Item& it = l.items[i];
-      if (it.scrolls && !clipped) {
-        t->PushAxisAlignedClip({0, l.viewTop, size.width, l.viewBottom}, D2D1_ANTIALIAS_MODE_ALIASED);
-        clipped = true;
-      }
-      if (it.scrolls && (it.rect.bottom < l.viewTop || it.rect.top > l.viewBottom)) {
-        continue;
-      }
       const auto n = static_cast<int>(i);
       if (it.kind == Kind::LogBox && l.logBox) {
         DrawLog(k, *l.logBox, log);
@@ -627,6 +639,21 @@ class Painter {
       if (n == in.focus && in.focusVisible) {
         t->DrawRoundedRectangle(D2D1::RoundedRect(Inflate(it.rect, 2), kRadius, kRadius), SetColor(brush.get(), Rgb(255, 255, 255, 0.9f)), 2);
       }
+    };
+    for (std::size_t i = 0; i < l.items.size(); ++i) {
+      const Item& it = l.items[i];
+      if (!it.scrolls && clipped) {
+        over.push_back(i);
+        continue;
+      }
+      if (it.scrolls && !clipped) {
+        t->PushAxisAlignedClip({0, l.viewTop, size.width, l.viewBottom}, D2D1_ANTIALIAS_MODE_ALIASED);
+        clipped = true;
+      }
+      if (it.scrolls && (it.rect.bottom < l.viewTop || it.rect.top > l.viewBottom)) {
+        continue;
+      }
+      draw(i);
     }
     if (clipped) {
       // The scroll position, when there is somewhere to scroll.
@@ -637,6 +664,9 @@ class Painter {
         k.Round({size.width - 7, top + 4, size.width - 4, top + thumb - 4}, 1.5f, Rgb(255, 255, 255, 0.22f));
       }
       t->PopAxisAlignedClip();
+    }
+    for (const std::size_t i : over) {
+      draw(i);
     }
     if (in.tip >= 0 && static_cast<std::size_t>(in.tip) < l.items.size()) {
       DrawTip(k, l.items[static_cast<std::size_t>(in.tip)], size);
@@ -731,6 +761,7 @@ class Painter {
     icons_.clear();
     flags_.reset();
     flagsLoaded_ = false;
+    backdrop_ = {};  // the old target's bitmap
   }
 
  private:
@@ -1030,7 +1061,6 @@ class Painter {
   // where it comes out. The rest of the window - the kill switch
   // too, in the settings - is a tap away in the navigation under it (Nav).
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
-    const float cx = (x0 + x1) / 2;
 
     // The state is the cube's: words only when there's something to say.
     if (const std::wstring detail = StateDetail(c); !detail.empty()) {
@@ -1087,57 +1117,22 @@ class Painter {
       y += h + kGap;
     }
 
-    // The switch.
-    y += 6;
-    const std::size_t hero = l.items.size();
-    Item power = CommandItem(Kind::Power, {cx - kPower / 2, y, cx + kPower / 2, y + kPower}, {}, kGlyphPower,
-                             UiCommand::Toggle);
-    power.checked = c.on;
-    l.items.push_back(std::move(power));
-    y += kPower + 20;
-
-    // The server it runs on: where it really is, its network, its latency.
-    y = ServerCard(l, c, x0, x1, y);
-
     // A subscription in trouble: said here, its report for support a click
     // away - not three pages deep. Nothing while all is fine.
     if (!c.trouble.empty() && c.troubleProfile >= 0) {
-      y = Paragraph(l, Kind::ErrorText, c.trouble, x0, x1, y + 10) + 8;
+      y = Paragraph(l, Kind::ErrorText, c.trouble, x0, x1, y) + 8;
       l.items.push_back(ReportButton(c, c.troubleSupport, {x0, y, x1, y + kButton}, c.troubleProfile));
-      y += kButton;
+      y += kButton + kGap;
     }
-
     if (!c.killSwitchError.empty()) {
-      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y + kGap);
+      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
-    // Room to spare in a tall window: the cube grows into some of it (up to
-    // 1.7 times), then it and what's under it move down into half of the
-    // rest - to the middle, not stuck to the top.
-    if (float spare = bottom - y; spare > 8) {
-      const float grow = std::min(spare * 0.4f, kPower * 0.7f);
-      Item& cube = l.items[hero];
-      cube.rect.left -= grow / 2;
-      cube.rect.right += grow / 2;
-      cube.rect.bottom += grow;
-      for (std::size_t i = hero + 1; i < l.items.size(); ++i) {
-        l.items[i].rect.top += grow;
-        l.items[i].rect.bottom += grow;
-      }
-      y += grow;
-      spare -= grow;
-      const float shift = std::min(spare / 2, 110.0f);
-      for (std::size_t i = hero; i < l.items.size(); ++i) {
-        l.items[i].rect.top += shift;
-        l.items[i].rect.bottom += shift;
-      }
-      y += shift;
-    }
-    // The drawing under it all, its axes through the cube (cube.cpp: its
-    // center a little above the box's).
-    const D2D1_RECT_F& cube = l.items[hero].rect;
-    l.blueprint = D2D1_POINT_2F{(cube.left + cube.right) / 2, cube.top + (cube.right - cube.left) * 0.48f};
-    return y;
+    // The server it runs on at the page's foot, over the switch standing up
+    // out of the navigation.
+    constexpr float kServerCard = 60;
+    const float serverTop = std::max(y + 140, bottom + kPad - kSwitchRise - 10 - kServerCard);
+    return ServerCard(l, c, x0, x1, serverTop);
   }
 
   // What it connects with, over the switch: the subscription (the first one
@@ -1320,9 +1315,10 @@ class Painter {
         {kGlyphSettings, L"Настройки", UiPage::Settings,
          L"Настройки · Sovereign " + c.version.substr(0, c.version.find(L' ')), c.update == UiUpdate::Available},
     }};
-    const float step = width / static_cast<float>(entries.size());
+    // Two each side of the switch (Build puts it in the middle, over the bar).
+    const float step = (width - kNavSwitch) / static_cast<float>(entries.size());
     for (std::size_t i = 0; i < entries.size(); ++i) {
-      const float left = static_cast<float>(i) * step;
+      const float left = static_cast<float>(i) * step + (i >= entries.size() / 2 ? kNavSwitch : 0.0f);
       Item nav = Make(Kind::NavItem, {left, top + 6, left + step, height - 6}, entries[i].label,
                       entries[i].glyph);
       nav.action = ItemAction::Page;
@@ -2132,21 +2128,30 @@ class Painter {
         break;
       case Kind::Power: DrawPower(k, it, c, hovered, pressed); break;
       case Kind::NavItem: {
-        if (hoverAlpha > 0) {
-          k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha * 0.7f));
-        }
+        // Just the icon and its word, standing on nothing. Under the pointer
+        // the icon brightens in a soft glow; pressed, it dims. Something
+        // waiting: a dot by the icon.
         const float cx = (r.left + r.right) / 2;
-        k.Text(it.glyph, glyph_.get(), {cx - 14, r.top + 4, cx + 14, r.top + 28}, hovered ? accent : primary);
-        k.Text(it.text, nav_.get(), {r.left, r.top + 29, r.right, r.bottom - 2}, hovered ? primary : secondary);
+        const D2D1_POINT_2F center{cx, r.top + 16};
+        if (hovered && !pressed) {
+          const std::array<D2D1_GRADIENT_STOP, 2> glow{{{0, Rgb(255, 255, 255, 0.12f)}, {1, Rgb(255, 255, 255, 0)}}};
+          wil::com_ptr<ID2D1GradientStopCollection> stops;
+          wil::com_ptr<ID2D1RadialGradientBrush> halo;
+          if (SUCCEEDED(k.t->CreateGradientStopCollection(glow.data(), static_cast<UINT32>(glow.size()), stops.put())) &&
+              SUCCEEDED(k.t->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(center, {0, 0}, 24, 24),
+                                                       stops.get(), halo.put()))) {
+            k.t->FillEllipse(D2D1::Ellipse(center, 24, 24), halo.get());
+          }
+        }
+        const float ink = pressed ? 0.55f : hovered ? 1.0f : 0.80f;
+        k.Text(it.glyph, navGlyph_.get(), {cx - 20, center.y - 15, cx + 20, center.y + 15}, Rgb(242, 244, 248, ink));
+        k.Text(it.text, nav_.get(), {r.left, r.top + 33, r.right, r.bottom}, hovered ? primary : secondary);
         if (it.checked) {
-          k.t->FillEllipse(D2D1::Ellipse({cx + 12, r.top + 7}, 3.5f, 3.5f), k.Color(accent));
+          k.t->FillEllipse(D2D1::Ellipse({cx + 13, center.y - 11}, 3.5f, 3.5f), k.Color(accent));
         }
         break;
       }
-      case Kind::NavBar:
-        k.Fill(r, FromColorRef(ui::kPanelColor));
-        k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(255, 255, 255, 0.07f));
-        break;
+      case Kind::NavBar: break;  // the buttons stand on nothing
       case Kind::ServerCard: {
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, kRadius - 1, Rgb(255, 255, 255, hoverAlpha * 0.6f));
@@ -2440,11 +2445,46 @@ class Painter {
     k.Text(it.text, body_.get(), textBox, ink);
   }
 
+  // The main screen's backdrop (cube.h DrawNight), drawn once into a bitmap
+  // the window's size - thousands of lines, and every frame of the cube's
+  // motion would redraw them all - and again only when the size changes.
+  // The bitmap is the target's: a new target, a new one.
+  struct BackdropCache {
+    ID2D1RenderTarget* target = nullptr;
+    D2D1_SIZE_F size{};
+    wil::com_ptr<ID2D1Bitmap> bitmap;
+  };
+  mutable BackdropCache backdrop_;
+
+  void DrawBackdrop(ID2D1RenderTarget* t, D2D1_SIZE_F size) const {
+    BackdropCache& cache = backdrop_;
+    if (!cache.bitmap || cache.target != t || cache.size.width != size.width || cache.size.height != size.height) {
+      cache = BackdropCache{.target = t, .size = size, .bitmap = nullptr};
+      wil::com_ptr<ID2D1BitmapRenderTarget> layer;
+      if (SUCCEEDED(t->CreateCompatibleRenderTarget(size, layer.put()))) {
+        layer->BeginDraw();
+        layer->Clear(FromColorRef(ui::kWindowColor));  // opaque: the window's own target ignores alpha
+        DrawNight(layer.get(), size);
+        if (SUCCEEDED(layer->EndDraw())) {
+          layer->GetBitmap(cache.bitmap.put());
+        }
+      }
+    }
+    if (cache.bitmap) {
+      t->DrawBitmap(cache.bitmap.get(), D2D1::RectF(0, 0, size.width, size.height));
+    } else {
+      DrawNight(t, size);
+    }
+  }
   // An icon button as a key: its face lit from above, a bright edge along
   // its top, on a dark base that gives it height - up a little under the
   // pointer, down when pressed.
   void DrawKey(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
-    const D2D1_RECT_F r = Inflate(it.rect, -4);
+    DrawKeyIn(k, Inflate(it.rect, -4), it.glyph, hovered, pressed);
+  }
+
+  // A key in `r` (its base; the face stands over it), `glyph` on its face.
+  void DrawKeyIn(const Canvas& k, D2D1_RECT_F r, std::wstring_view glyph, bool hovered, bool pressed) const {
     constexpr float kRest = 3;  // how far the face stands over the base at rest
     const float height = pressed ? 1.0f : hovered ? 4.5f : kRest;
     constexpr float kKeyRadius = 8;
@@ -2466,7 +2506,7 @@ class Painter {
     k.Outline(face, kKeyRadius, Rgb(255, 255, 255, hovered ? 0.24f : 0.14f));
     k.Line({face.left + kKeyRadius, face.top + 1.5f}, {face.right - kKeyRadius, face.top + 1.5f},
            Rgb(255, 255, 255, hovered ? 0.30f : 0.20f));
-    k.Text(it.glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.88f));
+    k.Text(glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.88f));
   }
 
   // The switch is a cube (cube.h): in the pose the window animates it
@@ -2496,6 +2536,7 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> tip_;       // a tip's text, wrapped
   wil::com_ptr<IDWriteTextFormat> nav_;       // a navigation item's word
   wil::com_ptr<IDWriteTextFormat> glyph_;
+  wil::com_ptr<IDWriteTextFormat> navGlyph_;
   // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
   mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
   mutable wil::com_ptr<ID2D1Bitmap> flags_;  // Flags'

@@ -3147,8 +3147,10 @@ UiContent ContentFrom(const View& v) {
     }
     if (profile.trafficTotal > 0) {
       shown.trafficTotal = Widen(sovereign::tray::BytesText(profile.trafficTotal));
-      shown.trafficShare = std::min(1.0f, static_cast<float>(static_cast<double>(profile.trafficUsed) /
-                                                             static_cast<double>(profile.trafficTotal)));
+      // clamp, not min: windows.h's min macro breaks std::min here (CI's clang-tidy).
+      shown.trafficShare = std::clamp(static_cast<float>(static_cast<double>(profile.trafficUsed) /
+                                                         static_cast<double>(profile.trafficTotal)),
+                                      0.0f, 1.0f);
     }
     if (profile.expire > 0) {
       shown.paidTill = Widen(sovereign::tray::DateText(profile.expire, UtcOffsetMinutes()));
