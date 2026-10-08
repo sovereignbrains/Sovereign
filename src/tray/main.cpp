@@ -3421,8 +3421,9 @@ UiContent ContentFrom(const View& v) {
   c.routing.localDns = r.localDns == RoutingSettings::LocalDns::System
                            ? std::wstring(L"системный")
                            : Widen(std::string(sovereign::tray::LocalDnsName(r.localDns))) + L" (DoH)";
-  if (v.dnsInstead) {  // the pick not answering: what runs instead
-    c.routing.localDns += L" · не отвечает, сейчас " + Widen(std::string(sovereign::tray::LocalDnsName(*v.dnsInstead)));
+  if (v.dnsInstead) {  // the pick not answering: what runs instead first, the row is narrow
+    c.routing.localDns = Widen(std::string(sovereign::tray::LocalDnsName(*v.dnsInstead))) + L" · вместо " +
+                         Widen(std::string(sovereign::tray::LocalDnsName(r.localDns)));
   }
   for (const auto& rule : r.rules) {
     c.routing.rules.push_back(

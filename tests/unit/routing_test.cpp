@@ -576,6 +576,11 @@ void TestLocalDnsFallback() {
   CHECK(!LocalDnsUnreachable("dns: exchange failed for google.ru. IN A: context deadline exceeded", "8.8.8.8"));
   CHECK(!LocalDnsUnreachable("outbound/direct: connected to 8.8.8.8:443", "8.8.8.8"));
   CHECK(!LocalDnsUnreachable("dial tcp 8.8.8.8:443: i/o timeout", ""));
+  // The box not seeing a network yet, right after its start: not the server.
+  CHECK(!LocalDnsUnreachable("dns: exchange failed for www.youtube.com. IN A: lookup ee-1-ll.124515.xyz: "
+                             "dial tcp 1.1.1.1:443: no route to internet",
+                             "1.1.1.1"));
+  CHECK(LocalDnsUnreachable("dial tcp 1.1.1.1:443: connect: no route to host", "1.1.1.1"));
 
   // Quad9 is a pick of its own, kept in tray.json; its server is its address.
   RoutingSettings s;

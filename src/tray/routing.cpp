@@ -986,9 +986,15 @@ bool LocalDnsUnreachable(std::string_view line, std::string_view address) {
                                                         line[found - 1] == '.'))) {
     return false;
   }
+  // Not sing-box's own "no route to internet": the box hasn't seen a network
+  // yet (its first second after a start, every dial at once) - nothing about
+  // the server; counted, it moved the DNS on at every start (08.10.2026).
+  if (line.find("no route to internet") != std::string_view::npos) {
+    return false;
+  }
   return std::ranges::any_of(std::initializer_list<std::string_view>{"i/o timeout", "connection refused",
                                                                       "actively refused", "connection reset",
-                                                                      "forcibly closed", "no route",
+                                                                      "forcibly closed", "no route to host",
                                                                       "unreachable network", "deadline exceeded"},
                              [&](std::string_view why) { return line.find(why) != std::string_view::npos; });
 }
