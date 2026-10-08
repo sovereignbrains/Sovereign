@@ -87,6 +87,18 @@ void TestJudgeAuto() {
   CHECK(JudgeAuto({.server = "nl", .candidate = "de", .wins = 1}, members, delays).candidate == "de");
 }
 
+// WARP's next server: untried, answered first and best first, failed last.
+void TestNextWarpServer() {
+  const std::vector<std::string> servers = {"nl", "fi", "de", "se"};
+  std::map<std::string, Delay> delays = {
+      {"nl", Ok(80)}, {"fi", {.state = Delay::State::Failed}}, {"de", Ok(40)}, {"se", Delay{}}};
+  CHECK(NextWarpServer(servers, {"nl"}, delays) == "de");
+  CHECK(NextWarpServer(servers, {"nl", "de"}, delays) == "se");
+  CHECK(NextWarpServer(servers, {"nl", "de", "se"}, delays) == "fi");
+  CHECK(NextWarpServer(servers, servers, delays).empty());
+  CHECK(NextWarpServer(servers, {}, {}) == "nl");  // nothing measured: in their order
+}
+
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
@@ -94,6 +106,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestParsesResults();
     TestRejectsWhatIsNotAnAnswer();
     TestJudgeAuto();
+    TestNextWarpServer();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

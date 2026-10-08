@@ -114,6 +114,9 @@ struct UiRouting {
   bool warpRegistered = false;
   bool warpViaProxy = true;
   std::wstring warpAddress;   // the device's address in WARP, once registered
+  // How its tunnel is (main.cpp WatchWarp): "работает через «NL»", "не отвечает",
+  // "сейчас напрямую: через прокси не прошёл"; empty: not checked yet.
+  std::wstring warpState;
   std::vector<UiService> services;  // sent their own way, in order
 };
 

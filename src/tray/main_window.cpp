@@ -1794,6 +1794,12 @@ class Painter {
         via.rect = {x0 + 4, via.rect.top + 2, x1 - 4, via.rect.bottom - 2};
         l.items.push_back(std::move(via));
         y += 8 + kRow + 8;
+        if (!r.warpState.empty()) {  // how its tunnel is: under the row, whole
+          const std::wstring state = L"Сейчас: " + r.warpState + L".";
+          const float h = TextHeight(state, captionWrap_.get(), x1 - x0 - 8);
+          l.items.push_back(Make(Kind::Caption, {x0 + 4, y - 2, x1 - 4, y - 2 + h}, state));
+          y += h + 6;
+        }
         y = RuleList(l, r, /*warp=*/true, L"Пока пусто — добавь сайт, который должен открываться через WARP.", x0,
                      x1, y);
         l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Добавить сайт", kGlyphAdd,

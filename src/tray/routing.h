@@ -105,6 +105,9 @@ struct RoutingSettings {
 
 // The WARP endpoint's tag in the config.
 inline constexpr std::string_view kWarpTag = "warp";
+// Over the proxy, WARP goes out through this selector of the proxy's servers;
+// which one is the tray's to pick (main.cpp WatchWarp).
+inline constexpr std::string_view kWarpViaTag = "warp-via";
 
 // Whether the box gets the WARP endpoint: on, registered, and some rule
 // sends sites to it - an endpoint nobody uses only keeps a tunnel up for
@@ -176,5 +179,13 @@ std::string_view LocalDnsName(RoutingSettings::LocalDns dns);
 // route. A query that timed out without saying where isn't counted - it may
 // have been the remote DNS, through the proxy.
 bool LocalDnsUnreachable(std::string_view line, std::string_view address);
+
+// The servers WARP may go out through (kWarpViaTag in `config`), in their
+// order - the first is the one it starts on; empty when it goes directly.
+std::vector<std::string> WarpViaServers(std::string_view config);
+
+// Whether a core log line says WARP's tunnel isn't getting through: a
+// connection through it timed out, or WireGuard couldn't reach its server.
+bool WarpStalled(std::string_view line);
 
 }  // namespace sovereign::tray

@@ -85,4 +85,23 @@ AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,
   return pick.wins >= 2 ? AutoPick{.server = *best} : pick;
 }
 
+std::string NextWarpServer(const std::vector<std::string>& servers, const std::vector<std::string>& tried,
+                           const std::map<std::string, Delay>& delays) {
+  // Lower is sooner: answered by its score, then not measured, failed last.
+  const auto rank = [&](const std::string& tag) {
+    const auto it = delays.find(tag);
+    if (it == delays.end() || it->second.state == Delay::State::Pending) {
+      return std::pair{1, 0};
+    }
+    return it->second.state == Delay::State::Ok ? std::pair{0, DelayScore(it->second)} : std::pair{2, 0};
+  };
+  const std::string* next = nullptr;
+  for (const std::string& tag : servers) {
+    if (std::find(tried.begin(), tried.end(), tag) == tried.end() && (next == nullptr || rank(tag) < rank(*next))) {
+      next = &tag;
+    }
+  }
+  return next != nullptr ? *next : std::string();
+}
+
 }  // namespace sovereign::tray

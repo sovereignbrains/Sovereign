@@ -519,8 +519,9 @@ void TestWarp() {
     via = out["tag"] == "warp-via" ? out : via;
     selector = out["tag"] == "proxy" ? out : selector;
   }
-  CHECK(via["type"] == "urltest" && via["tolerance"] == 65000);
+  CHECK(via["type"] == "selector");  // the tray picks its server by WARP answering
   CHECK(via["outbounds"] == json::array({"NL", "DE"}));  // the servers, "auto" expanded, each once
+  CHECK(WarpViaServers(text) == std::vector<std::string>({"NL", "DE"}));
   CHECK(selector["outbounds"].dump().find("warp-via") == std::string::npos);  // not a choice for the user
   // Only its sites go to WARP - no IPv6 of everything (that made WARP global).
   bool rule = false;
@@ -588,6 +589,23 @@ void TestLocalDnsFallback() {
   CHECK(quad9);
 }
 
+// WARP's tunnel not getting through, as the core logs it; its servers when it
+// goes directly - none.
+void TestWarpWatch() {
+  CHECK(WarpStalled("ERROR[0412] [1234 30.0s] connection: open connection to github.com:443 using "
+                    "endpoint/wireguard[warp]: connect tcp 140.82.121.3:443: operation timed out"));
+  CHECK(WarpStalled("ERROR endpoint/wireguard[warp]: peer(bmXO.fgyo) - failed to send handshake initiation: "
+                    "no known endpoint for peer"));
+  CHECK(WarpStalled("ERROR endpoint/wireguard[warp]: connect to server: failed to create session: dial tcp "
+                    "5.83.147.210:443: i/o timeout"));
+  CHECK(!WarpStalled("ERROR endpoint/wireguard[warp]: read packet: use of closed network connection"));
+  CHECK(!WarpStalled("ERROR outbound/vless[NL]: dial tcp 1.2.3.4:443: i/o timeout"));
+  CHECK(WarpViaServers(R"({"outbounds":[{"type":"direct","tag":"direct"}]})").empty());
+  CHECK(WarpViaServers("not json").empty());
+  CHECK(WarpViaServers(R"({"outbounds":[5,{"tag":7},{"tag":"warp-via","outbounds":["a",3,"b"]}]})") ==
+        std::vector<std::string>({"a", "b"}));
+}
+
 int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see the catch below
   if (argc >= 5 && std::string_view(argv[1]) == "--try") {
     return TryReal(argc, argv);
@@ -612,6 +630,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestWarp();
     TestNaiveInsecure();
     TestLocalDnsFallback();
+    TestWarpWatch();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

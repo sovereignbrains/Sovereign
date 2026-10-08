@@ -28,7 +28,6 @@ constexpr const char* kGeoipRu = "sov-geoip-ru";
 constexpr const char* kAds = "sov-ads";
 constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kServicePrefix = "sov-svc-";  // a service's list: sov-svc-<id>
-constexpr int kWarpViaTolerance = 65000;  // ms: WARP's own group never moves while its server works
 
 // What people want sent elsewhere: shut to a VPS's country (video, AI) or
 // wanted apart. Each list checked to exist in sing-geosite (06.10.2026).
@@ -751,24 +750,23 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     for (int n = 2; taken.contains(warp); ++n) {
       warp = std::format("{} {}", kWarpTag, n);
     }
-    // Over the proxy: a group of its own, not the selector. A switch of the
-    // selector (the tray picks its server a second after every start) moved
-    // WireGuard's UDP to another server, and Cloudflare took nothing from the
-    // new address until WireGuard's next handshake - 15-25 s without WARP
-    // (seen 06.10.2026: the first Netflix request after a start hung). The same
-    // servers here, and a tolerance no measurement crosses: it stays on its
-    // first server while that one works.
+    // Over the proxy: a selector of its own, not the proxy's. A switch of the
+    // proxy's selector (the tray picks its server a second after every start)
+    // moved WireGuard's UDP to another server, and Cloudflare took nothing from
+    // the new address until WireGuard's next handshake - 15-25 s without WARP
+    // (06.10.2026). Its server is the tray's to pick (main.cpp WatchWarp), by
+    // WARP answering through it - not by the server's own speed: one can carry
+    // TCP well and drop WireGuard's UDP (07.10.2026).
     std::string via;
     if (settings.warpViaProxy && !proxy.empty()) {
       std::vector<std::string> servers;
       GroupServers(outbounds, proxy, servers);
       if (!servers.empty()) {
-        via = std::string(kWarpTag) + "-via";
+        via = std::string(kWarpViaTag);
         for (int n = 2; taken.contains(via); ++n) {
-          via = std::format("{}-via {}", kWarpTag, n);
+          via = std::format("{} {}", kWarpViaTag, n);
         }
-        outbounds.push_back(
-            Json{{"type", "urltest"}, {"tag", via}, {"outbounds", servers}, {"tolerance", kWarpViaTolerance}});
+        outbounds.push_back(Json{{"type", "selector"}, {"tag", via}, {"outbounds", servers}});
       }
     }
     config["endpoints"].push_back(WarpEndpoint(*settings.warpAccount, warp, via));
@@ -992,6 +990,40 @@ bool LocalDnsUnreachable(std::string_view line, std::string_view address) {
                                                                       "actively refused", "connection reset",
                                                                       "forcibly closed", "no route",
                                                                       "unreachable network", "deadline exceeded"},
+                             [&](std::string_view why) { return line.find(why) != std::string_view::npos; });
+}
+
+std::vector<std::string> WarpViaServers(std::string_view config) {
+  const Json c = Json::parse(config, nullptr, false);
+  if (!c.is_object() || !c.contains("outbounds") || !c["outbounds"].is_array()) {
+    return {};
+  }
+  for (const Json& o : c["outbounds"]) {
+    const auto tag = o.is_object() ? o.find("tag") : o.end();
+    if (tag != o.end() && tag->is_string() && tag->get<std::string>() == kWarpViaTag && o.contains("outbounds") &&
+        o["outbounds"].is_array()) {
+      std::vector<std::string> servers;
+      for (const Json& server : o["outbounds"]) {
+        if (server.is_string()) {
+          servers.push_back(server.get<std::string>());
+        }
+      }
+      return servers;
+    }
+  }
+  return {};
+}
+
+bool WarpStalled(std::string_view line) {
+  // "wireguard[warp]: connect tcp 140.82.121.3:443: operation timed out",
+  // "... - failed to send handshake initiation: no known endpoint for peer",
+  // "... connect to server: failed to create session: dial tcp ..." (07.10.2026).
+  if (line.find(std::format("wireguard[{}]", kWarpTag)) == std::string_view::npos) {
+    return false;
+  }
+  return std::ranges::any_of(std::initializer_list<std::string_view>{"timed out", "i/o timeout", "deadline exceeded",
+                                                                      "failed to send handshake",
+                                                                      "failed to create session"},
                              [&](std::string_view why) { return line.find(why) != std::string_view::npos; });
 }
 

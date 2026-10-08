@@ -171,6 +171,17 @@ constexpr std::chrono::minutes kDnsSwitchGap{2};
 // A switch of the running selector the service refused is retried this often.
 constexpr std::chrono::seconds kSelectRetry{5};
 
+// WARP's tunnel (WatchWarp) is checked this long after a box starts, then
+// this often; a server just switched to after the wait (WireGuard's next
+// handshake goes through it); on the core's log saying it stalls, at once -
+// but not again sooner than the gap. A check with no answer is given up on.
+constexpr std::chrono::seconds kWarpFirstCheck{10};
+constexpr std::chrono::minutes kWarpRecheck{5};
+constexpr std::chrono::seconds kWarpAfterSwitch{8};
+constexpr std::chrono::seconds kWarpStallGap{30};
+constexpr std::chrono::seconds kWarpGiveUp{40};
+constexpr int kWarpTimeoutMs = 5000;
+
 // A second tray start asks the running one to show its window (registered:
 // it crosses processes).
 UINT ShowWindowMessage() {
@@ -240,6 +251,12 @@ struct View {
   sovereign::tray::RoutingSettings routing;  // as set (routing.h)
   // The local DNS the box runs with instead of routing's pick, which stopped answering.
   std::optional<sovereign::tray::RoutingSettings::LocalDns> dnsInstead;
+  // WARP's tunnel (WatchWarp): whether its last check got through (none yet:
+  // nullopt), the server it goes through, and whether it goes directly
+  // instead of over the proxy - no server got it through.
+  std::optional<bool> warpAnswers;
+  std::string warpServer;
+  bool warpDirect = false;
   std::size_t listsReady = 0;             // the routing's lists downloaded
   std::size_t listsNeeded = 0;
   std::int64_t listsUpdated = 0;          // unix seconds of the last one downloaded
@@ -704,6 +721,7 @@ class Worker {
       UpdateDelays(stats, urlTest);
       ApplySelection(stats);
       ApplyServiceSelections(stats);
+      WatchWarp(stats);
       UpdateExitIp(stats);
       UpdateServerExits(stats);
       if (toggleExitIp) {
@@ -807,6 +825,9 @@ class Worker {
     if (dnsInstead_) {
       routing.localDns = *dnsInstead_;  // the pick isn't answering (WatchLocalDns)
     }
+    if (warpDirect_) {
+      routing.warpViaProxy = false;  // no server got it through (WatchWarp)
+    }
     auto combined = sovereign::tray::CombineConfigs(parts, sovereign::tray::OwnFrame(routing));
     combineError_ = combined.error;
     notes.insert(notes.end(), combined.notes.begin(), combined.notes.end());
@@ -898,6 +919,7 @@ class Worker {
           r.warpAccount = std::move(*account);
         }
         r.warp = change.on;
+        warpDirect_ = false;  // turned off and on: over the proxy again, if that's the pick
         break;
       case RoutingChange::What::AddService: {
         const bool known = sovereign::tray::FindService(change.text) != nullptr;
@@ -947,7 +969,10 @@ class Worker {
         s.country.clear();
         break;
       }
-      case RoutingChange::What::WarpVia: r.warpViaProxy = change.on; break;
+      case RoutingChange::What::WarpVia:
+        r.warpViaProxy = change.on;
+        warpDirect_ = false;  // picked by hand: that way, from now
+        break;
       case RoutingChange::What::RemoteDns:
         r.remoteDns = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 2));
         break;
@@ -1868,7 +1893,9 @@ class Worker {
     const auto response = sovereign::tray::RequestService(R"({"cmd":"box_delays"})");
     if (const auto results = response ? sovereign::tray::ParseDelaysResponse(*response) : std::nullopt) {
       for (const auto& [tag, delay] : *results) {
-        delays_[tag] = delay;
+        if (tag != sovereign::tray::kWarpTag) {  // WARP's own check (WatchWarp), not a server
+          delays_[tag] = delay;
+        }
       }
     }
     const bool pending = std::any_of(delays_.begin(), delays_.end(), [](const auto& entry) {
@@ -1878,6 +1905,111 @@ class Worker {
       testing_ = false;
       CountFailures();
       PickAutoServer();
+    }
+  }
+
+  // WARP's tunnel checked through itself - a request through the endpoint,
+  // not the speed of the server it goes over: a server can carry TCP well and
+  // drop WireGuard's UDP to Cloudflare, and WARP's sites then hang for minutes
+  // (07.10.2026). Over the proxy, the server is checked alongside; WARP silent
+  // moves it to the next server (NextWarpServer). Every server tried: directly
+  // instead, the box restarted with it, the user told - if one of them
+  // answered itself while WARP didn't; none answering is no internet, not
+  // WARP, and the round starts over. A box of its own starts on the first of
+  // its servers.
+  void WatchWarp(const std::optional<sovereign::tray::Stats>& stats) {
+    const auto now = TrayModel::Clock::now();
+    if (!stats || !stats->running || !combined_ || !sovereign::tray::WarpReady(settings_.routing)) {
+      warpGeneration_ = -1;
+      warpTestStarted_.reset();
+      warpAnswers_.reset();
+      warpServer_.clear();
+      return;
+    }
+    if (stats->generation != warpGeneration_) {
+      warpGeneration_ = stats->generation;
+      warpServers_ = sovereign::tray::WarpViaServers(*combined_);
+      warpServer_ = warpServers_.empty() ? std::string() : warpServers_.front();
+      warpTried_.clear();
+      warpBlamed_ = false;
+      warpTestStarted_.reset();
+      warpAnswers_.reset();
+      warpCheckAt_ = now + kWarpFirstCheck;
+    }
+    if (warpTestStarted_) {
+      PollWarp(now);
+    } else if (warpCheckAt_ && now >= *warpCheckAt_) {
+      warpCheckAt_.reset();
+      auto tags = nlohmann::json::array({std::string(sovereign::tray::kWarpTag)});
+      if (!warpServer_.empty()) {
+        tags.push_back(warpServer_);
+      }
+      if (ServiceCall(nlohmann::json{{"cmd", "box_urltest"}, {"tags", tags}, {"timeout_ms", kWarpTimeoutMs}},
+                      "box_urltest_started")
+              .empty()) {
+        warpTestStarted_ = now;
+      } else {
+        warpCheckAt_ = now + kWarpAfterSwitch;
+      }
+    }
+  }
+
+  void PollWarp(TrayModel::Clock::time_point now) {
+    using sovereign::tray::Delay;
+    const auto response = sovereign::tray::RequestService(R"({"cmd":"box_delays"})");
+    const auto results = response ? sovereign::tray::ParseDelaysResponse(*response) : std::nullopt;
+    const auto state = [&](const std::string& tag) {
+      if (results) {
+        if (const auto it = results->find(tag); it != results->end()) {
+          return it->second.state;
+        }
+      }
+      return Delay::State::Pending;
+    };
+    const Delay::State warp = state(std::string(sovereign::tray::kWarpTag));
+    const Delay::State server = warpServer_.empty() ? Delay::State::Ok : state(warpServer_);
+    const bool over = warp != Delay::State::Pending && server != Delay::State::Pending;
+    if (!over && now - *warpTestStarted_ < kWarpGiveUp) {
+      return;
+    }
+    warpTestStarted_.reset();
+    warpLastCheck_ = now;
+    warpAnswers_ = warp == Delay::State::Ok;
+    warpCheckAt_ = now + kWarpRecheck;
+    if (*warpAnswers_ || warpServer_.empty()) {
+      return;  // through, or directly: nothing to switch
+    }
+    warpBlamed_ = warpBlamed_ || server == Delay::State::Ok;
+    warpTried_.push_back(warpServer_);
+    if (const std::string next = sovereign::tray::NextWarpServer(warpServers_, warpTried_, delays_); !next.empty()) {
+      if (ServiceCall(nlohmann::json{{"cmd", "box_select"},
+                                     {"selector", std::string(sovereign::tray::kWarpViaTag)},
+                                     {"outbound", next}},
+                      "box_selected")
+              .empty()) {
+        warpServer_ = next;
+      }
+      warpCheckAt_ = now + kWarpAfterSwitch;
+      return;
+    }
+    if (!warpBlamed_) {
+      warpTried_.clear();  // no server answered either: the internet, not WARP
+      return;
+    }
+    warpDirect_ = true;  // the config changes: the model restarts the box
+    Notify(L"Sovereign: WARP не проходит через прокси",
+           L"Ни один сервер не пропустил WARP - теперь он идёт напрямую. Вернуть: «Маршруты» → WARP.", false,
+           UiPage::Routing);
+  }
+
+  // The core's log says WARP stalls: checked at once, unless just checked.
+  void WatchWarpLog(std::string_view line) {
+    if (warpGeneration_ < 0 || warpTestStarted_ || !sovereign::tray::WarpStalled(line)) {
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    if (!warpLastCheck_ || now - *warpLastCheck_ >= kWarpStallGap) {
+      warpCheckAt_ = now;
     }
   }
 
@@ -1928,6 +2060,7 @@ class Worker {
       }
       for (const auto& line : parsed->lines) {
         WatchLocalDns(line.message);
+        WatchWarpLog(line.message);
         fresh.push_back(FormatLogLine(line));
       }
       logSince_ = parsed->next;
@@ -2030,6 +2163,9 @@ class Worker {
       v.combineNotes = combineNotes_;
       v.routing = settings_.routing;
       v.dnsInstead = dnsInstead_;
+      v.warpAnswers = warpAnswers_;
+      v.warpServer = warpServer_;
+      v.warpDirect = warpDirect_;
       v.listsReady = ruleFiles_.size();
       v.listsNeeded = sovereign::tray::NeededRuleSets(settings_.routing).size();
       v.listsUpdated = rulesUpdated_;
@@ -2155,6 +2291,21 @@ class Worker {
   std::optional<sovereign::tray::RoutingSettings::LocalDns> dnsInstead_;
   std::vector<TrayModel::Clock::time_point> dnsFailures_;
   std::optional<TrayModel::Clock::time_point> lastDnsSwitch_;
+  // WARP's tunnel (WatchWarp): the box it's watched in; the servers it may go
+  // through there, the one it goes through, those it was silent through; whether
+  // one of those answered itself (WARP's fault, not the internet's); the check
+  // that runs, the next one, the last one over and what it said; and whether it
+  // goes directly instead of over the proxy.
+  std::int64_t warpGeneration_ = -1;
+  std::vector<std::string> warpServers_;
+  std::string warpServer_;
+  std::vector<std::string> warpTried_;
+  bool warpBlamed_ = false;
+  std::optional<TrayModel::Clock::time_point> warpTestStarted_;
+  std::optional<TrayModel::Clock::time_point> warpCheckAt_;
+  std::optional<TrayModel::Clock::time_point> warpLastCheck_;
+  std::optional<bool> warpAnswers_;
+  bool warpDirect_ = false;
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
   std::vector<std::string> testedTags_;                   // in the test that runs or ran last
@@ -3257,6 +3408,13 @@ UiContent ContentFrom(const View& v) {
   c.routing.warpRegistered = r.warpAccount.has_value();
   c.routing.warpViaProxy = r.warpViaProxy;
   c.routing.warpAddress = r.warpAccount ? Widen(r.warpAccount->address4) : std::wstring();
+  if (v.warpDirect) {
+    c.routing.warpState = L"сейчас напрямую: через прокси не прошёл";
+  } else if (v.warpAnswers) {
+    c.routing.warpState = !*v.warpAnswers           ? std::wstring(L"не отвечает")
+                          : v.warpServer.empty()    ? std::wstring(L"работает")
+                                                    : L"работает через «" + Widen(v.warpServer) + L"»";
+  }
   c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
                         : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? L"Quad9 (DoH)"
                                                                             : L"Cloudflare (DoH)";

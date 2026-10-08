@@ -47,4 +47,11 @@ struct AutoPick {
 AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,
                    const std::map<std::string, Delay>& delays);
 
+// The server WARP goes through next, its present one not getting it to
+// Cloudflare: of `servers` the ones not `tried` yet - those that answered
+// the last test first, best by DelayScore, then the ones not measured, the
+// ones that failed last. Empty when every one was tried.
+std::string NextWarpServer(const std::vector<std::string>& servers, const std::vector<std::string>& tried,
+                           const std::map<std::string, Delay>& delays);
+
 }  // namespace sovereign::tray
