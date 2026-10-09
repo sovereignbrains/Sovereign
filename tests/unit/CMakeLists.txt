@@ -140,6 +140,11 @@ target_link_libraries(unit-lan PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-lan)
 add_test(NAME unit-lan COMMAND unit-lan)
 
+add_executable(unit-other-vpn other_vpn_test.cpp check.h)
+target_link_libraries(unit-other-vpn PRIVATE sovereign_tray_lib)
+sovereign_copy_asan_runtime(unit-other-vpn)
+add_test(NAME unit-other-vpn COMMAND unit-other-vpn)
+
 add_executable(unit-warp warp_test.cpp check.h)
 target_link_libraries(unit-warp PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-warp)

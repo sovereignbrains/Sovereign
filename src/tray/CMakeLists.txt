@@ -45,6 +45,8 @@ add_library(sovereign_tray_lib STATIC
   support_report.h
   lan.cpp
   lan.h
+  other_vpn.cpp
+  other_vpn.h
   import_formats.cpp
   import_formats.h
   qr_codes.cpp
@@ -102,6 +104,7 @@ add_library(sovereign_tray_net STATIC
   diagnose.cpp
   diagnose.h
   lan_devices.cpp
+  other_vpn_win.cpp
 )
 target_include_directories(sovereign_tray_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_tray_net PUBLIC sovereign_tray_lib sovereign_common winhttp iphlpapi ws2_32 dnsapi)

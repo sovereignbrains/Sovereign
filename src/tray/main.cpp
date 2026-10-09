@@ -67,6 +67,7 @@
 #include "fetch.h"
 #include "protocol_choice.h"
 #include "icons.h"
+#include "other_vpn.h"
 #include "json_field.h"
 #include "lan.h"
 #include "log_lines.h"
@@ -138,6 +139,8 @@ constexpr std::chrono::seconds kKillSwitchRetry{10};
 // Turned on, shut by the kill switch, nothing getting through for this long:
 // the window offers the way out (UpdateLockout).
 constexpr std::chrono::seconds kLockout{20};
+// While locked out, how often to look again for another VPN in the way.
+constexpr std::chrono::seconds kOtherVpnCheck{15};
 
 // What the ads lists blocked: how many names the tray keeps (the "Реклама"
 // chip's menu lists them, to let one through).
@@ -1744,10 +1747,24 @@ class Worker {
       lockedSince_.reset();
       lockoutNoticed_ = false;
       lockoutReason_.clear();
+      lastOtherVpnCheck_.reset();
+      otherVpn_.reset();
       return;
     }
+    const auto now = TrayModel::Clock::now();
     if (!lockedSince_) {
-      lockedSince_ = TrayModel::Clock::now();
+      lockedSince_ = now;
+    }
+    // Another VPN in the way (other_vpn.h): looked for only now, every
+    // kOtherVpnCheck while it lasts - and named instead of the symptom.
+    if (!lastOtherVpnCheck_ || now - *lastOtherVpnCheck_ >= kOtherVpnCheck) {
+      lastOtherVpnCheck_ = now;
+      otherVpn_ = sovereign::tray::OtherVpn(sovereign::tray::NetAdapters(), sovereign::tray::RunningProcesses());
+    }
+    if (otherVpn_ && otherVpn_->sure) {
+      why = "мешает " + otherVpn_->name + " — выключи в нём Kill switch или выйди из него";
+    } else if (otherVpn_) {
+      why += "; возможно, мешает " + otherVpn_->name + " — если в нём включён Kill switch, выключи его";
     }
     lockoutReason_ = std::move(why);
     if (LockedOut() && !lockoutNoticed_) {
@@ -2524,6 +2541,8 @@ class Worker {
   std::optional<TrayModel::Clock::time_point> lockedSince_;  // UpdateLockout's
   bool lockoutNoticed_ = false;
   std::string lockoutReason_;
+  std::optional<TrayModel::Clock::time_point> lastOtherVpnCheck_;
+  std::optional<sovereign::tray::OtherVpnFound> otherVpn_;  // OtherVpn's, while locked out
   std::optional<TrayModel::Clock::time_point> lastKillSwitchTry_;
 };
 
