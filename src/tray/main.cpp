@@ -136,6 +136,10 @@ constexpr int kLogPagesPerPoll = 20;
 // A kill switch the service couldn't apply is tried again after this.
 constexpr std::chrono::seconds kKillSwitchRetry{10};
 
+// What the ads lists blocked: how many names the tray keeps (the "Реклама"
+// chip's menu lists them, to let one through).
+constexpr std::size_t kBlockedKeep = 15;
+
 // The exit IP: how often a running lookup is polled, and a known one rechecked.
 constexpr std::chrono::seconds kExitIpPoll{2};
 constexpr std::chrono::minutes kExitIpRecheck{5};
@@ -258,6 +262,7 @@ struct View {
   std::string warpServer;
   bool warpDirect = false;
   bool quicBlocked = true;  // RoutingSettings::quic as it came to with the servers (QuicBlocked)
+  std::vector<std::string> blockedAds;  // what the ads lists blocked lately, newest first
   std::size_t listsReady = 0;             // the routing's lists downloaded
   std::size_t listsNeeded = 0;
   std::int64_t listsUpdated = 0;          // unix seconds of the last one downloaded
@@ -884,12 +889,19 @@ class Worker {
     bool pending = false;
     for (const auto& source : sovereign::tray::NeededRuleSets(settings_.routing)) {
       try {
-        const auto age = sovereign::tray::RuleSetAge(source.tag);
+        const std::string_view extension = source.adguard ? ".json" : ".srs";
+        const auto age = sovereign::tray::RuleSetAge(source.tag, extension);
         if ((!age || *age >= std::chrono::hours(24)) && !downloaded) {
           downloaded = true;  // one a poll
           auto got = sovereign::tray::Download(Widen(source.url), kUserAgent, std::size_t{16} * 1024 * 1024);
-          if (got && sovereign::tray::IsRuleSetFile(*got)) {
-            sovereign::tray::SaveRuleSet(source.tag, *got);
+          // AdGuard's filter is text: made a source rule-set here.
+          const std::optional<std::string> list =
+              !got                                      ? std::nullopt
+              : source.adguard                          ? sovereign::tray::AdGuardRuleSet(*got)
+              : sovereign::tray::IsRuleSetFile(*got) ? std::optional<std::string>(std::move(*got))
+                                                        : std::nullopt;
+          if (list) {
+            sovereign::tray::SaveRuleSet(source.tag, *list, extension);
             rulesError_.clear();
             rulesUpdated_ = std::time(nullptr);
           } else {
@@ -898,8 +910,8 @@ class Worker {
         } else if (!age || *age >= std::chrono::hours(24)) {
           pending = true;
         }
-        if (sovereign::tray::RuleSetAge(source.tag)) {
-          files[source.tag] = Narrow(sovereign::tray::RuleSetPath(source.tag).wstring());
+        if (sovereign::tray::RuleSetAge(source.tag, extension)) {
+          files[source.tag] = Narrow(sovereign::tray::RuleSetPath(source.tag, extension).wstring());
         }
       } catch (...) {
         LOG_CAUGHT_EXCEPTION_MSG("the routing's lists folder can't be used");
@@ -1016,6 +1028,11 @@ class Worker {
           sovereign::tray::SetAppPath(settings_, rule->processes.front(), change.path);
         }
         sovereign::tray::AddRule(r.rules, *rule);  // already elsewhere: moved here
+        std::erase_if(blocked_, [&](const std::string& name) {
+          return std::any_of(rule->domains.begin(), rule->domains.end(), [&](const std::string& d) {
+            return name == d || name.ends_with("." + d);
+          });
+        });
         break;
       }
       case RoutingChange::What::SetRuleAction:
@@ -2039,6 +2056,28 @@ class Worker {
   }
 
   // The core's log says WARP stalls: checked at once, unless just checked.
+  // "ads: blocked ads.example.com" (gocore/blocked.go, a name once in ten
+  // minutes): the newest first, each once, the last kBlockedKeep.
+  void WatchBlocked(std::string_view line) {
+    constexpr std::string_view kSaid = "ads: blocked ";
+    const std::size_t at = line.find(kSaid);
+    if (at == std::string_view::npos) {
+      return;
+    }
+    std::string name(line.substr(at + kSaid.size()));
+    while (!name.empty() && (name.back() == '\n' || name.back() == '\r' || name.back() == ' ')) {
+      name.pop_back();
+    }
+    if (name.empty()) {
+      return;
+    }
+    std::erase(blocked_, name);
+    blocked_.push_front(std::move(name));
+    if (blocked_.size() > kBlockedKeep) {
+      blocked_.pop_back();
+    }
+  }
+
   void WatchWarpLog(std::string_view line) {
     if (warpGeneration_ < 0 || warpTestStarted_ || !sovereign::tray::WarpStalled(line)) {
       return;
@@ -2097,6 +2136,7 @@ class Worker {
       for (const auto& line : parsed->lines) {
         WatchLocalDns(line.message);
         WatchWarpLog(line.message);
+        WatchBlocked(line.message);
         fresh.push_back(FormatLogLine(line));
       }
       logSince_ = parsed->next;
@@ -2212,6 +2252,7 @@ class Worker {
       v.warpServer = warpServer_;
       v.warpDirect = warpDirect_;
       v.quicBlocked = quicBlocked_;
+      v.blockedAds = {blocked_.begin(), blocked_.end()};
       v.listsReady = ruleFiles_.size();
       v.listsNeeded = sovereign::tray::NeededRuleSets(settings_.routing).size();
       v.listsUpdated = rulesUpdated_;
@@ -2353,6 +2394,7 @@ class Worker {
   std::optional<TrayModel::Clock::time_point> warpLastCheck_;
   std::optional<bool> warpAnswers_;
   bool warpDirect_ = false;
+  std::deque<std::string> blocked_;  // WatchBlocked's: what the ads lists blocked, newest first
   bool quicBlocked_ = true;  // View::quicBlocked
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
@@ -3037,14 +3079,23 @@ std::vector<wil::unique_hbitmap> ServiceMenuIcons(const std::vector<std::string>
 
 // A popup menu of `items` at `at`: the one picked (its index), or nullopt.
 // `icons`: a picture per item (none: no picture), alive while the menu is.
+// `labels`: the items that only say something (grey, not picked); an empty
+// item is a line between the others.
 std::optional<std::size_t> PickFromMenu(HWND window, POINT at, const std::vector<std::wstring>& items, int checked,
-                                        const std::vector<wil::unique_hbitmap>& icons = {}) {
+                                        const std::vector<wil::unique_hbitmap>& icons = {},
+                                        const std::vector<std::size_t>& labels = {}) {
   wil::unique_hmenu menu(CreatePopupMenu());
   if (!menu) {
     return std::nullopt;
   }
   for (std::size_t i = 0; i < items.size(); ++i) {
-    AppendMenuW(menu.get(), MF_STRING | (static_cast<int>(i) == checked ? MF_CHECKED : MF_UNCHECKED),
+    if (items[i].empty()) {
+      AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+      continue;
+    }
+    const bool label = std::find(labels.begin(), labels.end(), i) != labels.end();
+    AppendMenuW(menu.get(),
+                MF_STRING | (static_cast<int>(i) == checked ? MF_CHECKED : MF_UNCHECKED) | (label ? MF_GRAYED : 0),
                 static_cast<UINT>(i + 1), items[i].c_str());
     if (i < icons.size() && icons[i]) {
       MENUITEMINFOW item{};
@@ -4124,10 +4175,35 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
       const UiChip& chip = board[static_cast<std::size_t>(args.index)];
-      if (chip.kind == UiChip::Kind::Russia || chip.kind == UiChip::Kind::Ads) {
-        const bool russia = chip.kind == UiChip::Kind::Russia;
-        if (PickFromMenu(owner, cursor, {russia ? L"Убрать: пусть идут как всё остальное" : L"Не блокировать"}, -1)) {
-          send(russia ? What::RussiaDirect : What::BlockAds, false);
+      if (chip.kind == UiChip::Kind::Russia) {
+        if (PickFromMenu(owner, cursor, {L"Убрать: пусть идут как всё остальное"}, -1)) {
+          send(What::RussiaDirect, false);
+        }
+        break;
+      }
+      if (chip.kind == UiChip::Kind::Ads) {
+        // What the lists blocked lately: a click lets one through - a rule of
+        // its own where everything else goes (the user's sites come first).
+        std::vector<std::wstring> items;
+        if (view.blockedAds.empty()) {
+          items.emplace_back(L"Пока ничего не заблокировано");
+        } else {
+          items.emplace_back(L"Заблокировано недавно — нажми, чтобы пропускать:");
+          for (const std::string& name : view.blockedAds) {
+            items.push_back(Widen(name));
+          }
+        }
+        items.emplace_back();
+        items.emplace_back(L"Не блокировать рекламу");
+        const auto picked = PickFromMenu(owner, cursor, items, -1, {}, {0});
+        if (!picked) {
+          break;
+        }
+        if (*picked == items.size() - 1) {
+          send(What::BlockAds, false);
+        } else if (*picked >= 1 && *picked - 1 < view.blockedAds.size()) {
+          send(What::AddRule, false, r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
+               0, view.blockedAds[*picked - 1]);
         }
         break;
       }

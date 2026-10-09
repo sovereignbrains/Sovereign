@@ -313,20 +313,22 @@ void SaveSettings(const TraySettings& settings) {
   WriteTextAtomically(DataDir() / L"tray.json", json.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
 }
 
-std::filesystem::path RuleSetPath(const std::string& tag) {
+std::filesystem::path RuleSetPath(const std::string& tag, std::string_view extension) {
   THROW_HR_IF(E_INVALIDARG, !IsProfileId(tag));  // the same safe-name rule: [a-z0-9-]
   const std::filesystem::path dir = DataDir() / L"rules";
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
   THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec.operator bool());
-  return dir / std::filesystem::path(tag + ".srs");
+  return dir / std::filesystem::path(tag + std::string(extension));
 }
 
-void SaveRuleSet(const std::string& tag, const std::string& bytes) { WriteTextAtomically(RuleSetPath(tag), bytes); }
+void SaveRuleSet(const std::string& tag, const std::string& bytes, std::string_view extension) {
+  WriteTextAtomically(RuleSetPath(tag, extension), bytes);
+}
 
-std::optional<std::chrono::hours> RuleSetAge(const std::string& tag) {
+std::optional<std::chrono::hours> RuleSetAge(const std::string& tag, std::string_view extension) {
   std::error_code ec;
-  const auto written = std::filesystem::last_write_time(RuleSetPath(tag), ec);
+  const auto written = std::filesystem::last_write_time(RuleSetPath(tag, extension), ec);
   if (ec) {
     return std::nullopt;
   }

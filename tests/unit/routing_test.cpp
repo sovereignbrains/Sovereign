@@ -171,6 +171,47 @@ void TestQuic() {
   CHECK(QuicBlocked(s, "not json"));  // no servers to go by: refused
 }
 
+// AdGuard's filter made a rule-set: the plain names, its exceptions as an
+// inverted half; masks, expressions and other modifiers left out.
+void TestAdGuard() {
+  const auto list = AdGuardRuleSet(
+      "! Title: AdGuard DNS filter\r\n||ads.example.com^\r\n||Tracker.NET^$important\n@@||ok.ads.example.com^|\n"
+      "||bad*.example.org^\n/^139\\.45\\.197\\.2/\n||x.example^$badfilter\n||.dot.example^\n");
+  CHECK(list.has_value());
+  if (list) {
+    const json rules = json::parse(*list)["rules"];
+    CHECK(rules.size() == 1 && rules[0]["type"] == "logical" && rules[0]["mode"] == "and");
+    CHECK(rules[0]["rules"][0]["domain_suffix"] == json::array({"ads.example.com", "tracker.net"}));
+    CHECK(rules[0]["rules"][1]["domain_suffix"] == json::array({"ok.ads.example.com"}) &&
+          rules[0]["rules"][1]["invert"] == true);
+  }
+  const auto plain = AdGuardRuleSet("||ads.example.com^\n");
+  CHECK(plain && json::parse(*plain)["rules"][0]["domain_suffix"] == json::array({"ads.example.com"}));
+  CHECK(!AdGuardRuleSet("<!DOCTYPE html><title>Page not found</title>"));
+
+  // Both ads lists in one rule; a site the user sent through the proxy has
+  // its DNS said ahead of them - an ad name sent there gets through.
+  RoutingSettings s;
+  s.rules.push_back(*ParseRule("criteo.com", RouteRule::Action::Proxy));
+  const auto keys = BuildConfigFromLinks({"trojan://pw@nl.example.com:443#NL"}).config.value_or("{}");
+  const std::string config = CombineConfigs({{"Ключи", keys, {}}}, OwnFrame(s)).config.value_or("{}");
+  const json c = json::parse(
+      ApplyRouting(config, s, {{"sov-ads", "C:/lists/sov-ads.srs"}, {"sov-ads-adguard", "C:/lists/sov-ads-adguard.json"}}));
+  bool sourceFormat = false;
+  for (const json& set : c["route"]["rule_set"]) {
+    sourceFormat = sourceFormat || (set["tag"] == "sov-ads-adguard" && set["format"] == "source");
+  }
+  CHECK(sourceFormat);
+  int criteo = -1;
+  int ads = -1;
+  for (std::size_t n = 0; n < c["dns"]["rules"].size(); ++n) {
+    const std::string rule = c["dns"]["rules"][n].dump();
+    criteo = criteo < 0 && rule.find("criteo.com") != std::string::npos ? static_cast<int>(n) : criteo;
+    ads = ads < 0 && rule.find("sov-ads-adguard") != std::string::npos ? static_cast<int>(n) : ads;
+  }
+  CHECK(criteo >= 0 && ads > criteo);
+}
+
 // The order: a blocked program first (no network at all), then the sites, the
 // lists and QUIC, the other programs last - a browser sent through the proxy
 // still has its ads cut.
@@ -188,7 +229,7 @@ void TestOrder() {
       order.push_back(r["process_name"][0].get<std::string>());
     } else if (r.contains("domain_suffix") && r["domain_suffix"][0] == "bank.example") {
       order.emplace_back("bank");
-    } else if (r.value("rule_set", json()) == "sov-ads") {
+    } else if (r.value("rule_set", json()) == "sov-ads" || r.value("rule_set", json()) == json::array({"sov-ads"})) {
       order.emplace_back("ads");
     } else if (r.value("protocol", "") == "quic") {
       order.emplace_back("quic");
@@ -764,6 +805,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestWarpWatch();
     TestQuic();
     TestOrder();
+    TestAdGuard();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

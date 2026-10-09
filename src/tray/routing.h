@@ -150,14 +150,20 @@ void AddRule(std::vector<RouteRule>& rules, const RouteRule& rule);
 // given to the box as local files - a list that can't be fetched never
 // keeps the box from starting.
 struct RuleSetSource {
-  std::string tag;   // in the config, and the file's name: <tag>.srs
+  std::string tag;   // in the config, and the file's name: <tag>.srs (AdGuard's: .json)
   std::string url;
   bool ips = false;  // addresses (geoip): routing only, not DNS
+  bool adguard = false;  // an AdGuard filter, text: AdGuardRuleSet makes it a source rule-set
 };
 std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings);
 // What a download must start with to be a list (sing-box's "SRS" magic) -
 // not a captive portal's page or an error text.
 inline bool IsRuleSetFile(std::string_view bytes) { return bytes.starts_with("SRS"); }
+// An AdGuard filter ("||ads.example.com^", "@@||ok.example.com^" its
+// exceptions) as a sing-box source rule-set, JSON: the plain names, the rest
+// (masks, regular expressions, ~0.4%) left out. Nullopt if it has none - not
+// a filter.
+std::optional<std::string> AdGuardRuleSet(std::string_view filter);
 
 // The frame of "own" mode: TUN, DNS (remote through "proxy", local direct),
 // sniffing and DNS hijacking, the local network directly, a "proxy"

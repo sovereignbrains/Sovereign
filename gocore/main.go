@@ -79,6 +79,8 @@ func box_start(configJSON *C.char) *C.char {
 	if err := singjson.UnmarshalContext(ctx, []byte(C.GoString(configJSON)), &options); err != nil {
 		return C.CString(fmt.Sprintf("parse config: %s", err))
 	}
+	// Source rule-sets read as compiled binaries (ruleset_cache.go).
+	compileSourceRuleSets(&options)
 
 	instance, err := box.New(box.Options{Context: ctx, Options: options})
 	if err != nil {

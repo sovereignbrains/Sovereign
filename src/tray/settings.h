@@ -99,11 +99,12 @@ TraySettings LoadSettings();
 // Atomic (write + rename), so a crash mid-save leaves the old file.
 void SaveSettings(const TraySettings& settings);
 
-// The routing's lists (routing.h): rules\<tag>.srs - its path, written
+// The routing's lists (routing.h): rules\<tag>.srs (or another `extension`:
+// AdGuard's, made a source rule-set, is .json) - its path, written
 // atomically, and how old it is (nullopt: not there).
-std::filesystem::path RuleSetPath(const std::string& tag);
-void SaveRuleSet(const std::string& tag, const std::string& bytes);
-std::optional<std::chrono::hours> RuleSetAge(const std::string& tag);
+std::filesystem::path RuleSetPath(const std::string& tag, std::string_view extension = ".srs");
+void SaveRuleSet(const std::string& tag, const std::string& bytes, std::string_view extension = ".srs");
+std::optional<std::chrono::hours> RuleSetAge(const std::string& tag, std::string_view extension = ".srs");
 
 // A profile's files, in `dir` (ProfileDir). config.json's text, or nullopt
 // if there is none.

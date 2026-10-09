@@ -26,6 +26,10 @@ constexpr const char* kGeositeRu = "sov-geosite-ru";
 constexpr const char* kGeositeGovRu = "sov-geosite-gov-ru";
 constexpr const char* kGeoipRu = "sov-geoip-ru";
 constexpr const char* kAds = "sov-ads";
+// AdGuard DNS filter (~180 000 names: ads, trackers, Russian ones too) - the
+// ads list beside sing-geosite's small one, made a rule-set here.
+constexpr const char* kAdsAdGuard = "sov-ads-adguard";
+constexpr std::string_view kAdGuardFilter = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt";
 constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kServicePrefix = "sov-svc-";  // a service's list: sov-svc-<id>
 
@@ -711,6 +715,52 @@ const ServiceInfo* FindService(std::string_view id) {
   return it == kServices.end() ? nullptr : &*it;
 }
 
+std::optional<std::string> AdGuardRuleSet(std::string_view filter) {
+  std::vector<std::string> blocked;
+  std::vector<std::string> allowed;
+  while (!filter.empty()) {
+    const std::size_t end = filter.find('\n');
+    std::string_view line = filter.substr(0, end);
+    filter = end == std::string_view::npos ? std::string_view() : filter.substr(end + 1);
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+      line.remove_suffix(1);
+    }
+    const bool allow = line.starts_with("@@");
+    if (allow) {
+      line.remove_prefix(2);
+    }
+    if (!line.starts_with("||")) {
+      continue;
+    }
+    line.remove_prefix(2);
+    if (line.ends_with("$important")) {
+      line.remove_suffix(std::string_view("$important").size());
+    }
+    if (line.ends_with('|')) {
+      line.remove_suffix(1);
+    }
+    if (!line.ends_with('^')) {
+      continue;  // other modifiers ($badfilter...), a path
+    }
+    line.remove_suffix(1);
+    const std::string name = Lower(line);
+    const bool plain = !name.empty() && name.front() != '.' && name.back() != '.' &&
+                       name.find("..") == std::string::npos && std::all_of(name.begin(), name.end(), IsDomainChar);
+    if (plain) {
+      (allow ? allowed : blocked).push_back(name);
+    }
+  }
+  if (blocked.empty()) {
+    return std::nullopt;
+  }
+  const Json names{{"domain_suffix", blocked}};
+  const Json rule = allowed.empty() ? names
+                                    : Json{{"type", "logical"},
+                                           {"mode", "and"},
+                                           {"rules", Json::array({names, Json{{"domain_suffix", allowed}, {"invert", true}}})}};
+  return Json{{"version", 3}, {"rules", Json::array({rule})}}.dump();
+}
+
 std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
   std::vector<RuleSetSource> sets;
   if (settings.russiaDirect) {
@@ -720,6 +770,7 @@ std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
   }
   if (settings.blockAds) {
     sets.push_back({std::string(kAds), std::string(kGeositeBase) + "geosite-category-ads-all.srs", false});
+    sets.push_back({std::string(kAdsAdGuard), std::string(kAdGuardFilter), false, true});
   }
   for (const ServiceRoute& r : settings.services) {
     if (const ServiceInfo* info = FindService(r.id)) {
@@ -861,12 +912,24 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
     lists.insert(source.tag);
     if (!haveSets.contains(source.tag)) {
-      route["rule_set"].push_back(
-          Json{{"type", "local"}, {"tag", source.tag}, {"format", "binary"}, {"path", file->second}});
+      route["rule_set"].push_back(Json{{"type", "local"},
+                                       {"tag", source.tag},
+                                       {"format", source.adguard ? "source" : "binary"},
+                                       {"path", file->second}});
     }
   }
   if (route["rule_set"].empty()) {
     route.erase("rule_set");
+  }
+  // The ads lists there are - sing-geosite's, AdGuard's: one rule for both.
+  Json adsLists = Json::array();
+  for (const char* tag : {kAds, kAdsAdGuard}) {
+    if (settings.blockAds && lists.contains(tag)) {
+      adsLists.push_back(tag);
+    }
+  }
+  if (adsLists.size() == 1) {
+    adsLists = Json(adsLists[0]);
   }
   const std::vector<std::string> russianNames = [&] {
     std::vector<std::string> names;
@@ -962,8 +1025,8 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       }
     }
   }
-  if (settings.blockAds && lists.contains(std::string(kAds))) {
-    rules.push_back(Json{{"rule_set", kAds}, {"action", "reject"}});
+  if (!adsLists.empty()) {
+    rules.push_back(Json{{"rule_set", adsLists}, {"action", "reject"}});
   }
   if (settings.russiaDirect) {
     rules.push_back(Json{{"domain_suffix", zones}, {"outbound", direct}});
@@ -1012,8 +1075,12 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       SetNoAddress(rule);
     } else if (r.action == RouteRule::Action::Direct) {
       rule["server"] = kLocalDns;
+    } else if (const std::string remote = Str(dns, "final"); !remote.empty()) {
+      // Through the proxy or WARP: the config's own DNS - said here, ahead of
+      // the ads lists' "no addresses", so an ad name sent there gets through.
+      rule["server"] = remote;
     } else {
-      continue;  // through the proxy or WARP: the config's own DNS
+      continue;
     }
     dnsRules.push_back(std::move(rule));
   }
@@ -1032,8 +1099,8 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       dnsRules.push_back(std::move(blocked));
     }
   }
-  if (settings.blockAds && lists.contains(std::string(kAds))) {
-    Json ads{{"rule_set", kAds}};
+  if (!adsLists.empty()) {
+    Json ads{{"rule_set", adsLists}};
     SetNoAddress(ads);
     dnsRules.push_back(std::move(ads));
   }

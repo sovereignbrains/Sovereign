@@ -20,6 +20,7 @@ import "C"
 import (
 	"regexp"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/sagernet/sing-box/log"
@@ -56,12 +57,22 @@ type platformWriter struct {
 }
 
 func (w platformWriter) WriteMessage(level log.Level, message string) {
+	// What the ads lists block, from the debug lines too (blocked.go): one
+	// line of its own, whatever log.level says - the tray lists the names.
+	if notice := blocked.notice(message, time.Now()); notice != "" {
+		sayToHost(log.LevelInfo, notice)
+	}
 	// Platform writers receive every level, whatever log.level says (see
 	// output() in sing-box log/observable.go) — filter here so the host sees
 	// exactly what `sing-box run` with the same config would print.
 	if level > w.factory.Level() {
 		return
 	}
+	sayToHost(level, message)
+}
+
+// sayToHost hands a line to the host's callback, if there is one.
+func sayToHost(level log.Level, message string) {
 	logMu.RLock()
 	defer logMu.RUnlock()
 	if logFn == nil {
