@@ -1067,18 +1067,32 @@ class Painter {
   // Russian sites and the ads lists, everything else, wrapped in rows. A click
   // on one: where it goes instead, or away (ChipMenu); the "+" in a bucket's
   // corner: what can go there, a site typed across the bucket (BoardAdd).
+  // WARP's bucket says how WARP goes, a click on that picks over the proxy or
+  // directly (ChooseWarpVia); its "?" says what WARP is.
   float Board(Layout& l, const UiRouting& r, float x0, float x1, float y) const {
     struct Bucket {
       int id;
       const wchar_t* name;
       std::wstring note;
       const wchar_t* empty;
+      std::wstring hint;
+      UiCommand noteCommand = UiCommand::Toggle;  // Toggle: the note is just said
     };
+    std::wstring warpHint =
+        L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
+        L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nПоверх прокси — "
+        L"WireGuard идёт к Cloudflare через твой сервер: провайдер его не видит и не может заблокировать. "
+        L"Если WARP не проходит ни через один сервер, Sovereign сам переводит его на «напрямую». Как "
+        L"подключаться — нажми на состояние справа от названия.";
+    if (!r.warpAddress.empty()) {
+      warpHint += L"\n\nАдрес устройства в WARP: " + r.warpAddress + L".";
+    }
     const std::array<Bucket, 4> buckets = {{
-        {kBucketProxy, L"Через прокси", std::wstring(), L"Пока ничего"},
-        {kBucketDirect, L"Напрямую", std::wstring(), L"Пока ничего"},
-        {kBucketWarp, L"Через WARP", r.warpState, L"Сюда — то, что не пускает с адресов VPN"},
-        {kBucketBlock, L"Блок", std::wstring(), L"Пока ничего"},
+        {kBucketProxy, L"Через прокси", std::wstring(), L"Пока ничего", std::wstring()},
+        {kBucketDirect, L"Напрямую", std::wstring(), L"Пока ничего", std::wstring()},
+        {kBucketWarp, L"Через WARP", r.warpState, L"Сюда — то, что не пускает с адресов VPN", warpHint,
+         r.warp ? UiCommand::ChooseWarpVia : UiCommand::Toggle},
+        {kBucketBlock, L"Блок", std::wstring(), L"Пока ничего", std::wstring()},
     }};
     constexpr float kHead = 42;
     constexpr float kChipGap = 6;
@@ -1110,8 +1124,21 @@ class Painter {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
       const float nameWidth = TextWidth(b.name, heading_.get());
       l.items.push_back(Make(Kind::Heading, {left + 2, y + 6, left + 2 + nameWidth + 4, y + kHead - 4}, b.name));
+      float noteLeft = left + nameWidth + 16;
+      if (!b.hint.empty()) {
+        HintAfter(l, b.name, heading_.get(), left + 2, right - 40, y + kHead / 2 + 1, b.hint);
+        noteLeft += kHint + 6;
+      }
       if (!b.note.empty()) {
-        l.items.push_back(Make(Kind::Muted, {left + nameWidth + 16, y + 6, right - 40, y + kHead - 4}, b.note));
+        const D2D1_RECT_F at = {noteLeft, y + 6, right - 40, y + kHead - 4};
+        if (b.noteCommand == UiCommand::Toggle) {
+          l.items.push_back(Make(Kind::Muted, at, b.note));
+        } else {
+          // A click picks another: a chevron after it, like a value row's.
+          const float w = std::min(TextWidth(b.note + L" ›", caption_.get()) + 4, at.right - at.left);
+          l.items.push_back(CommandItem(Kind::Muted, {at.left, at.top, at.left + w, at.bottom}, b.note + L" ›",
+                                        nullptr, b.noteCommand));
+        }
       }
       l.items.push_back(CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd,
                                     UiCommand::BoardAdd, b.id));
@@ -1803,24 +1830,6 @@ class Painter {
       y += h + kGap + 4;
     }
 
-    // WARP's way to Cloudflare - over the proxy, or directly.
-    if (r.warp) {
-      y = Heading(l, L"WARP", x0, x1, y,
-                  L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
-                  L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nПоверх прокси — "
-                  L"WireGuard идёт к Cloudflare через твой сервер: провайдер его не видит и не может заблокировать. "
-                  L"Если WARP не проходит ни через один сервер, Sovereign сам переводит его на «напрямую».");
-      Item via = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Подключение", nullptr, UiCommand::ChooseWarpVia);
-      via.detail = r.warpViaProxy ? L"поверх прокси" : L"напрямую";
-      l.items.push_back(Make(Kind::Card, via.rect));
-      via.rect = {x0 + 4, via.rect.top + 2, x1 - 4, via.rect.bottom - 2};
-      l.items.push_back(std::move(via));
-      y += kRow + 8;
-      if (!r.warpAddress.empty()) {
-        y = Paragraph(l, Kind::Caption, L"Адрес устройства в WARP: " + r.warpAddress + L".", x0 + 4, x1, y) + 4;
-      }
-      y += kGap;
-    }
 
     l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Правила из подписки…", kGlyphDownload,
                                   UiCommand::ImportRules));
@@ -2140,7 +2149,11 @@ class Painter {
       case Kind::Title: k.Text(it.text, title_.get(), r, primary); break;
       case Kind::Heading: k.Text(it.text, heading_.get(), r, primary); break;
       case Kind::Text: k.Text(it.text, body_.get(), r, it.warn ? FromColorRef(ui::kDanger) : primary); break;
-      case Kind::Muted: k.Text(it.text, caption_.get(), r, it.warn ? FromColorRef(ui::kDanger) : secondary); break;
+      case Kind::Muted:  // one that picks something (a Command): brighter under the mouse
+        k.Text(it.text, caption_.get(), r,
+               it.warn ? FromColorRef(ui::kDanger)
+                       : (hovered && it.action == ItemAction::Command ? primary : secondary));
+        break;
       case Kind::Meter: {
         // A thin track and how much of it is used: amber from three
         // quarters, red from nine tenths.

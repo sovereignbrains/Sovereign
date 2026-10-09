@@ -3612,12 +3612,13 @@ UiContent ContentFrom(const View& v) {
   c.routing.warpRegistered = r.warpAccount.has_value();
   c.routing.warpViaProxy = r.warpViaProxy;
   c.routing.warpAddress = r.warpAccount ? Widen(r.warpAccount->address4) : std::wstring();
-  if (v.warpDirect) {
-    c.routing.warpState = L"сейчас напрямую: через прокси не прошёл";
-  } else if (v.warpAnswers) {
-    c.routing.warpState = !*v.warpAnswers           ? std::wstring(L"не отвечает")
-                          : v.warpServer.empty()    ? std::wstring(L"работает")
-                                                    : L"работает через «" + Widen(v.warpServer) + L"»";
+  // The WARP bucket's note, a click on it picks the way: the way, and how it goes.
+  if (r.warp) {
+    const std::wstring way = r.warpViaProxy ? L"поверх прокси" : L"напрямую";
+    c.routing.warpState = v.warpDirect                                         ? L"напрямую: через прокси не прошёл"
+                          : v.warpAnswers && !*v.warpAnswers                   ? way + L" · не отвечает"
+                          : r.warpViaProxy && !v.warpServer.empty()            ? L"через «" + Widen(v.warpServer) + L"»"
+                                                                               : way;
   }
   c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
                         : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? L"Quad9 (DoH)"
@@ -3974,7 +3975,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     case UiCommand::ChooseWarpVia:
-      if (const auto picked = PickFromMenu(owner, args.anchor, {L"через прокси", L"напрямую"}, r.warpViaProxy ? 0 : 1)) {
+      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Поверх прокси", L"Напрямую"}, r.warpViaProxy ? 0 : 1)) {
         send(What::WarpVia, *picked == 0);
       }
       break;
