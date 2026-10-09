@@ -173,6 +173,34 @@ void TestQuic() {
 
 // AdGuard's filter made a rule-set: the plain names, its exceptions as an
 // inverted half; masks, expressions and other modifiers left out.
+// Hysteria 2 at the line's speed: up/down said to the server (Brutal); other
+// servers and a config's own speeds as they are; tray.json read safely.
+void TestHysteriaSpeed() {
+  const auto speeds = [](const std::string& text, const char* type) {
+    const json c = json::parse(text);
+    for (const json& o : c["outbounds"]) {
+      if (o.value("type", "") == type) {
+        return std::pair<int, int>{o.value("up_mbps", -1), o.value("down_mbps", -1)};
+      }
+    }
+    return std::pair<int, int>{-2, -2};
+  };
+  RoutingSettings s;
+  const auto keys =
+      BuildConfigFromLinks({"hysteria2://pw@hy.example.com:443#HY", "trojan://pw@nl.example.com:443#NL"}).config.value_or("{}");
+  const std::string config = CombineConfigs({{"Ключи", keys, {}}}, OwnFrame(s)).config.value_or("{}");
+  CHECK((speeds(ApplyRouting(config, s, {}), "hysteria2") == std::pair<int, int>(-1, -1)));  // 0: BBR
+  s.hysteriaMbps = 300;
+  const std::string brutal = ApplyRouting(config, s, {});
+  Checked().emplace_back("hysteria-brutal", brutal);
+  CHECK((speeds(brutal, "hysteria2") == std::pair<int, int>(300, 300)));
+  CHECK((speeds(brutal, "trojan") == std::pair<int, int>(-1, -1)));
+  CHECK(RoutingFromJson(json{{"hysteriaMbps", 300}}).hysteriaMbps == 300);
+  CHECK(RoutingFromJson(json{{"hysteriaMbps", "300"}}).hysteriaMbps == 0);
+  CHECK(RoutingFromJson(json{{"hysteriaMbps", 999999}}).hysteriaMbps == 10000);
+  CHECK(RoutingFromJson(json::parse(RoutingToJson(s).dump())).hysteriaMbps == 300);
+}
+
 void TestCountryVia() {
   CHECK(CountryNameVia("DE") == "Германию" && CountryNameVia("PL") == "Польшу" && CountryNameVia("LT") == "Литву");
   CHECK(CountryNameVia("US") == "США" && CountryNameVia("NL") == "Нидерланды" && CountryNameVia("CY") == "Кипр");
@@ -813,6 +841,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestOrder();
     TestAdGuard();
     TestCountryVia();
+    TestHysteriaSpeed();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

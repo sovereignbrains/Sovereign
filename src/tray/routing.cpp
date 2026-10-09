@@ -397,6 +397,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
           {"quic", s.quic == RoutingSettings::Quic::Block   ? "block"
                    : s.quic == RoutingSettings::Quic::Allow ? "allow"
                                                             : "auto"},
+          {"hysteriaMbps", s.hysteriaMbps},
           {"finalDirect", s.finalDirect},
           {"remoteDns", s.remoteDns == RoutingSettings::RemoteDns::Google  ? "google"
                         : s.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "quad9"
@@ -437,6 +438,9 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
     s.quic = quic == "block"   ? RoutingSettings::Quic::Block
              : quic == "allow" ? RoutingSettings::Quic::Allow
                                : RoutingSettings::Quic::Auto;
+  }
+  if (const auto it = json.find("hysteriaMbps"); it != json.end() && it->is_number_integer()) {
+    s.hysteriaMbps = static_cast<int>(std::clamp<std::int64_t>(it->get<std::int64_t>(), 0, 10000));
   }
   flag("finalDirect", s.finalDirect);
   flag("ipv4Only", s.ipv4Only);
@@ -853,6 +857,15 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   for (Json& o : outbounds) {
     if (o.is_object() && Str(o, "type") == "naive" && o.contains("tls") && o["tls"].is_object()) {
       o["tls"].erase("insecure");
+    }
+  }
+  // Hysteria 2 at the line's speed (RoutingSettings::hysteriaMbps): Brutal.
+  if (settings.hysteriaMbps > 0) {
+    for (Json& o : outbounds) {
+      if (o.is_object() && Str(o, "type") == "hysteria2" && !o.contains("up_mbps") && !o.contains("down_mbps")) {
+        o["up_mbps"] = settings.hysteriaMbps;
+        o["down_mbps"] = settings.hysteriaMbps;
+      }
     }
   }
   for (const char* key : {"rules", "rule_set"}) {

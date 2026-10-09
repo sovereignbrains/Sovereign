@@ -124,6 +124,7 @@ struct UiRouting {
   bool blockAds = true;
   int quic = 0;             // RoutingSettings::Quic's number: 0 auto, 1 blocked, 2 let through
   bool quicBlocked = true;  // what it comes to - auto: by the servers
+  int hysteriaMbps = 0;     // RoutingSettings::hysteriaMbps
   bool finalDirect = false;
   bool ipv4Only = true;
   std::wstring remoteDns;  // "Cloudflare"
@@ -248,6 +249,7 @@ enum class UiCommand : std::uint8_t {
   ToggleRussiaDirect,
   ToggleBlockAds,
   ChooseQuic,         // anchor: where to open the menu
+  ChooseHysteriaSpeed,  // anchor: where to open the menu
   ToggleIpv4Only,
   ToggleWarp,         // on: registers a WARP device first if there's none
   ChooseWarpVia,      // anchor: over the proxy or directly

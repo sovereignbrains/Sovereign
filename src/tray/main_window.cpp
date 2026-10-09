@@ -1836,6 +1836,19 @@ class Painter {
                 L"идёт хорошо — тогда пропускается.\n\n«Авто» решает по твоим серверам сам.");
       y += kRow + kGap + 4;
     }
+    {
+      Item speed =
+          CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Hysteria 2", nullptr, UiCommand::ChooseHysteriaSpeed);
+      speed.detail = r.hysteriaMbps > 0 ? std::format(L"{} Мбит/с, Brutal", r.hysteriaMbps) : std::wstring(L"авто (BBR)");
+      l.items.push_back(Make(Kind::Card, speed.rect));
+      speed.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
+      l.items.push_back(std::move(speed));
+      HintAfter(l, L"Hysteria 2", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
+                L"Скорость твоего канала, как в договоре. Сервер шлёт ровно с ней и не сбавляет при потерях "
+                L"(Brutal): по Wi-Fi с потерями скорость держится. Больше, чем тянет канал, не ставь — забьёт "
+                L"его, и всё начнёт тормозить.\n\nАвто — сервер подбирает скорость сам (BBR).");
+      y += kRow + kGap + 4;
+    }
 
     // DNS: the client's own - its two resolvers and IPv4 in one card.
     {

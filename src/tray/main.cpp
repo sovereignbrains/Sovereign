@@ -367,6 +367,7 @@ struct RoutingChange {
     RussiaDirect,   // on
     BlockAds,       // on
     Quic,           // value: RoutingSettings::Quic's number
+    HysteriaMbps,   // value: Mbit/s, 0: BBR
     FinalDirect,    // on
     Ipv4Only,       // on
     RemoteDns,      // value: RoutingSettings::RemoteDns
@@ -962,6 +963,7 @@ class Worker {
       case RoutingChange::What::Quic:
         r.quic = static_cast<sovereign::tray::RoutingSettings::Quic>(std::clamp(change.value, 0, 2));
         break;
+      case RoutingChange::What::HysteriaMbps: r.hysteriaMbps = std::clamp(change.value, 0, 10000); break;
       case RoutingChange::What::FinalDirect: r.finalDirect = change.on; break;
       case RoutingChange::What::Ipv4Only: r.ipv4Only = change.on; break;
       case RoutingChange::What::Warp:
@@ -3689,6 +3691,7 @@ UiContent ContentFrom(const View& v) {
   c.routing.blockAds = r.blockAds;
   c.routing.quic = static_cast<int>(r.quic);
   c.routing.quicBlocked = v.quicBlocked;
+  c.routing.hysteriaMbps = r.hysteriaMbps;
   c.routing.finalDirect = r.finalDirect;
   c.routing.ipv4Only = r.ipv4Only;
   c.routing.warp = r.warp;
@@ -4076,6 +4079,19 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         send(What::Quic, false, static_cast<int>(*picked));
       }
       break;
+    case UiCommand::ChooseHysteriaSpeed: {
+      static constexpr std::array kSpeeds = {0, 50, 100, 200, 300, 500, 1000};
+      std::vector<std::wstring> items;
+      int current = -1;
+      for (std::size_t i = 0; i < kSpeeds.size(); ++i) {
+        items.push_back(kSpeeds.at(i) == 0 ? std::wstring(L"Авто (BBR)") : std::format(L"{} Мбит/с", kSpeeds.at(i)));
+        current = kSpeeds.at(i) == r.hysteriaMbps ? static_cast<int>(i) : current;
+      }
+      if (const auto picked = PickFromMenu(owner, args.anchor, items, current)) {
+        send(What::HysteriaMbps, false, kSpeeds.at(*picked));
+      }
+      break;
+    }
     case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
     case UiCommand::ToggleWarp: send(What::Warp, !r.warp); break;
     case UiCommand::AddWarpSite:  // typed over WARP's button, no menu: it goes through WARP
@@ -4403,6 +4419,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleRussiaDirect:
     case UiCommand::ToggleBlockAds:
     case UiCommand::ChooseQuic:
+    case UiCommand::ChooseHysteriaSpeed:
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:
     case UiCommand::ChooseWarpVia:

@@ -98,6 +98,11 @@ struct RoutingSettings {
   // one (VLESS, Trojan, AnyTLS...) it's UDP packed in TCP, worse than TCP.
   enum class Quic : std::uint8_t { Auto, Block, Allow };
   Quic quic = Quic::Auto;
+  // The line's speed for Hysteria 2, Mbit/s each way: told to the server
+  // (up_mbps/down_mbps), it sends at that rate whatever the losses (Brutal) -
+  // steady over a lossy Wi-Fi, but more than the line takes floods it. 0: the
+  // server picks its rate (BBR). A config's own speeds stay.
+  int hysteriaMbps = 0;
   bool finalDirect = false;  // what no rule matches: directly (else through the proxy)
   RemoteDns remoteDns = RemoteDns::Cloudflare;  // through the proxy, over HTTPS
   LocalDns localDns = LocalDns::Cloudflare;     // directly: Russian and direct names, the servers' own
