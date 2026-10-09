@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <format>
+#include <optional>
 #include <utility>
 
 #include "json_field.h"
@@ -83,6 +85,37 @@ AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,
   pick.wins = *best == pick.candidate ? pick.wins + 1 : 1;
   pick.candidate = *best;
   return pick.wins >= 2 ? AutoPick{.server = *best} : pick;
+}
+
+LocalNetwork JudgeLocalNetwork(const Delay& direct, int failedInRow, std::optional<int> bestMs, bool serversDown) {
+  LocalNetwork n;
+  if (direct.state == Delay::State::Failed && failedInRow >= 1 && serversDown) {
+    n.state = LocalNetwork::State::Down;
+    n.forUser = "Нет интернета даже без VPN — проверь Wi-Fi, кабель или провайдера.";
+    n.forSupport = "у пользователя нет интернета даже без VPN";
+    return n;
+  }
+  if (direct.state != Delay::State::Ok) {
+    return n;
+  }
+  if (direct.loss >= 30) {
+    n.state = LocalNetwork::State::Lossy;
+    n.forUser = std::format("Твоя сеть теряет пакеты и без VPN: напрямую не доходит {}% запросов. "
+                            "Проверь Wi-Fi или провайдера.",
+                            direct.loss);
+    n.forSupport = std::format("у пользователя теряется {}% запросов и без VPN", direct.loss);
+    return n;
+  }
+  const bool slow = direct.ms >= 100 && (!bestMs || (direct.ms * 2 >= *bestMs * 5 && direct.ms - *bestMs >= 60));
+  if (slow) {
+    n.state = LocalNetwork::State::Slow;
+    const std::string usual = bestMs && *bestMs < direct.ms ? std::format(" (обычно {})", *bestMs) : std::string();
+    n.forUser = std::format("Тормозит твоя сеть, а не VPN: напрямую до интернета {} мс{}. "
+                            "Проверь Wi-Fi или провайдера.",
+                            direct.ms, usual);
+    n.forSupport = std::format("у пользователя медленная сеть и без VPN: напрямую {} мс", direct.ms);
+  }
+  return n;
 }
 
 std::string NextWarpServer(const std::vector<std::string>& servers, const std::vector<std::string>& tried,

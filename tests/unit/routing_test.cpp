@@ -169,6 +169,7 @@ void TestQuic() {
   CHECK(!QuicBlocked(s, tcp) && !hasQuicRule(ApplyRouting(tcp, s, {})));
   s.quic = RoutingSettings::Quic::Auto;
   CHECK(QuicBlocked(s, "not json"));  // no servers to go by: refused
+  CHECK(DirectOutboundTag(tcp) == "direct" && DirectOutboundTag("not json").empty());
 }
 
 // AdGuard's filter made a rule-set: the plain names, its exceptions as an

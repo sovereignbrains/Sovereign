@@ -334,6 +334,8 @@ struct View {
   // (UpdateLockout): why, for the window's way out.
   bool lockedOut = false;
   std::string lockoutReason;
+  std::string localNetwork;         // the user's network bad around the proxy too: for the user
+  std::string localNetworkSupport;  // and for the support report
   std::string logLevel;
   bool killSwitch = false;
   bool lanClosed = false;
@@ -806,6 +808,7 @@ class Worker {
         Save();  // the effective config changes: the model restarts the box
       }
       CollectLogs();
+      UpdateLocalNetwork();
       UpdateLockout();
       Publish();
 
@@ -1740,7 +1743,9 @@ class Worker {
       } else if (display == Display::Starting) {
         why = "ядро не запускается";
       } else if (display == Display::On && NoServerAnswers()) {
-        why = "ни один сервер не отвечает";
+        why = localNetwork_.state == sovereign::tray::LocalNetwork::State::Down
+                  ? "нет интернета даже без VPN — проверь Wi-Fi или провайдера"
+                  : "ни один сервер не отвечает";
       }
     }
     if (why.empty()) {
@@ -1776,6 +1781,28 @@ class Worker {
   }
 
   bool LockedOut() const { return lockedSince_ && TrayModel::Clock::now() - *lockedSince_ >= kLockout; }
+
+  // The user's own network, by the way around the proxy measured with the
+  // servers (delays.h JudgeLocalNetwork). The best seen is taken only from
+  // measurements that weren't bad - a bad spell doesn't become the usual.
+  void UpdateLocalNetwork() {
+    localNetwork_ = {};
+    if (directTag_.empty() || model_.GetDisplay() != Display::On) {
+      return;
+    }
+    const auto it = delays_.find(directTag_);
+    if (it == delays_.end()) {
+      return;
+    }
+    const auto failed = failedInRow_.find(directTag_);
+    localNetwork_ = sovereign::tray::JudgeLocalNetwork(it->second, failed == failedInRow_.end() ? 0 : failed->second,
+                                                       directBest_, NoServerAnswers());
+    const sovereign::tray::Delay& d = it->second;
+    if (d.state == sovereign::tray::Delay::State::Ok && d.ms > 0 &&
+        localNetwork_.state == sovereign::tray::LocalNetwork::State::Fine && (!directBest_ || d.ms < *directBest_)) {
+      directBest_ = d.ms;
+    }
+  }
 
   // Every server of the pick's selector measured, and failed two tests or more in a row.
   bool NoServerAnswers() const {
@@ -2012,6 +2039,12 @@ class Worker {
       ++delaysRound_;  // nothing to test: over at once
       return;
     }
+    // And the way around the proxy, to the same site: the user's own network
+    // (UpdateLocalNetwork) - slow there, and the servers' numbers are its.
+    directTag_ = combined_ ? sovereign::tray::DirectOutboundTag(*combined_) : std::string();
+    if (!directTag_.empty() && std::find(tags.begin(), tags.end(), directTag_) == tags.end()) {
+      tags.push_back(directTag_);
+    }
     const std::string error = ServiceCall(nlohmann::json{{"cmd", "box_urltest"}, {"tags", tags}}, "box_urltest_started");
     delayError_ = error;
     if (!error.empty()) {
@@ -2038,8 +2071,10 @@ class Worker {
       }
       int& count = failedInRow_[tag];
       count = it->second.state == sovereign::tray::Delay::State::Failed ? count + 1 : 0;
-      first = first || count == 1;
-      failing = failing || count > 0;
+      // The way around the proxy failing (a whitelist network) is no reason to retest the servers.
+      const bool server = tag != directTag_;
+      first = first || (server && count == 1);
+      failing = failing || (server && count > 0);
     }
     if (failing) {
       recheckAt_ = TrayModel::Clock::now() + (first ? kFailRecheck : std::chrono::seconds(kFailRetest));
@@ -2441,6 +2476,8 @@ class Worker {
       v.connectAtStartup = settings_.connectAtStartup;
       v.lockedOut = LockedOut();
       v.lockoutReason = lockoutReason_;
+      v.localNetwork = localNetwork_.forUser;
+      v.localNetworkSupport = localNetwork_.forSupport;
       v.logLevel = settings_.logLevel;
       v.killSwitch = settings_.killSwitch;
       v.lanClosed = settings_.lanClosed;
@@ -2541,6 +2578,9 @@ class Worker {
   std::optional<TrayModel::Clock::time_point> lockedSince_;  // UpdateLockout's
   bool lockoutNoticed_ = false;
   std::string lockoutReason_;
+  std::string directTag_;               // the config's way around the proxy, measured with the servers
+  std::optional<int> directBest_;       // its best seen in a good spell, ms
+  sovereign::tray::LocalNetwork localNetwork_;  // UpdateLocalNetwork's
   std::optional<TrayModel::Clock::time_point> lastOtherVpnCheck_;
   std::optional<sovereign::tray::OtherVpnFound> otherVpn_;  // OtherVpn's, while locked out
   std::optional<TrayModel::Clock::time_point> lastKillSwitchTry_;
@@ -2995,6 +3035,7 @@ void WriteSupportReport(HWND owner, const View::ProfileView& profile, const View
       break;
     }
   }
+  in.userNetwork = view.localNetworkSupport;
   // The user's own address (what Russian sites see) - only to cut it out.
   {
     static const std::regex kIp(R"(\d{1,3}(?:\.\d{1,3}){3})");
@@ -3727,7 +3768,8 @@ UiContent ContentFrom(const View& v) {
     // In trouble: said on the main screen, the first subscription that is.
     // Its servers' measurements by the running config's tags (its own, or
     // "<tag> · <configuration>" where combine renamed a clash).
-    if (!profile.url.empty() && profile.enabled && c.trouble.empty()) {
+    // The user's own network bad: its servers' numbers are that, not theirs - no blame on them.
+    if (!profile.url.empty() && profile.enabled && c.trouble.empty() && v.localNetwork.empty()) {
       std::size_t measured = 0;
       std::size_t failed = 0;
       for (const View::ServerView& server : profile.servers) {
@@ -3927,6 +3969,7 @@ UiContent ContentFrom(const View& v) {
   c.connectAtStartup = v.connectAtStartup;
   c.lockedOut = v.lockedOut;
   c.lockoutReason = Widen(v.lockoutReason);
+  c.localNetwork = Widen(v.localNetwork);
   c.logLevel = Widen(v.logLevel);
   c.killSwitch = v.killSwitch;
   c.lanClosed = v.lanClosed;

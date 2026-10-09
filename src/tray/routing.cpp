@@ -1149,6 +1149,20 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   return config.dump(2, ' ', false, Json::error_handler_t::replace);
 }
 
+std::string DirectOutboundTag(std::string_view config) {
+  const Json c =
+      NestingDepth(config) > kMaxConfigDepth ? Json() : Json::parse(config, nullptr, /*allow_exceptions=*/false);
+  if (!c.is_object() || !c.contains("outbounds") || !c["outbounds"].is_array()) {
+    return {};
+  }
+  for (const Json& o : c["outbounds"]) {
+    if (Str(o, "type") == "direct") {
+      return Str(o, "tag");
+    }
+  }
+  return {};
+}
+
 bool QuicBlocked(const RoutingSettings& settings, std::string_view config) {
   const Json c =
       NestingDepth(config) > kMaxConfigDepth ? Json() : Json::parse(config, nullptr, /*allow_exceptions=*/false);

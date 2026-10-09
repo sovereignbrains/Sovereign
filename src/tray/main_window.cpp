@@ -1217,6 +1217,11 @@ class Painter {
       y += 40 + 8;
     }
 
+    // The user's own network bad around the proxy too: the fault isn't the VPN's.
+    if (!c.localNetwork.empty()) {
+      y = Paragraph(l, Kind::ErrorText, c.localNetwork, x0, x1, y) + kGap;
+    }
+
     y = SubscriptionCard(l, c, x0, x1, y);
 
     // Nothing to connect with yet: the way to fix that comes first.

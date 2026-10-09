@@ -281,6 +281,9 @@ SupportReport BuildSupportReport(const ReportInput& in) {
   } else {
     verdict = std::format("работает {} {}", working, OfServers(in.servers.size()));
   }
+  if (!in.userNetwork.empty()) {
+    verdict += "; " + in.userNetwork + " — серверы, вероятно, ни при чём";
+  }
   if (!in.refreshError.empty()) {
     verdict += "; подписка не обновляется";
   }

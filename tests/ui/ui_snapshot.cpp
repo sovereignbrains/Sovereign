@@ -260,6 +260,11 @@ int Snapshots(const std::wstring& dir) {
   locked.lockoutReason = L"ни один сервер не отвечает";
   sovereign::tray::RenderMainWindowSnapshot(locked, UiPage::Overview, logs, 400, 620, 96,
                                             dir + L"\\overview-lockout.png");
+  // The user's own network slow around the proxy too.
+  UiContent slowNet = content;
+  slowNet.localNetwork = L"Тормозит твоя сеть, а не VPN: напрямую до интернета 190 мс (обычно 15). Проверь Wi-Fi или провайдера.";
+  sovereign::tray::RenderMainWindowSnapshot(slowNet, UiPage::Overview, logs, 400, 620, 96,
+                                            dir + L"\\overview-slow-network.png");
   // The servers' latency in full: the spread, the requests, the connection.
   UiContent detailed = content;
   detailed.delaysDetailed = true;

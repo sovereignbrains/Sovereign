@@ -101,12 +101,34 @@ void TestNextWarpServer() {
 
 }  // namespace
 
+// The user's own network, judged by the way around the proxy.
+void TestLocalNetwork() {
+  Delay direct{.state = Delay::State::Ok, .ms = 12};
+  CHECK(JudgeLocalNetwork(direct, 0, 12, false).state == LocalNetwork::State::Fine);
+  direct.ms = 190;
+  const LocalNetwork slow = JudgeLocalNetwork(direct, 0, 15, false);
+  CHECK(slow.state == LocalNetwork::State::Slow && slow.forUser.find("190 мс (обычно 15)") != std::string::npos);
+  CHECK(!slow.forSupport.empty());
+  CHECK(JudgeLocalNetwork(direct, 0, std::nullopt, false).state == LocalNetwork::State::Slow);  // no best seen yet
+  // A far ISP: 110 where it's usually 90 - not slow for it.
+  direct.ms = 110;
+  CHECK(JudgeLocalNetwork(direct, 0, 90, false).state == LocalNetwork::State::Fine);
+  direct.ms = 20;
+  direct.loss = 40;
+  CHECK(JudgeLocalNetwork(direct, 0, 15, false).state == LocalNetwork::State::Lossy);
+  const Delay failed{.state = Delay::State::Failed, .error = "timeout"};
+  CHECK(JudgeLocalNetwork(failed, 1, 15, true).state == LocalNetwork::State::Down);
+  // Directly not, the servers yes (a whitelist network): nothing said.
+  CHECK(JudgeLocalNetwork(failed, 3, 15, false).state == LocalNetwork::State::Fine);
+}
+
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestParsesResults();
     TestRejectsWhatIsNotAnAnswer();
     TestJudgeAuto();
     TestNextWarpServer();
+    TestLocalNetwork();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

@@ -52,6 +52,10 @@ struct ReportInput {
   bool connected = false;          // the box runs
   std::vector<ReportServer> servers;
   std::string userIp;  // only to be cut out of anything quoted; never written
+  // The user's network bad around the proxy too (delays.h LocalNetwork's
+  // forSupport) - the one thing of it that goes in: it tells them not to look
+  // for the fault on their side. No country, no ISP.
+  std::string userNetwork;
 };
 
 struct SupportReport {

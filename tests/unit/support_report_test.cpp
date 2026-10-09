@@ -238,6 +238,21 @@ void TestUsageLine() {
   CHECK(UsageLine(0, 0, 0, 1791300000, 180).empty());
 }
 
+// The user's network bad around the proxy too: said, so support doesn't look
+// for it on their side.
+void TestUserNetwork() {
+  ReportInput in;
+  in.now = 1'800'000'000;
+  in.subscriptionName = "packetlab.tech";
+  in.connected = true;
+  in.servers = {ReportServer{.name = "TUIC", .protocol = "tuic", .host = "packetlab.tech", .port = 443,
+                             .state = ReportServer::State::Ok, .delay = 190}};
+  in.userNetwork = "у пользователя медленная сеть и без VPN: напрямую 190 мс";
+  const SupportReport r = BuildSupportReport(in);
+  CHECK(r.brief.find("медленная сеть и без VPN") != std::string::npos);
+  CHECK(r.brief.find("ни при чём") != std::string::npos);
+}
+
 int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see the catch below
   Print() = argc == 2 && std::string(argv[1]) == "--print";
   try {
@@ -248,6 +263,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestReport();
     TestUsageLine();
     TestTrouble();
+    TestUserNetwork();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 1;

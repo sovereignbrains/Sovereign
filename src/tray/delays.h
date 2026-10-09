@@ -47,6 +47,19 @@ struct AutoPick {
 AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,
                    const std::map<std::string, Delay>& delays);
 
+// The user's own network, judged by the way around the proxy - the config's
+// direct outbound, measured with the servers to the same site: slow or lossy
+// there and the servers' numbers are the Wi-Fi's or the ISP's, not theirs.
+// Slow: 100 ms or more, and (when there's a best seen) 2.5 times it and 60 ms
+// over it; lossy: 30% or more lost; down: it failed and so did every server.
+struct LocalNetwork {
+  enum class State : std::uint8_t { Fine, Slow, Lossy, Down };
+  State state = State::Fine;
+  std::string forUser;     // a sentence for the main screen; empty when fine
+  std::string forSupport;  // a phrase for the support report: "not your servers"
+};
+LocalNetwork JudgeLocalNetwork(const Delay& direct, int failedInRow, std::optional<int> bestMs, bool serversDown);
+
 // The server WARP goes through next, its present one not getting it to
 // Cloudflare: of `servers` the ones not `tried` yet - those that answered
 // the last test first, best by DelayScore, then the ones not measured, the

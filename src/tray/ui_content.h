@@ -219,6 +219,7 @@ struct UiContent {
   bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through
+  std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
   std::wstring version;                 // "0.1.0 · sing-box 1.14.1"
   UiUpdate update = UiUpdate::Idle;
   std::wstring updateVersion;           // the newest release, once known

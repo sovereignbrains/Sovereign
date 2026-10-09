@@ -186,6 +186,10 @@ std::string OwnFrame(const RoutingSettings& settings);
 std::string ApplyRouting(std::string_view config, const RoutingSettings& settings,
                          const std::map<std::string, std::string>& files);
 
+// The tag of `config`'s first direct outbound - the way around the proxy the
+// tray measures the user's own network by - or empty.
+std::string DirectOutboundTag(std::string_view config);
+
 // Whether `config` with these settings refuses QUIC - what Quic::Auto comes
 // to with its servers.
 bool QuicBlocked(const RoutingSettings& settings, std::string_view config);
