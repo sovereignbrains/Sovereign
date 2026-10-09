@@ -33,6 +33,12 @@ func TestBlockedNotice(t *testing.T) {
 	if got := feed("DEBUG [7 0ms] router: match[4] rule_set=sov-ads => reject"); got != "ads: blocked tracker.example.net" {
 		t.Fatalf("sniffed: %q", got)
 	}
+	// As the platform writer gets it: coloured, the ID too - read without colours.
+	coloured := "\x1b[36mDEBUG\x1b[0m[0003] [\x1b[38;5;27m42\x1b[0m 15ms] dns: exchange ads.example.org. IN A"
+	feed(ansiEscape.ReplaceAllString(coloured, ""))
+	if got := feed(ansiEscape.ReplaceAllString("\x1b[36mDEBUG\x1b[0m[0003] [\x1b[38;5;27m42\x1b[0m 15ms] dns: match[0] rule_set=[sov-ads sov-ads-adguard] => predefined(NOERROR)", "")); got != "ads: blocked ads.example.org" {
+		t.Fatalf("coloured: %q", got)
+	}
 	// The user's own block, and a match with no name known: nothing.
 	feed("DEBUG [8 0ms] dns: exchange yandex.com. IN A")
 	if got := feed("DEBUG [8 0ms] dns: match[2] domain_suffix=yandex.com => predefined(rcode=NOERROR)"); got != "" {

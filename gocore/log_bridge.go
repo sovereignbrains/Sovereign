@@ -59,7 +59,8 @@ type platformWriter struct {
 func (w platformWriter) WriteMessage(level log.Level, message string) {
 	// What the ads lists block, from the debug lines too (blocked.go): one
 	// line of its own, whatever log.level says - the tray lists the names.
-	if notice := blocked.notice(message, time.Now()); notice != "" {
+	// (sing-box colours the request's ID too: the line read without colours.)
+	if notice := blocked.notice(ansiEscape.ReplaceAllString(message, ""), time.Now()); notice != "" {
 		sayToHost(log.LevelInfo, notice)
 	}
 	// Platform writers receive every level, whatever log.level says (see
