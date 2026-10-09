@@ -1015,7 +1015,7 @@ class Worker {
         if (!change.path.empty() && rule->processes.size() == 1) {  // a program picked: its icon
           sovereign::tray::SetAppPath(settings_, rule->processes.front(), change.path);
         }
-        sovereign::tray::MergeRules(r.rules, {*rule});
+        sovereign::tray::AddRule(r.rules, *rule);  // already elsewhere: moved here
         break;
       }
       case RoutingChange::What::SetRuleAction:

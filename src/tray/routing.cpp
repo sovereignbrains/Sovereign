@@ -247,6 +247,14 @@ bool BlockQuic(const RoutingSettings& s, const Json& config) {
          !ServersCarryQuic(config["outbounds"], MainSelector(config));
 }
 
+// Rules for the same things - names, keywords, addresses, programs - whatever
+// their way; programs' names case-blind, as Windows has them.
+bool SameThings(const RouteRule& a, const RouteRule& b) {
+  return a.domains == b.domains && a.keywords == b.keywords && a.ips == b.ips &&
+         std::equal(a.processes.begin(), a.processes.end(), b.processes.begin(), b.processes.end(),
+                    [](const std::string& x, const std::string& y) { return Lower(x) == Lower(y); });
+}
+
 std::set<std::string> Tags(const Json& list) {
   std::set<std::string> tags;
   if (list.is_array()) {
@@ -484,7 +492,9 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
                                         : action == "proxy" ? RouteRule::Action::Proxy
                                         : action == "warp"  ? RouteRule::Action::Warp
                                                             : RouteRule::Action::Direct);
-      if (rule) {
+      // One the same as an earlier one (in two buckets, before 0.4.57): only
+      // the first ever worked - the rest dropped.
+      if (rule && std::none_of(s.rules.begin(), s.rules.end(), [&](const RouteRule& r) { return SameThings(r, *rule); })) {
         s.rules.push_back(*rule);
       }
     }
@@ -638,6 +648,11 @@ void MergeRules(std::vector<RouteRule>& into, const std::vector<RouteRule>& more
       into.push_back(rule);
     }
   }
+}
+
+void AddRule(std::vector<RouteRule>& rules, const RouteRule& rule) {
+  std::erase_if(rules, [&](const RouteRule& r) { return SameThings(r, rule); });
+  rules.push_back(rule);
 }
 
 std::span<const ServiceInfo> ServiceCatalog() { return kServices; }

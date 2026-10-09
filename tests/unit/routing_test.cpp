@@ -94,6 +94,18 @@ void TestJsonAndParse() {
   CHECK(back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Block);
   CHECK(!back.rules.empty() && back.rules[0].keywords == std::vector<std::string>({"tracker"}));
   CHECK(RoutingFromJson(json::parse(R"({"russiaDirect":"yes","rules":[5,{"domains":[1]}]})")).russiaDirect);
+  // One thing, one bucket: added again elsewhere, it moves; twice in tray.json
+  // (before 0.4.57), the first - the one that worked - stays.
+  std::vector<RouteRule> board;
+  AddRule(board, *ParseRule("Telegram.exe", RouteRule::Action::Proxy));
+  AddRule(board, *ParseRule("example.com", RouteRule::Action::Direct));
+  AddRule(board, *ParseRule("telegram.exe", RouteRule::Action::Block));
+  CHECK(board.size() == 2 && board[0].domains == std::vector<std::string>({"example.com"}) &&
+        board[1].action == RouteRule::Action::Block);
+  const RoutingSettings twice = RoutingFromJson(json::parse(
+      R"({"rules":[{"action":"proxy","processes":["Telegram.exe"]},{"action":"direct","processes":["Telegram.exe"]},
+                   {"action":"warp","domains":["a.com"]}]})"));
+  CHECK(twice.rules.size() == 2 && twice.rules[0].action == RouteRule::Action::Proxy);
   CHECK(RoutingFromJson(json("x")).quic == RoutingSettings::Quic::Auto);
   // "blockQuic" before 0.4.56: on (the default) is auto now, off stays off.
   CHECK(RoutingFromJson(json{{"blockQuic", true}}).quic == RoutingSettings::Quic::Auto);

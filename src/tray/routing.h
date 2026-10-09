@@ -142,6 +142,9 @@ std::string RuleText(const RouteRule& rule);
 std::vector<RouteRule> ImportRules(std::string_view config);
 // `into` with `more` added, the ones it has already left out.
 void MergeRules(std::vector<RouteRule>& into, const std::vector<RouteRule>& more);
+// `rule` put on the board: a rule for the same things in another bucket
+// gives way - one thing, one bucket (only the first of them ever worked).
+void AddRule(std::vector<RouteRule>& rules, const RouteRule& rule);
 
 // The lists the rules need: downloaded by the tray (rule_set.srs files),
 // given to the box as local files - a list that can't be fetched never
