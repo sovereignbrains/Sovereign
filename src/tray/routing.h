@@ -68,6 +68,9 @@ std::string PickCountryServer(std::string_view country, const std::vector<std::s
 // "Нидерланды" for "NL" (the countries VPN servers are usually in); the code
 // itself for others.
 std::string CountryName(std::string_view code);
+// The same after "через": "Германию" for "DE", "Польшу" for "PL"; "США",
+// "Нидерланды" as they are.
+std::string CountryNameVia(std::string_view code);
 
 // Two uppercase Latin letters.
 bool IsCountryCode(std::string_view code);

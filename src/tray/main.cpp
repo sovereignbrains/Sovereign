@@ -3701,7 +3701,7 @@ UiContent ContentFrom(const View& v) {
     const auto* info = sovereign::tray::FindService(s.id);
     std::wstring way = r.warp ? L"через WARP" : L"через WARP · WARP выключен";
     if (s.way == sovereign::tray::ServiceRoute::Way::Country) {
-      way = L"через " + Widen(sovereign::tray::CountryName(s.country));
+      way = L"через " + Widen(sovereign::tray::CountryNameVia(s.country));
       const auto via = v.serviceVia.find(s.id);
       if (via != v.serviceVia.end() && !via->second.empty()) {
         way += L" · " + Widen(via->second);
@@ -4234,7 +4234,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           current = s.way == sovereign::tray::ServiceRoute::Way::Country && s.country == code
                         ? static_cast<int>(items.size())
                         : current;
-          items.push_back(L"Через " + Widen(sovereign::tray::CountryName(code)));
+          items.push_back(L"Через " + Widen(sovereign::tray::CountryNameVia(code)));
         }
       }
       items.emplace_back(L"Убрать");
@@ -4271,7 +4271,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       for (const std::string& code : countries) {
         current = s.way == sovereign::tray::ServiceRoute::Way::Country && s.country == code ? static_cast<int>(items.size())
                                                                                             : current;
-        items.push_back(L"Через " + Widen(sovereign::tray::CountryName(code)));
+        items.push_back(L"Через " + Widen(sovereign::tray::CountryNameVia(code)));
       }
       items.emplace_back(L"Убрать");
       const auto picked = PickFromMenu(owner, cursor, items, current);

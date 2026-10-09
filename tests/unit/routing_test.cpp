@@ -173,6 +173,12 @@ void TestQuic() {
 
 // AdGuard's filter made a rule-set: the plain names, its exceptions as an
 // inverted half; masks, expressions and other modifiers left out.
+void TestCountryVia() {
+  CHECK(CountryNameVia("DE") == "Германию" && CountryNameVia("PL") == "Польшу" && CountryNameVia("LT") == "Литву");
+  CHECK(CountryNameVia("US") == "США" && CountryNameVia("NL") == "Нидерланды" && CountryNameVia("CY") == "Кипр");
+  CHECK(CountryNameVia("KR") == "Корею" && CountryNameVia("XX") == "XX");
+}
+
 void TestAdGuard() {
   const auto list = AdGuardRuleSet(
       "! Title: AdGuard DNS filter\r\n||ads.example.com^\r\n||Tracker.NET^$important\n@@||ok.ads.example.com^|\n"
@@ -806,6 +812,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestQuic();
     TestOrder();
     TestAdGuard();
+    TestCountryVia();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

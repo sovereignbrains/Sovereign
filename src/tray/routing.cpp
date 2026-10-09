@@ -710,6 +710,19 @@ std::string CountryName(std::string_view code) {
   return std::string(code);
 }
 
+std::string CountryNameVia(std::string_view code) {
+  std::string name = CountryName(code);
+  // The feminine names end in -я or -а, and take -ю or -у; the rest - США,
+  // Нидерланды, Кипр, Казахстан - stay.
+  for (const auto& [from, to] : {std::pair<std::string_view, std::string_view>{"я", "ю"}, {"а", "у"}}) {
+    if (name.ends_with(from)) {
+      name.replace(name.size() - from.size(), from.size(), to);
+      break;
+    }
+  }
+  return name;
+}
+
 const ServiceInfo* FindService(std::string_view id) {
   const auto it = std::find_if(kServices.begin(), kServices.end(), [&](const ServiceInfo& s) { return s.id == id; });
   return it == kServices.end() ? nullptr : &*it;
