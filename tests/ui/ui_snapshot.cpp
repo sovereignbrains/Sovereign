@@ -254,6 +254,12 @@ int Snapshots(const std::wstring& dir) {
   waiting.profiles[0].choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
   sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 360, 640, 96,
                                             dir + L"\\profile-waiting-narrow.png");
+  // Locked out by the kill switch: why, and the way out.
+  UiContent locked = content;
+  locked.lockedOut = true;
+  locked.lockoutReason = L"ни один сервер не отвечает";
+  sovereign::tray::RenderMainWindowSnapshot(locked, UiPage::Overview, logs, 400, 620, 96,
+                                            dir + L"\\overview-lockout.png");
   // The servers' latency in full: the spread, the requests, the connection.
   UiContent detailed = content;
   detailed.delaysDetailed = true;

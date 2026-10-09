@@ -1204,6 +1204,19 @@ class Painter {
       y += 40 + 8;
     }
 
+    // Locked out: on, the kill switch holding the internet shut, nothing
+    // getting through (main.cpp UpdateLockout) - why, and the way out.
+    if (c.lockedOut) {
+      y = Paragraph(l, Kind::ErrorText,
+                    L"Интернет закрыт защитой: подключиться не удаётся — " + c.lockoutReason +
+                        L". Так настоящий IP не утечёт, но и интернета нет.",
+                    x0, x1, y) +
+          8;
+      l.items.push_back(CommandItem(Kind::Banner, {x0, y, x1, y + 40}, L"Открыть интернет без VPN", kGlyphWarning,
+                                    UiCommand::OpenWithoutVpn));
+      y += 40 + 8;
+    }
+
     y = SubscriptionCard(l, c, x0, x1, y);
 
     // Nothing to connect with yet: the way to fix that comes first.
@@ -2110,11 +2123,17 @@ class Painter {
                   L"закрывает трей; подключение остаётся — им управляет служба, и следующий запуск продолжит с того "
                   L"же места.");
 
-    y = Switches(l,
-                 {Row(L"Запуск при входе в Windows", L"Трей запускается в области уведомлений, без окна.", c.autostart,
-                      UiCommand::ToggleAutostart)},
-                 x0, x1, y) +
-        kGap;
+    {
+      Item startup = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Автозапуск", nullptr, UiCommand::ChooseStartup);
+      startup.detail = !c.autostart ? L"выключен" : c.connectAtStartup ? L"с подключением" : L"без подключения";
+      l.items.push_back(Make(Kind::Card, startup.rect));
+      startup.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
+      l.items.push_back(std::move(startup));
+      HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
+                L"При входе в Windows клиент запускается в области уведомлений, без окна. «С подключением» — "
+                L"подключается сам, если был включён; «без подключения» — ждёт, пока включишь.");
+      y += kRow + kGap;
+    }
 
     y = Switches(l,
                  {Row(L"Kill switch",

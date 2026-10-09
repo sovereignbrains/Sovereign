@@ -216,6 +216,9 @@ struct UiContent {
   bool killSwitchActive = false;        // the filters are in place
   std::wstring killSwitchError;         // why the service couldn't apply it
   bool autostart = false;               // the tray starts when the user signs in
+  bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
+  bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
+  std::wstring lockoutReason;           // why nothing gets through
   std::wstring version;                 // "0.1.0 · sing-box 1.14.1"
   UiUpdate update = UiUpdate::Idle;
   std::wstring updateVersion;           // the newest release, once known
@@ -295,6 +298,8 @@ enum class UiCommand : std::uint8_t {
   AddExe,
   SetProtocol,   // index into protocols
   ToggleAutostart,
+  ChooseStartup,       // anchor: where to open the menu
+  OpenWithoutVpn,      // off: the kill switch's filters go with it
   TestDelays,
   CheckUpdate,
   InstallUpdate,

@@ -135,6 +135,9 @@ constexpr int kLogPagesPerPoll = 20;
 
 // A kill switch the service couldn't apply is tried again after this.
 constexpr std::chrono::seconds kKillSwitchRetry{10};
+// Turned on, shut by the kill switch, nothing getting through for this long:
+// the window offers the way out (UpdateLockout).
+constexpr std::chrono::seconds kLockout{20};
 
 // What the ads lists blocked: how many names the tray keeps (the "Реклама"
 // chip's menu lists them, to let one through).
@@ -323,6 +326,11 @@ struct View {
   std::vector<sovereign::tray::ExitIp> locations;  // per protocol: where it is, once known
   bool hideExitIp = false;
   bool delaysDetailed = false;
+  bool connectAtStartup = true;
+  // Turned on, shut by the kill switch, nothing getting through for a while
+  // (UpdateLockout): why, for the window's way out.
+  bool lockedOut = false;
+  std::string lockoutReason;
   std::string logLevel;
   bool killSwitch = false;
   bool lanClosed = false;
@@ -455,6 +463,7 @@ struct Shared {
   bool pendingUrlTest = false;
   bool pendingToggleExitIp = false;
   bool pendingToggleDelayDetails = false;
+  std::optional<bool> pendingConnectAtStartup;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
   bool pendingToggleLanClosed = false;
@@ -473,7 +482,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingLogLevel || pendingToggleKillSwitch ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingLogLevel || pendingToggleKillSwitch ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -637,6 +646,7 @@ class Worker {
       bool urlTest = false;
       bool toggleExitIp = false;
       bool toggleDelayDetails = false;
+      std::optional<bool> connectAtStartup;
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
       bool toggleLanClosed = false;
@@ -658,6 +668,7 @@ class Worker {
         urlTest = std::exchange(shared.pendingUrlTest, false);
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
         toggleDelayDetails = std::exchange(shared.pendingToggleDelayDetails, false);
+        connectAtStartup = std::exchange(shared.pendingConnectAtStartup, std::nullopt);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
         toggleLanClosed = std::exchange(shared.pendingToggleLanClosed, false);
@@ -758,6 +769,10 @@ class Worker {
         settings_.delaysDetailed = !settings_.delaysDetailed;
         Save();
       }
+      if (connectAtStartup && *connectAtStartup != settings_.connectAtStartup) {
+        settings_.connectAtStartup = *connectAtStartup;
+        Save();
+      }
       if (toggleKillSwitch) {
         settings_.killSwitch = !settings_.killSwitch;
         killSwitchError_.clear();
@@ -788,6 +803,7 @@ class Worker {
         Save();  // the effective config changes: the model restarts the box
       }
       CollectLogs();
+      UpdateLockout();
       Publish();
 
       std::unique_lock lock(shared.mutex);
@@ -1706,6 +1722,65 @@ class Worker {
     lanDevices_ = sovereign::tray::LanDevices();
   }
 
+  // Turned on, the kill switch holding the internet shut, and nothing getting
+  // through: the core failed to start or is still starting, or no server of
+  // the pick answered two tests in a row (another VPN's filters, a Wi-Fi's
+  // login page). The way out used to be guessing to turn it off; after
+  // kLockout the window says why and offers it (off - the filters go with
+  // it), a notice once a spell.
+  void UpdateLockout() {
+    std::string why;
+    if (settings_.wantOn && killSwitchActive_) {
+      const Display display = model_.GetDisplay();
+      if (display == Display::Error) {
+        why = model_.LastError().empty() ? std::string("ядро не запустилось") : model_.LastError();
+      } else if (display == Display::Starting) {
+        why = "ядро не запускается";
+      } else if (display == Display::On && NoServerAnswers()) {
+        why = "ни один сервер не отвечает";
+      }
+    }
+    if (why.empty()) {
+      lockedSince_.reset();
+      lockoutNoticed_ = false;
+      lockoutReason_.clear();
+      return;
+    }
+    if (!lockedSince_) {
+      lockedSince_ = TrayModel::Clock::now();
+    }
+    lockoutReason_ = std::move(why);
+    if (LockedOut() && !lockoutNoticed_) {
+      lockoutNoticed_ = true;
+      Notify(L"Sovereign: интернет закрыт защитой",
+             L"Подключиться не удаётся: " + Widen(lockoutReason_) + L". В окне — выход без VPN.", true,
+             UiPage::Overview);
+    }
+  }
+
+  bool LockedOut() const { return lockedSince_ && TrayModel::Clock::now() - *lockedSince_ >= kLockout; }
+
+  // Every server of the pick's selector measured, and failed two tests or more in a row.
+  bool NoServerAnswers() const {
+    if (!combined_) {
+      return false;
+    }
+    const auto choices = sovereign::tray::FindProtocolChoices(*combined_);
+    bool any = false;
+    for (const std::string& tag : choices.options) {
+      if (choices.groups.contains(tag)) {
+        continue;  // "auto": its servers are options too
+      }
+      const auto it = delays_.find(tag);
+      if (it == delays_.end() || it->second.state != sovereign::tray::Delay::State::Failed ||
+          it->second.failedInRow < 2) {
+        return false;
+      }
+      any = true;
+    }
+    return any;
+  }
+
   void UpdateKillSwitch(const std::optional<sovereign::tray::Stats>& stats) {
     if (!stats) {
       killSwitchActive_ = false;
@@ -2346,6 +2421,9 @@ class Worker {
       }
       v.hideExitIp = settings_.hideExitIp;
       v.delaysDetailed = settings_.delaysDetailed;
+      v.connectAtStartup = settings_.connectAtStartup;
+      v.lockedOut = LockedOut();
+      v.lockoutReason = lockoutReason_;
       v.logLevel = settings_.logLevel;
       v.killSwitch = settings_.killSwitch;
       v.lanClosed = settings_.lanClosed;
@@ -2443,6 +2521,9 @@ class Worker {
   std::optional<TrayModel::Clock::time_point> serverExitsPolled_;
   bool killSwitchActive_ = false;
   std::string killSwitchError_;
+  std::optional<TrayModel::Clock::time_point> lockedSince_;  // UpdateLockout's
+  bool lockoutNoticed_ = false;
+  std::string lockoutReason_;
   std::optional<TrayModel::Clock::time_point> lastKillSwitchTry_;
 };
 
@@ -3824,6 +3905,9 @@ UiContent ContentFrom(const View& v) {
   c.exitPending = v.exitIp.pending;
   c.hideExitIp = v.hideExitIp;
   c.delaysDetailed = v.delaysDetailed;
+  c.connectAtStartup = v.connectAtStartup;
+  c.lockedOut = v.lockedOut;
+  c.lockoutReason = Widen(v.lockoutReason);
   c.logLevel = Widen(v.logLevel);
   c.killSwitch = v.killSwitch;
   c.lanClosed = v.lanClosed;
@@ -4485,6 +4569,35 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       UpdateWindows();
       break;
+    case UiCommand::ChooseStartup: {
+      // Off / started, not connected / started and connected (if it was on).
+      const int current = !sovereign::tray::AutostartEnabled() ? 0 : (CurrentView().connectAtStartup ? 2 : 1);
+      const auto picked =
+          PickFromMenu(owner, args.anchor, {L"Не запускать", L"Запускать без подключения", L"Запускать и подключаться"},
+                       current);
+      if (!picked) {
+        break;
+      }
+      if (!sovereign::tray::SetAutostart(*picked != 0) && g_trayIcon != nullptr) {
+        g_trayIcon->Balloon(L"Sovereign", L"Не удалось изменить автозапуск (реестр отказал).");
+      }
+      if (*picked != 0) {
+        {
+          const std::scoped_lock lock(State().mutex);
+          State().pendingConnectAtStartup = *picked == 2;
+        }
+        Wake();
+      }
+      UpdateWindows();
+      break;
+    }
+    case UiCommand::OpenWithoutVpn:
+      {
+        const std::scoped_lock lock(State().mutex);
+        State().pendingWant = false;
+      }
+      Wake();
+      break;
     case UiCommand::EditRelayUrl:  // typed over its row; the key over its own
     case UiCommand::EditRelayKey:
       if (g_mainWindow != nullptr) {
@@ -4788,6 +4901,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     settings = sovereign::tray::LoadSettings();
   } catch (...) {
     LOG_CAUGHT_EXCEPTION_MSG("reading tray settings failed; starting turned off");
+  }
+  if (background && !settings.connectAtStartup) {
+    settings.wantOn = false;  // signed in: started, not connected - the user's pick
   }
 
   WNDCLASSW windowClass{};

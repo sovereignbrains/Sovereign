@@ -22,7 +22,7 @@ namespace sovereign::tray {
 // SYSTEM/admins) can read - it holds configs with passwords and keys.
 //
 //   tray.json    {"wantOn", "profiles", "protocol", "routing", "appsMode", "apps",
-//                 "appPaths", "hideExitIp", "delaysDetailed", "logLevel", "killSwitch",
+//                 "appPaths", "hideExitIp", "delaysDetailed", "connectAtStartup", "logLevel", "killSwitch",
 //                 "lanClosed", "lanAllowed"}
 //   profiles\<id>\         one configuration (profiles.h), each with:
 //     config.json            the sing-box config: the subscription's copy,
@@ -67,6 +67,9 @@ struct TraySettings {
   // The servers' latency in full - its spread, the requests, the connection's
   // time; else one figure, rounded to 5 ms (the rest is the network's noise).
   bool delaysDetailed = false;
+  // Started at sign-in (--background): connects if it was on when the PC went
+  // off. False: starts turned off whatever it was.
+  bool connectAtStartup = true;
   std::string logLevel;     // what the core writes (log_level.h); empty = the config's
   // The kill switch (the service's kill_switch.h): in force while the
   // connection is meant to be on, so a drop doesn't let traffic around it.
