@@ -310,6 +310,7 @@ struct View {
   std::vector<std::string> appPaths;   // per app, "" if not known
   std::vector<std::pair<std::string, std::string>> programPaths;  // every program's exe known, by its name
   std::vector<std::string> protocols;  // the config selector's options
+  std::map<std::string, sovereign::tray::ServerTitle> serverTitles;  // what each server is, by tag
   int protocol = -1;                   // the one in use
   std::vector<std::optional<sovereign::tray::Delay>> delays;  // per protocol; nullopt: not tested
   bool delaysTesting = false;
@@ -879,6 +880,8 @@ class Worker {
       combined.config = sovereign::tray::ApplyRouting(*combined.config, routing, ruleFiles_);
     }
     combined_ = combined.config;
+    serverTitles_ = combined_ ? sovereign::tray::ServerTitles(*combined_)
+                              : std::map<std::string, sovereign::tray::ServerTitle>();
     return std::move(combined.config);
   }
 
@@ -2308,6 +2311,7 @@ class Worker {
         v.appPaths.push_back(path != nullptr ? *path : std::string());
       }
       v.protocols = choices.options;
+      v.serverTitles = serverTitles_;
       v.protocol = current;
       v.autoOption = autoOption == choices.options.end() ? -1 : static_cast<int>(autoOption - choices.options.begin());
       v.autoServer = autoServer;
@@ -2365,6 +2369,7 @@ class Worker {
   std::optional<UiPage> noticePage_;
   std::optional<TrayModel::Clock::time_point> lastPathLookup_;
   std::optional<std::string> combined_;  // the configurations that are on, together, with the routing
+  std::map<std::string, sovereign::tray::ServerTitle> serverTitles_;  // ServerTitles of combined_
   std::map<std::string, std::string> ruleFiles_;  // the routing's lists there are: tag -> path (UTF-8)
   std::optional<TrayModel::Clock::time_point> lastRuleCheck_;
   bool rulesDirty_ = true;      // check the lists at the next poll
@@ -3695,7 +3700,7 @@ UiContent ContentFrom(const View& v) {
     const std::wstring way = r.warpViaProxy ? L"поверх прокси" : L"напрямую";
     c.routing.warpState = v.warpDirect                                         ? L"напрямую: через прокси не прошёл"
                           : v.warpAnswers && !*v.warpAnswers                   ? way + L" · не отвечает"
-                          : r.warpViaProxy && !v.warpServer.empty()            ? L"через «" + Widen(v.warpServer) + L"»"
+                          : r.warpViaProxy && !v.warpServer.empty()            ? L"через «" + Widen(v.serverTitles.contains(v.warpServer) ? v.serverTitles.at(v.warpServer).title : v.warpServer) + L"»"
                                                                                : way;
   }
   c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
@@ -3751,6 +3756,35 @@ UiContent ContentFrom(const View& v) {
   }
   for (const std::string& p : v.protocols) {
     c.protocols.push_back(Widen(p));
+  }
+  // What each is, and its note: its name when that says more than the title
+  // (the provider's "4G | Whitelist №2"), and the host - the port too - for
+  // one still not told from another.
+  const auto titleOf = [&](const std::string& tag) -> const sovereign::tray::ServerTitle* {
+    const auto it = v.serverTitles.find(tag);
+    return it == v.serverTitles.end() ? nullptr : &it->second;
+  };
+  const auto noteOf = [&](const std::string& tag) {
+    const sovereign::tray::ServerTitle* title = titleOf(tag);
+    return title == nullptr || sovereign::tray::NameIsTitle(tag, title->title) ? std::string() : tag;
+  };
+  for (const std::string& p : v.protocols) {
+    const sovereign::tray::ServerTitle* title = titleOf(p);
+    c.protocolTitles.push_back(title != nullptr ? Widen(title->title) : std::wstring());
+    std::string note = noteOf(p);
+    const auto alike = [&](bool port) {
+      return std::count_if(v.protocols.begin(), v.protocols.end(), [&](const std::string& other) {
+        const sovereign::tray::ServerTitle* o = titleOf(other);
+        return o != nullptr && o->title == title->title && noteOf(other) == note && (!port || o->host == title->host);
+      });
+    };
+    if (title != nullptr && !title->host.empty() && alike(false) > 1) {
+      note += (note.empty() ? "" : " · ") + title->host;
+      if (alike(true) > 1 && title->port > 0) {
+        note += std::format(":{}", title->port);
+      }
+    }
+    c.protocolNotes.push_back(Widen(note));
   }
   c.protocol = v.protocol;
   for (const auto& delay : v.delays) {

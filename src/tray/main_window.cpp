@@ -1362,7 +1362,7 @@ class Painter {
       shown = it == c.protocols.end() ? c.protocol : static_cast<int>(it - c.protocols.begin());
     }
     const auto i = static_cast<std::size_t>(std::max(shown, 0));
-    std::wstring name = shown >= 0 && i < c.protocols.size() ? c.protocols[i] : std::wstring(L"выбор сервера");
+    std::wstring name = shown >= 0 && i < c.protocols.size() ? OptionTitle(c, i) : std::wstring(L"выбор сервера");
     const UiLocation* location = shown >= 0 && i < c.locations.size() ? &c.locations[i] : nullptr;
     std::wstring country = location != nullptr ? location->country : std::wstring();
     if (country.empty() && c.display == Display::On) {
@@ -1447,6 +1447,14 @@ class Painter {
     }
   }
 
+  // What option `i` is (UiContent::protocolTitles), or its name if that's unknown.
+  static std::wstring OptionTitle(const UiContent& c, std::size_t i) {
+    if (i < c.protocolTitles.size() && !c.protocolTitles[i].empty()) {
+      return c.protocolTitles[i];
+    }
+    return i < c.protocols.size() ? c.protocols[i] : std::wstring();
+  }
+
   // The servers of the subscription's selector, with their latency.
   float Servers(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const float titleTop = y;
@@ -1486,14 +1494,23 @@ class Painter {
                                     ? FlagEmojiFor(std::string{static_cast<char>(location->country[0]),
                                                                static_cast<char>(location->country[1])})
                                     : std::wstring();
-      const std::wstring name = flag.empty() ? c.protocols[i] : flag + L" " + WithoutFlagEmoji(c.protocols[i]);
-      const std::wstring isp = location != nullptr ? location->isp : std::wstring();
+      const std::wstring title = OptionTitle(c, i);
+      const std::wstring name = flag.empty() ? title : flag + L" " + WithoutFlagEmoji(title);
+      std::wstring isp = location != nullptr ? location->isp : std::wstring();
+      if (i < c.protocolNotes.size() && !c.protocolNotes[i].empty()) {
+        std::wstring note = WithoutFlagEmoji(c.protocolNotes[i]);
+        note.erase(0, note.find_first_not_of(L' '));
+        isp += (isp.empty() ? L"" : L" · ") + note;
+      }
       Item choice = CommandItem(Kind::Choice, {x0 + 4, top + 3, x1 - 4, top + kLatencyRow - 3}, name, nullptr,
                                 UiCommand::SetProtocol, static_cast<int>(i));
       choice.checked = static_cast<int>(i) == c.protocol;
       if (static_cast<int>(i) == c.autoOption) {
+        const auto at = std::find(c.protocols.begin(), c.protocols.end(), c.autoServer);
+        const std::wstring server =
+            at == c.protocols.end() ? c.autoServer : OptionTitle(c, static_cast<std::size_t>(at - c.protocols.begin()));
         choice.detail = c.autoServer.empty() ? std::wstring(L"выберет лучший после первого замера")
-                                             : L"сейчас " + c.autoServer + L" — лучший по замерам";
+                                             : L"сейчас " + server + L" — лучший по замерам";
       } else if (i < c.delays.size()) {
         choice.detail = DelayDetail(c.delays[i], c.delaysDetailed);
       }

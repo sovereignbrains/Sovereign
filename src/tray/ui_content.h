@@ -183,6 +183,12 @@ struct UiContent {
   std::vector<std::wstring> apps;
   std::vector<std::wstring> appPaths;   // per app: its exe's full path for the icon; empty if unknown
   std::vector<std::wstring> protocols;  // the selector's options; empty = no choice
+  // What each option is, by its config (protocol_choice.h ServerTitles):
+  // shown instead of its name ("" - unknown: the name). Under it its note:
+  // the name, when it says more than the title ("4G | Whitelist №2" - not
+  // "AnyTLS-REALITY"), and the host for one still not told from another.
+  std::vector<std::wstring> protocolTitles;
+  std::vector<std::wstring> protocolNotes;
   int protocol = -1;                    // index of the one in use
   std::vector<UiDelay> delays;          // one per protocol (may be shorter: untested)
   std::vector<UiLocation> locations;    // one per protocol (may be shorter: not known)

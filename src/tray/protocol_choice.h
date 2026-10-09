@@ -33,4 +33,21 @@ ProtocolChoices FindProtocolChoices(std::string_view config);
 // options, e.g. after the subscription dropped a protocol.
 std::string ApplyProtocolChoice(std::string_view config, const std::string& choice);
 
+// What a server is, from its outbound - not from the name a subscription
+// gave it: "AnyTLS + REALITY", "Hysteria 2", "VLESS + Vision + REALITY",
+// "VLESS + WebSocket + TLS", "Shadowsocks 2022"; a URL test is "Авто".
+struct ServerTitle {
+  std::string title;
+  std::string host;  // where it connects ("de1.example.com"), for telling apart two of one title
+  int port = 0;
+};
+// By tag, for every outbound and endpoint it can tell (an unknown type, a
+// selector: none - shown by its tag).
+std::map<std::string, ServerTitle> ServerTitles(std::string_view config);
+
+// Whether a server's name says no more than its title: "AnyTLS-REALITY" for
+// "AnyTLS + REALITY", "hysteria2" for "Hysteria 2" - the same letters and
+// digits, case and the rest aside.
+bool NameIsTitle(std::string_view name, std::string_view title);
+
 }  // namespace sovereign::tray
