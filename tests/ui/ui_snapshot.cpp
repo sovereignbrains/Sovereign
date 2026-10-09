@@ -254,6 +254,11 @@ int Snapshots(const std::wstring& dir) {
   waiting.profiles[0].choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
   sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 360, 640, 96,
                                             dir + L"\\profile-waiting-narrow.png");
+  // The servers' latency in full: the spread, the requests, the connection.
+  UiContent detailed = content;
+  detailed.delaysDetailed = true;
+  sovereign::tray::RenderMainWindowSnapshot(detailed, UiPage::Servers, logs, 400, 620, 96,
+                                            dir + L"\\servers-detailed.png");
   // The exit's address hidden: the flag and the country.
   UiContent hidden = content;
   hidden.hideExitIp = true;

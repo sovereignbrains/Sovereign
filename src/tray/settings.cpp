@@ -224,6 +224,9 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("hideExitIp"); v != json.end() && v->is_boolean()) {
     settings.hideExitIp = v->get<bool>();
   }
+  if (const auto v = json.find("delaysDetailed"); v != json.end() && v->is_boolean()) {
+    settings.delaysDetailed = v->get<bool>();
+  }
   if (const auto v = json.find("killSwitch"); v != json.end() && v->is_boolean()) {
     settings.killSwitch = v->get<bool>();
   }
@@ -299,6 +302,7 @@ void SaveSettings(const TraySettings& settings) {
   }
 
   json["hideExitIp"] = settings.hideExitIp;
+  json["delaysDetailed"] = settings.delaysDetailed;
   json["logLevel"] = settings.logLevel;
   json["killSwitch"] = settings.killSwitch;
   json["lanClosed"] = settings.lanClosed;

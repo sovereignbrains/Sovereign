@@ -321,6 +321,7 @@ struct View {
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
   std::vector<sovereign::tray::ExitIp> locations;  // per protocol: where it is, once known
   bool hideExitIp = false;
+  bool delaysDetailed = false;
   std::string logLevel;
   bool killSwitch = false;
   bool lanClosed = false;
@@ -451,6 +452,7 @@ struct Shared {
   std::optional<RelayChange> pendingRelay;
   bool pendingUrlTest = false;
   bool pendingToggleExitIp = false;
+  bool pendingToggleDelayDetails = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
   bool pendingToggleLanClosed = false;
@@ -469,7 +471,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingLogLevel || pendingToggleKillSwitch ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingLogLevel || pendingToggleKillSwitch ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -632,6 +634,7 @@ class Worker {
       std::optional<RelayChange> relay;
       bool urlTest = false;
       bool toggleExitIp = false;
+      bool toggleDelayDetails = false;
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
       bool toggleLanClosed = false;
@@ -652,6 +655,7 @@ class Worker {
         relay = std::exchange(shared.pendingRelay, std::nullopt);
         urlTest = std::exchange(shared.pendingUrlTest, false);
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
+        toggleDelayDetails = std::exchange(shared.pendingToggleDelayDetails, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
         toggleLanClosed = std::exchange(shared.pendingToggleLanClosed, false);
@@ -746,6 +750,10 @@ class Worker {
       UpdateServerExits(stats);
       if (toggleExitIp) {
         settings_.hideExitIp = !settings_.hideExitIp;
+        Save();
+      }
+      if (toggleDelayDetails) {
+        settings_.delaysDetailed = !settings_.delaysDetailed;
         Save();
       }
       if (toggleKillSwitch) {
@@ -2331,6 +2339,7 @@ class Worker {
         v.locations.push_back(it == serverExits_.end() ? sovereign::tray::ExitIp{} : it->second);
       }
       v.hideExitIp = settings_.hideExitIp;
+      v.delaysDetailed = settings_.delaysDetailed;
       v.logLevel = settings_.logLevel;
       v.killSwitch = settings_.killSwitch;
       v.lanClosed = settings_.lanClosed;
@@ -3498,6 +3507,15 @@ void RequestToggleExitIp() {
   Wake();
 }
 
+void RequestToggleDelayDetails() {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingToggleDelayDetails = true;
+  }
+  Wake();
+}
+
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
 // The local network's list as the settings show it - the index a click on
@@ -3768,6 +3786,7 @@ UiContent ContentFrom(const View& v) {
   c.exitCountryName = CountryName(c.exitCountry);
   c.exitPending = v.exitIp.pending;
   c.hideExitIp = v.hideExitIp;
+  c.delaysDetailed = v.delaysDetailed;
   c.logLevel = Widen(v.logLevel);
   c.killSwitch = v.killSwitch;
   c.lanClosed = v.lanClosed;
@@ -4494,6 +4513,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ToggleExitIp:
       RequestToggleExitIp();
+      break;
+    case UiCommand::ToggleDelayDetails:
+      RequestToggleDelayDetails();
       break;
     case UiCommand::TestDelays:
       RequestUrlTest();

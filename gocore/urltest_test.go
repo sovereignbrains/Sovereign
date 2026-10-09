@@ -77,7 +77,7 @@ func TestProbeLive(t *testing.T) {
 		for _, tag := range tags {
 			outbound, _ := instance.Outbound().Outbound(tag)
 			started := time.Now()
-			r := probe(ctx, "", outbound, 5*time.Second)
+			r := probe(ctx, "", outbound, 5*time.Second, round == 1) // the first round cold, as after a start
 			t.Logf("round %d %-28s delay %4d ms ±%3d  loss %3d%%  samples %2d  connect %4d ms  (%.1fs) %s",
 				round, tag, r.Delay, r.Jitter, r.Loss, r.Samples, r.Connect, time.Since(started).Seconds(), r.Error)
 		}

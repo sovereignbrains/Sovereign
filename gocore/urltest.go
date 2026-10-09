@@ -12,7 +12,10 @@ package main
 // numbers to settle (at least minSamples, at most maxSamples, within
 // probeBudget), reported as the median, the spread (half the interquartile
 // range) and the share lost. A request that fails is counted lost and the
-// connection is made again.
+// connection is made again. A server's first test after a start makes one
+// connection first and throws it away: the first is cold - the server's
+// name looked up, its ECH config fetched - and read 1.5 s where the next
+// read 110 ms (09.10.2026).
 //
 // A test takes seconds and the service answers its pipe clients one at a
 // time, so box_urltest only starts one and returns; box_delays reports how
@@ -75,6 +78,7 @@ var (
 	delays      = map[string]*delayResult{}
 	delayRounds = map[string]int64{}
 	delayRound  int64
+	delayWarmed = map[string]bool{} // tags whose cold first connection was made
 )
 
 func resetDelays() {
@@ -83,6 +87,7 @@ func resetDelays() {
 	delayOrder = nil
 	delays = map[string]*delayResult{}
 	delayRounds = map[string]int64{}
+	delayWarmed = map[string]bool{}
 	delayRound++
 }
 
@@ -138,7 +143,11 @@ func box_urltest(requestJSON *C.char) *C.char {
 				if outbound, found := outbounds.Outbound(tag); !found {
 					result = delayResult{Tag: tag, Error: "no such outbound"}
 				} else {
-					result = probe(ctx, request.URL, outbound, timeout)
+					delayMu.Lock()
+					cold := !delayWarmed[tag]
+					delayWarmed[tag] = true
+					delayMu.Unlock()
+					result = probe(ctx, request.URL, outbound, timeout, cold)
 					result.Tag = tag
 				}
 				delayMu.Lock()
@@ -206,7 +215,7 @@ func (p *probeClient) head(ctx context.Context, link string) (time.Duration, err
 func (p *probeClient) close() { p.client.CloseIdleConnections() }
 
 // probe measures one outbound as described at the top.
-func probe(ctx context.Context, link string, outbound adapter.Outbound, timeout time.Duration) delayResult {
+func probe(ctx context.Context, link string, outbound adapter.Outbound, timeout time.Duration, cold bool) delayResult {
 	if link == "" {
 		link = "https://www.gstatic.com/generate_204"
 	}
@@ -228,6 +237,12 @@ func probe(ctx context.Context, link string, outbound adapter.Outbound, timeout 
 
 	probeCtx, cancel := context.WithTimeout(ctx, probeBudget)
 	defer cancel()
+	if cold {
+		// Thrown away, failed or not: the test proper says what's wrong.
+		warm := newProbeClient(ctx, outbound, destination, timeout)
+		_, _ = warm.head(probeCtx, link)
+		warm.close()
+	}
 	var rtts, connects []time.Duration
 	lost := 0
 	var lastErr error

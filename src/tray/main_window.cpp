@@ -1391,7 +1391,7 @@ class Painter {
       parts.push_back(location->isp);
     }
     if (static_cast<std::size_t>(c.protocol) < c.delays.size()) {
-      if (std::wstring delay = DelayLabel(c.delays[static_cast<std::size_t>(c.protocol)]); !delay.empty()) {
+      if (std::wstring delay = DelayLabel(c.delays[static_cast<std::size_t>(c.protocol)], c.delaysDetailed); !delay.empty()) {
         parts.push_back(std::move(delay));
       }
     }
@@ -1463,8 +1463,10 @@ class Painter {
     y = PageTitle(l, L"Серверы", note.c_str(), x0, x1, y, UiPage::Overview,
                   L"Флаг и провайдер — где сервер на самом деле: его выход, узнанный через него самого, а не то, "
                   L"что написано в названии.\n\nЗадержка — медиана нескольких запросов через уже открытое "
-                  L"соединение, ± — их разброс. Авто берёт лучший по замерам и меняет его, только когда другой "
-                  L"заметно быстрее два замера подряд.\n\nПравый клик по серверу — копировать имя или IP выхода.",
+                  L"соединение, округлённая до 5 мс: разница меньше — шум сети. «Подробные замеры» внизу "
+                  L"покажут разброс (±), число запросов и время соединения. Авто берёт лучший по замерам и "
+                  L"меняет его, только когда другой заметно быстрее два замера подряд.\n\nПравый клик по "
+                  L"серверу — копировать имя или IP выхода.",
                   x1 - 40);
     Item test = CommandItem(Kind::IconButton, {x1 - 36, titleTop, x1, titleTop + 36}, L"Проверить задержку",
                             kGlyphStopwatch, UiCommand::TestDelays);
@@ -1493,7 +1495,7 @@ class Painter {
         choice.detail = c.autoServer.empty() ? std::wstring(L"выберет лучший после первого замера")
                                              : L"сейчас " + c.autoServer + L" — лучший по замерам";
       } else if (i < c.delays.size()) {
-        choice.detail = DelayDetail(c.delays[i]);
+        choice.detail = DelayDetail(c.delays[i], c.delaysDetailed);
       }
       if (!isp.empty() && static_cast<int>(i) != c.autoOption) {
         choice.detail = choice.detail.empty() ? isp : isp + L" · " + choice.detail;
@@ -1526,7 +1528,11 @@ class Painter {
       row(i, top);
       ++shown;
     }
-    return y + h;
+    // The figures in full, or one rounded: noise to most, a tool to some.
+    const std::vector<SwitchRow> details = {
+        Row(L"Подробные замеры", L"± — разброс запросов, сколько их было, время соединения через сервер.",
+            c.delaysDetailed, UiCommand::ToggleDelayDetails)};
+    return Switches(l, details, x0, x1, y + h + kGap);
   }
 
   float Subscription(Layout& l, const UiContent& c, float x0, float x1, float y) const {
@@ -2299,7 +2305,7 @@ class Painter {
         }
         if (it.command == UiCommand::SetProtocol && it.index >= 0 && static_cast<std::size_t>(it.index) < c.delays.size()) {
           const UiDelay& delay = c.delays[static_cast<std::size_t>(it.index)];
-          k.Text(DelayLabel(delay), delay_.get(), {line.right - 120, line.top, line.right - 12, line.bottom},
+          k.Text(DelayLabel(delay, c.delaysDetailed), delay_.get(), {line.right - 120, line.top, line.right - 12, line.bottom},
                  FromColorRef(ui::DelayColor(delay)));
         }
         break;

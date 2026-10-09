@@ -198,6 +198,7 @@ struct UiContent {
   std::wstring exitCountryName;         // "Нидерланды" - the system's name for it
   bool exitPending = false;             // being looked up
   bool hideExitIp = false;              // the country only
+  bool delaysDetailed = false;          // latency in full (DelayLabel, DelayDetail)
   std::wstring logLevel;                // what the core writes; empty = the config's
   bool killSwitch = false;              // the setting
   bool lanClosed = false;               // the local network closed both ways (settings.h)
@@ -267,6 +268,7 @@ enum class UiCommand : std::uint8_t {
   CarryOverEdits,    // the edits, merged into the waiting subscription
   RevertConfig,      // the config back to the subscription as it arrived
   ToggleExitIp,        // show or hide the exit's address
+  ToggleDelayDetails,  // the servers' latency in full, or one rounded figure
   ChooseLogLevel,      // anchor: where to open the menu of levels
   ToggleKillSwitch,
   ToggleLanClosed,
@@ -301,26 +303,34 @@ struct UiArgs {
   HWND owner = nullptr;  // the window a menu or a dialog belongs to
 };
 
-// "48 ±3 мс", "нет ответа", "…" or nothing.
-inline std::wstring DelayLabel(const UiDelay& delay) {
+// "48 ±3 мс" (`detailed`) or "50 мс" - rounded to 5 ms: two measurements of
+// one server a moment apart differ by more than that (09.10.2026, four
+// protocols to one server read 48 to 62 ms) - "нет ответа", "…" or nothing.
+inline std::wstring DelayLabel(const UiDelay& delay, bool detailed) {
   switch (delay.state) {
     case UiDelay::State::None: return {};
     case UiDelay::State::Pending: return L"…";
     case UiDelay::State::Ok:
+      if (!detailed) {
+        return std::format(L"{} мс", delay.ms < 5 ? delay.ms : (delay.ms + 2) / 5 * 5);
+      }
       return delay.jitter > 0 ? std::format(L"{} ±{} мс", delay.ms, delay.jitter) : std::format(L"{} мс", delay.ms);
     case UiDelay::State::Failed: return L"нет ответа";
   }
   return {};
 }
 
-// What a measurement is made of: "замеров: 9 · соединение 412 мс · потери 10%",
-// or why there was no answer.
-inline std::wstring DelayDetail(const UiDelay& delay) {
+// What a measurement is made of: "замеров: 9 · соединение 412 мс · потери 10%"
+// (`detailed`; else only the losses, if any), or why there was no answer.
+inline std::wstring DelayDetail(const UiDelay& delay, bool detailed) {
   if (delay.state == UiDelay::State::Failed) {
     return delay.error;
   }
   if (delay.state != UiDelay::State::Ok) {
     return {};
+  }
+  if (!detailed) {
+    return delay.loss > 0 ? std::format(L"потери {}%", delay.loss) : std::wstring();
   }
   std::wstring text = std::format(L"замеров: {}", delay.samples);
   if (delay.connect > 0) {
