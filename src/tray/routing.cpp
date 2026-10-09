@@ -902,37 +902,40 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
     return m;
   };
-  // Sites before programs: a site the user sent somewhere goes there from
-  // every program - the bank directly even from a browser sent through WARP.
-  std::vector<const RouteRule*> ordered;
-  for (const bool programs : {false, true}) {
+  // The user's rules `pick` takes, in their order.
+  const auto add = [&](const auto& pick) {
     for (const RouteRule& r : settings.rules) {
-      if (r.processes.empty() != programs) {
-        ordered.push_back(&r);
-      }
-    }
-  }
-  for (const RouteRule* each : ordered) {
-    const RouteRule& r = *each;
-    Json rule = match(r);
-    if (r.action == RouteRule::Action::Block) {
-      rule["action"] = "reject";
-    } else if (r.action == RouteRule::Action::Proxy) {
-      if (proxy.empty()) {
+      if (!pick(r)) {
         continue;
       }
-      rule["outbound"] = proxy;
-    } else if (r.action == RouteRule::Action::Warp) {
-      if (warp.empty()) {
-        continue;  // WARP is off: the rule waits
+      Json rule = match(r);
+      if (r.action == RouteRule::Action::Block) {
+        rule["action"] = "reject";
+      } else if (r.action == RouteRule::Action::Proxy) {
+        if (proxy.empty()) {
+          continue;
+        }
+        rule["outbound"] = proxy;
+      } else if (r.action == RouteRule::Action::Warp) {
+        if (warp.empty()) {
+          continue;  // WARP is off: the rule waits
+        }
+        rule["outbound"] = warp;
+      } else {
+        rule["outbound"] = direct;
       }
-      rule["outbound"] = warp;
-    } else {
-      rule["outbound"] = direct;
+      rules.push_back(std::move(rule));
     }
-    rules.push_back(std::move(rule));
-  }
-  // Services: each by its list, after the user's own rules.
+  };
+  const auto program = [](const RouteRule& r) { return !r.processes.empty(); };
+  // A blocked program first of all: no network, whatever it asks for.
+  add([&](const RouteRule& r) { return program(r) && r.action == RouteRule::Action::Block; });
+  // Then the sites, and the lists - services, ads, Russia, QUIC - before the
+  // other programs: a site goes where it was sent from every program (the
+  // bank directly even from a browser sent through WARP), and a browser sent
+  // through the proxy has its ads cut too (before 0.4.58 it went past them).
+  add([&](const RouteRule& r) { return !program(r); });
+  // Services: each by its list, after the user's sites.
   for (const ServiceRoute& s : settings.services) {
     const std::string tag = std::string(kServicePrefix) + s.id;
     if (!lists.contains(tag)) {
@@ -974,6 +977,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   if (BlockQuic(settings, config)) {
     rules.push_back(Json{{"protocol", "quic"}, {"action", "reject"}});
   }
+  add([&](const RouteRule& r) { return program(r) && r.action != RouteRule::Action::Block; });
   std::size_t at = 0;
   for (const Json& r : route["rules"]) {
     const std::string action = Str(r, "action");

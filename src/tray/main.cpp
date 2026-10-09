@@ -3109,7 +3109,9 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   using sovereign::tray::ServiceRoute;
   using sovereign::tray::UiChip;
   const auto& r = v.routing;
-  std::vector<UiChip> board;
+  // The local network: directly before any rule (OwnFrame) - said, not changed.
+  std::vector<UiChip> board = {{.kind = UiChip::Kind::Lan, .index = 0, .bucket = sovereign::tray::kBucketDirect,
+                                .text = L"Локальная сеть", .detail = {}, .icon = {}, .logo = "lan"}};
   if (r.russiaDirect) {
     board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
                      .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = {}});
@@ -4128,6 +4130,9 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           send(russia ? What::RussiaDirect : What::BlockAds, false);
         }
         break;
+      }
+      if (chip.kind == UiChip::Kind::Lan) {
+        break;  // nowhere else to go
       }
       if (chip.kind == UiChip::Kind::Rest) {
         // Only through the proxy or directly: blocked or through WARP it'd be

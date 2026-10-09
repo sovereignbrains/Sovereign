@@ -39,6 +39,8 @@ using sovereign::tray::UiPage;
 std::vector<sovereign::tray::UiChip> SampleBoard() {
   using sovereign::tray::UiChip;
   return {
+      {.kind = UiChip::Kind::Lan, .index = 0, .bucket = 0, .text = L"Локальная сеть", .detail = {}, .icon = {},
+       .logo = "lan"},
       {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = {}},
       {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = {}},
       {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}, .logo = "netflix"},
@@ -266,12 +268,15 @@ int Snapshots(const std::wstring& dir) {
 
   // Every service's logo draws (assets/services: what Direct2D's SVG can't
   // draw comes out empty) - at the menus' 16 px and at 150 %.
+  std::vector<std::string_view> logos = {"lan"};  // the local network's chip
   for (const auto& service : sovereign::tray::ServiceCatalog()) {
+    logos.push_back(service.id);
+  }
+  for (const std::string_view id : logos) {
     for (const int size : {16, 24}) {
-      const std::vector<std::uint32_t> logo = sovereign::tray::ServiceLogo(service.id, size);
+      const std::vector<std::uint32_t> logo = sovereign::tray::ServiceLogo(id, size);
       if (std::none_of(logo.begin(), logo.end(), [](std::uint32_t pixel) { return (pixel >> 24) > 128; })) {
-        std::fprintf(stderr, "ui-snapshot: no logo for %.*s at %d px\n", static_cast<int>(service.id.size()),
-                     service.id.data(), size);
+        std::fprintf(stderr, "ui-snapshot: no logo for %.*s at %d px\n", static_cast<int>(id.size()), id.data(), size);
         return 1;
       }
     }

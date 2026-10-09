@@ -171,6 +171,32 @@ void TestQuic() {
   CHECK(QuicBlocked(s, "not json"));  // no servers to go by: refused
 }
 
+// The order: a blocked program first (no network at all), then the sites, the
+// lists and QUIC, the other programs last - a browser sent through the proxy
+// still has its ads cut.
+void TestOrder() {
+  RoutingSettings s;
+  s.rules.push_back(*ParseRule("msedge.exe", RouteRule::Action::Proxy));
+  s.rules.push_back(*ParseRule("bank.example", RouteRule::Action::Direct));
+  s.rules.push_back(*ParseRule("Bad.exe", RouteRule::Action::Block));
+  const auto keys = BuildConfigFromLinks({"trojan://pw@nl.example.com:443#NL"}).config.value_or("{}");
+  const std::string config = CombineConfigs({{"Ключи", keys, {}}}, OwnFrame(s)).config.value_or("{}");
+  const json c = json::parse(ApplyRouting(config, s, {{"sov-ads", "C:/lists/sov-ads.srs"}}));
+  std::vector<std::string> order;
+  for (const json& r : c["route"]["rules"]) {
+    if (r.contains("process_name")) {
+      order.push_back(r["process_name"][0].get<std::string>());
+    } else if (r.contains("domain_suffix") && r["domain_suffix"][0] == "bank.example") {
+      order.emplace_back("bank");
+    } else if (r.value("rule_set", json()) == "sov-ads") {
+      order.emplace_back("ads");
+    } else if (r.value("protocol", "") == "quic") {
+      order.emplace_back("quic");
+    }
+  }
+  CHECK(order == std::vector<std::string>({"Bad.exe", "bank", "ads", "quic", "msedge.exe"}));
+}
+
 void TestOwn() {
   RoutingSettings s;
   s.rules.push_back(*ParseRule("qwen.ai", RouteRule::Action::Direct));
@@ -737,6 +763,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestLocalDnsFallback();
     TestWarpWatch();
     TestQuic();
+    TestOrder();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

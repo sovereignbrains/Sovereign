@@ -1147,8 +1147,11 @@ class Painter {
       }
       for (const auto& [n, at] : placed) {
         const UiChip& chip = r.board[n];
-        Item tag = CommandItem(Kind::Tag, {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom}, chip.text,
-                               nullptr, UiCommand::ChipMenu, static_cast<int>(n));
+        const D2D1_RECT_F place = {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom};
+        // The local network goes nowhere else: no click.
+        Item tag = chip.kind == UiChip::Kind::Lan
+                       ? Make(Kind::Tag, place, chip.text)
+                       : CommandItem(Kind::Tag, place, chip.text, nullptr, UiCommand::ChipMenu, static_cast<int>(n));
         tag.detail = chip.detail;
         tag.text2 = chip.icon;
         tag.logo = chip.logo;

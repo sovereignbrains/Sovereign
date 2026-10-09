@@ -27,8 +27,9 @@ wil::unique_hicon MakeStateIcon(Display display);
 // The app icon (tray.rc) at `size` pixels; null if it can't be loaded.
 wil::unique_hicon LoadAppIcon(int size);
 
-// A service's logo (ServiceCatalog's id: the resource SVC_<ID>, from
-// assets/services) drawn at size pixels with Direct2D's SVG: premultiplied
+// A service's logo (ServiceCatalog's id, or "lan": the local network's chip
+// - the resource SVC_<ID>, from assets/services) drawn at `size` pixels
+// with Direct2D's SVG: premultiplied
 // BGRA, top-down, size * size; empty if there's none or it can't be drawn.
 // COM must be initialized on the thread (WIC).
 std::vector<std::uint32_t> ServiceLogo(std::string_view id, int size);

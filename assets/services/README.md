@@ -16,7 +16,7 @@ menus are always dark): a black logo is white here.
 - [gilbarbara/logos](https://github.com/gilbarbara/logos) (CC0), from Iconify's `logos`: google
   (`google-icon`).
 - Drawn for this app: disney, primevideo - their logos are lettering, unreadable at 16 px; a badge
-  in the brand's color instead.
+  in the brand's color instead. And lan, a router: the board's "local network" chip.
 
 Iconify's files lose their `width`/`height` (1em: the size is the viewport's). Checked by
 `ui-snapshot`: every service's logo draws.
