@@ -98,12 +98,13 @@ struct UiService {
   std::wstring name;  // "Netflix"
   std::wstring way;   // "через WARP"
 };
-// A thing on the routing board: a service, a site or a program (a rule), or
-// one of the two lists - Russian sites, ads. Its bucket is where it goes, a
+// A thing on the routing board: a service, a site or a program (a rule), one
+// of the two lists - Russian sites, ads - or everything else (what no rule
+// matches: through the proxy or directly). Its bucket is where it goes, a
 // RouteRule::Action's number: 0 directly, 1 through the proxy, 2 blocked,
 // 3 through WARP.
 struct UiChip {
-  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads };
+  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Rest };
   Kind kind = Kind::Rule;
   int index = 0;        // Service: into the routing's services; Rule: into its rules
   int bucket = 1;
@@ -238,7 +239,6 @@ enum class UiCommand : std::uint8_t {
   ToggleRussiaDirect,
   ToggleBlockAds,
   ToggleBlockQuic,
-  ToggleFinalDirect,
   ToggleIpv4Only,
   ToggleWarp,         // on: registers a WARP device first if there's none
   ChooseWarpVia,      // anchor: over the proxy or directly

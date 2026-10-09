@@ -3097,7 +3097,8 @@ bool SameName(const std::string& a, const std::string& b) {
 }
 
 // The routing board's things (ui_content.h UiChip): the two lists, the
-// services, then the sites and programs - each in the bucket it goes to.
+// services, then the sites and programs, last everything else - each in the
+// bucket it goes to.
 std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   using sovereign::tray::ServiceRoute;
   using sovereign::tray::UiChip;
@@ -3144,6 +3145,9 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     }
     board.push_back(std::move(chip));
   }
+  board.push_back({.kind = UiChip::Kind::Rest, .index = 0,
+                   .bucket = r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
+                   .text = L"Всё остальное", .detail = {}, .icon = {}, .logo = {}});
   return board;
 }
 
@@ -3953,7 +3957,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleRussiaDirect: send(What::RussiaDirect, !r.russiaDirect); break;
     case UiCommand::ToggleBlockAds: send(What::BlockAds, !r.blockAds); break;
     case UiCommand::ToggleBlockQuic: send(What::BlockQuic, !r.blockQuic); break;
-    case UiCommand::ToggleFinalDirect: send(What::FinalDirect, !r.finalDirect); break;
     case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
     case UiCommand::ToggleWarp: send(What::Warp, !r.warp); break;
     case UiCommand::AddWarpSite:  // typed over WARP's button, no menu: it goes through WARP
@@ -4113,6 +4116,15 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         break;
       }
+      if (chip.kind == UiChip::Kind::Rest) {
+        // Only through the proxy or directly: blocked or through WARP it'd be
+        // the whole internet.
+        if (const auto picked =
+                PickFromMenu(owner, cursor, {L"Через прокси", L"Напрямую"}, r.finalDirect ? 1 : 0)) {
+          send(What::FinalDirect, *picked == 1);
+        }
+        break;
+      }
       // The buckets in the board's order, then (a service) the countries, then away.
       static constexpr std::array kOrder = {sovereign::tray::kBucketProxy, sovereign::tray::kBucketDirect,
                                             sovereign::tray::kBucketWarp, sovereign::tray::kBucketBlock};
@@ -4244,7 +4256,6 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleRussiaDirect:
     case UiCommand::ToggleBlockAds:
     case UiCommand::ToggleBlockQuic:
-    case UiCommand::ToggleFinalDirect:
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:
     case UiCommand::ChooseWarpVia:

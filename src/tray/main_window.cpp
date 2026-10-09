@@ -1064,9 +1064,9 @@ class Painter {
 
   // The board: a bucket a way - through the proxy, directly, through WARP,
   // blocked - with what goes there in it: services, sites, programs, the
-  // Russian sites and the ads lists, wrapped in rows. A click on one: where it
-  // goes instead, or away (ChipMenu); the "+" in a bucket's corner: what can
-  // go there, a site typed across the bucket (BoardAdd).
+  // Russian sites and the ads lists, everything else, wrapped in rows. A click
+  // on one: where it goes instead, or away (ChipMenu); the "+" in a bucket's
+  // corner: what can go there, a site typed across the bucket (BoardAdd).
   float Board(Layout& l, const UiRouting& r, float x0, float x1, float y) const {
     struct Bucket {
       int id;
@@ -1074,10 +1074,9 @@ class Painter {
       std::wstring note;
       const wchar_t* empty;
     };
-    const std::wstring rest = L"и всё остальное";
     const std::array<Bucket, 4> buckets = {{
-        {kBucketProxy, L"Через прокси", r.finalDirect ? std::wstring() : rest, L"Пока ничего отдельно"},
-        {kBucketDirect, L"Напрямую", r.finalDirect ? rest : std::wstring(), L"Пока ничего"},
+        {kBucketProxy, L"Через прокси", std::wstring(), L"Пока ничего"},
+        {kBucketDirect, L"Напрямую", std::wstring(), L"Пока ничего"},
         {kBucketWarp, L"Через WARP", r.warpState, L"Сюда — то, что не пускает с адресов VPN"},
         {kBucketBlock, L"Блок", std::wstring(), L"Пока ничего"},
     }};
@@ -1772,8 +1771,6 @@ class Painter {
     std::vector<SwitchRow> toggles = {
         Row(L"Блокировать QUIC", L"Браузеры перейдут с QUIC (HTTP/3 по UDP) на TCP — через прокси так стабильнее.",
             r.blockQuic, UiCommand::ToggleBlockQuic),
-        Row(L"Остальное напрямую", L"Через прокси пойдёт только то, что лежит в «Через прокси»; всё прочее — напрямую.",
-            r.finalDirect, UiCommand::ToggleFinalDirect),
     };
     y = Switches(l, toggles, x0, x1, y);
     y += kGap + 4;

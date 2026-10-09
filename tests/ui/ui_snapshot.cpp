@@ -53,6 +53,8 @@ std::vector<sovereign::tray::UiChip> SampleBoard() {
       {.kind = UiChip::Kind::Rule, .index = 3, .bucket = 3, .text = L"chatgpt.com", .detail = {}, .icon = {}, .logo = {}},
       {.kind = UiChip::Kind::Rule, .index = 4, .bucket = 0,
        .text = L"очень-длинный-поддомен.какой-то-банк-с-длинным-именем.example.ru", .detail = {}, .icon = {}, .logo = {}},
+      {.kind = UiChip::Kind::Rest, .index = 0, .bucket = 1, .text = L"Всё остальное", .detail = {}, .icon = {},
+       .logo = {}},
   };
 }
 
