@@ -1795,12 +1795,21 @@ class Painter {
     y += kGap;
 
     y = Heading(l, L"Тонкая настройка", x0, x1, y, L"То, что обычно трогать не нужно.");
-    std::vector<SwitchRow> toggles = {
-        Row(L"Блокировать QUIC", L"Браузеры перейдут с QUIC (HTTP/3 по UDP) на TCP — через прокси так стабильнее.",
-            r.blockQuic, UiCommand::ToggleBlockQuic),
-    };
-    y = Switches(l, toggles, x0, x1, y);
-    y += kGap + 4;
+    {
+      Item quic = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"QUIC", nullptr, UiCommand::ChooseQuic);
+      quic.detail = r.quic == 1 ? L"блокируется"
+                    : r.quic == 2 ? L"пропускается"
+                    : r.quicBlocked ? L"авто: блокируется"
+                                    : L"авто: пропускается";
+      l.items.push_back(Make(Kind::Card, quic.rect));
+      quic.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
+      l.items.push_back(std::move(quic));
+      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
+                L"QUIC — HTTP/3 по UDP. Через серверы на TCP (VLESS, Trojan, AnyTLS) он идёт хуже обычного TCP: "
+                L"тогда Sovereign его блокирует, и браузеры сразу переходят на TCP. Через Hysteria2 и TUIC он "
+                L"идёт хорошо — тогда пропускается.\n\n«Авто» решает по твоим серверам сам.");
+      y += kRow + kGap + 4;
+    }
 
     // DNS: the client's own - its two resolvers and IPv4 in one card.
     {

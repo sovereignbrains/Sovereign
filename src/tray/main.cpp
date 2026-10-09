@@ -257,6 +257,7 @@ struct View {
   std::optional<bool> warpAnswers;
   std::string warpServer;
   bool warpDirect = false;
+  bool quicBlocked = true;  // RoutingSettings::quic as it came to with the servers (QuicBlocked)
   std::size_t listsReady = 0;             // the routing's lists downloaded
   std::size_t listsNeeded = 0;
   std::int64_t listsUpdated = 0;          // unix seconds of the last one downloaded
@@ -358,7 +359,7 @@ struct RoutingChange {
   enum class What : std::uint8_t {
     RussiaDirect,   // on
     BlockAds,       // on
-    BlockQuic,      // on
+    Quic,           // value: RoutingSettings::Quic's number
     FinalDirect,    // on
     Ipv4Only,       // on
     RemoteDns,      // value: RoutingSettings::RemoteDns
@@ -861,6 +862,7 @@ class Worker {
         routing.rules.insert(routing.rules.begin(), std::move(*viaProxy));
       }
       // The client's rules first in whatever runs (routing.h).
+      quicBlocked_ = sovereign::tray::QuicBlocked(routing, *combined.config);
       combined.config = sovereign::tray::ApplyRouting(*combined.config, routing, ruleFiles_);
     }
     combined_ = combined.config;
@@ -934,7 +936,9 @@ class Worker {
     switch (change.what) {
       case RoutingChange::What::RussiaDirect: r.russiaDirect = change.on; break;
       case RoutingChange::What::BlockAds: r.blockAds = change.on; break;
-      case RoutingChange::What::BlockQuic: r.blockQuic = change.on; break;
+      case RoutingChange::What::Quic:
+        r.quic = static_cast<sovereign::tray::RoutingSettings::Quic>(std::clamp(change.value, 0, 2));
+        break;
       case RoutingChange::What::FinalDirect: r.finalDirect = change.on; break;
       case RoutingChange::What::Ipv4Only: r.ipv4Only = change.on; break;
       case RoutingChange::What::Warp:
@@ -2207,6 +2211,7 @@ class Worker {
       v.warpAnswers = warpAnswers_;
       v.warpServer = warpServer_;
       v.warpDirect = warpDirect_;
+      v.quicBlocked = quicBlocked_;
       v.listsReady = ruleFiles_.size();
       v.listsNeeded = sovereign::tray::NeededRuleSets(settings_.routing).size();
       v.listsUpdated = rulesUpdated_;
@@ -2348,6 +2353,7 @@ class Worker {
   std::optional<TrayModel::Clock::time_point> warpLastCheck_;
   std::optional<bool> warpAnswers_;
   bool warpDirect_ = false;
+  bool quicBlocked_ = true;  // View::quicBlocked
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
   std::vector<std::string> testedTags_;                   // in the test that runs or ran last
@@ -3605,7 +3611,8 @@ UiContent ContentFrom(const View& v) {
   const RoutingSettings& r = v.routing;
   c.routing.russiaDirect = r.russiaDirect;
   c.routing.blockAds = r.blockAds;
-  c.routing.blockQuic = r.blockQuic;
+  c.routing.quic = static_cast<int>(r.quic);
+  c.routing.quicBlocked = v.quicBlocked;
   c.routing.finalDirect = r.finalDirect;
   c.routing.ipv4Only = r.ipv4Only;
   c.routing.warp = r.warp;
@@ -3957,7 +3964,12 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   switch (command) {
     case UiCommand::ToggleRussiaDirect: send(What::RussiaDirect, !r.russiaDirect); break;
     case UiCommand::ToggleBlockAds: send(What::BlockAds, !r.blockAds); break;
-    case UiCommand::ToggleBlockQuic: send(What::BlockQuic, !r.blockQuic); break;
+    case UiCommand::ChooseQuic:
+      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Авто — по серверам", L"Блокировать", L"Пропускать"},
+                                           static_cast<int>(r.quic))) {
+        send(What::Quic, false, static_cast<int>(*picked));
+      }
+      break;
     case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
     case UiCommand::ToggleWarp: send(What::Warp, !r.warp); break;
     case UiCommand::AddWarpSite:  // typed over WARP's button, no menu: it goes through WARP
@@ -4256,7 +4268,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ToggleRussiaDirect:
     case UiCommand::ToggleBlockAds:
-    case UiCommand::ToggleBlockQuic:
+    case UiCommand::ChooseQuic:
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:
     case UiCommand::ChooseWarpVia:

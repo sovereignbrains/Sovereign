@@ -90,7 +90,11 @@ struct RoutingSettings {
   enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9 };
   bool russiaDirect = true;
   bool blockAds = true;
-  bool blockQuic = true;
+  // QUIC (HTTP/3 over UDP) refused, so browsers take TCP. Auto: refused
+  // unless every server carries UDP as UDP (Hysteria, TUIC) - through a TCP
+  // one (VLESS, Trojan, AnyTLS...) it's UDP packed in TCP, worse than TCP.
+  enum class Quic : std::uint8_t { Auto, Block, Allow };
+  Quic quic = Quic::Auto;
   bool finalDirect = false;  // what no rule matches: directly (else through the proxy)
   RemoteDns remoteDns = RemoteDns::Cloudflare;  // through the proxy, over HTTPS
   LocalDns localDns = LocalDns::Cloudflare;     // directly: Russian and direct names, the servers' own
@@ -164,6 +168,10 @@ std::string OwnFrame(const RoutingSettings& settings);
 // or `config` unchanged if it isn't a JSON object.
 std::string ApplyRouting(std::string_view config, const RoutingSettings& settings,
                          const std::map<std::string, std::string>& files);
+
+// Whether `config` with these settings refuses QUIC - what Quic::Auto comes
+// to with its servers.
+bool QuicBlocked(const RoutingSettings& settings, std::string_view config);
 
 // The local DNS servers in the order a failing one gives way: the user's
 // pick, then the other encrypted ones (Cloudflare, Google, Quad9), the

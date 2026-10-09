@@ -121,7 +121,8 @@ inline constexpr int kBucketWarp = 3;
 struct UiRouting {
   bool russiaDirect = true;
   bool blockAds = true;
-  bool blockQuic = true;
+  int quic = 0;             // RoutingSettings::Quic's number: 0 auto, 1 blocked, 2 let through
+  bool quicBlocked = true;  // what it comes to - auto: by the servers
   bool finalDirect = false;
   bool ipv4Only = true;
   std::wstring remoteDns;  // "Cloudflare"
@@ -238,7 +239,7 @@ enum class UiCommand : std::uint8_t {
   // The routing's:
   ToggleRussiaDirect,
   ToggleBlockAds,
-  ToggleBlockQuic,
+  ChooseQuic,         // anchor: where to open the menu
   ToggleIpv4Only,
   ToggleWarp,         // on: registers a WARP device first if there's none
   ChooseWarpVia,      // anchor: over the proxy or directly

@@ -94,7 +94,13 @@ void TestJsonAndParse() {
   CHECK(back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Block);
   CHECK(!back.rules.empty() && back.rules[0].keywords == std::vector<std::string>({"tracker"}));
   CHECK(RoutingFromJson(json::parse(R"({"russiaDirect":"yes","rules":[5,{"domains":[1]}]})")).russiaDirect);
-  CHECK(RoutingFromJson(json("x")).blockQuic);
+  CHECK(RoutingFromJson(json("x")).quic == RoutingSettings::Quic::Auto);
+  // "blockQuic" before 0.4.56: on (the default) is auto now, off stays off.
+  CHECK(RoutingFromJson(json{{"blockQuic", true}}).quic == RoutingSettings::Quic::Auto);
+  CHECK(RoutingFromJson(json{{"blockQuic", false}}).quic == RoutingSettings::Quic::Allow);
+  RoutingSettings blocked;
+  blocked.quic = RoutingSettings::Quic::Block;
+  CHECK(RoutingFromJson(json::parse(RoutingToJson(blocked).dump())).quic == RoutingSettings::Quic::Block);
 
   const auto rule = ParseRule("https://WWW.Example.com/path, *.cdn.example.net; .ru 1.2.3.4 2001:db8::/32 Telegram.exe ~ads",
                               RouteRule::Action::Direct);
@@ -126,6 +132,31 @@ void TestImport() {
   MergeRules(merged, rules);
   CHECK(merged.size() == 3);
   CHECK(ImportRules("not json").empty());
+}
+
+// QUIC: auto refuses it through TCP servers, lets it through when every
+// server is Hysteria or TUIC; block and allow as said.
+void TestQuic() {
+  const auto hasQuicRule = [](const std::string& text) {
+    const json c = json::parse(text);
+    return std::any_of(c["route"]["rules"].begin(), c["route"]["rules"].end(),
+                       [](const json& r) { return r.value("protocol", "") == "quic"; });
+  };
+  RoutingSettings s;
+  const auto own = [&](const std::vector<std::string>& links) {
+    const auto keys = BuildConfigFromLinks(links).config.value_or("{}");
+    return CombineConfigs({{"Ключи", keys, {}}}, OwnFrame(s)).config.value_or("{}");
+  };
+  const std::string tcp = own({"trojan://pw@nl.example.com:443#NL", "hysteria2://pw@hy.example.com:443#HY"});
+  const std::string udp = own({"hysteria2://pw@hy.example.com:443#HY", "tuic://uuid:pw@tu.example.com:443#TU"});
+  CHECK(QuicBlocked(s, tcp) && hasQuicRule(ApplyRouting(tcp, s, {})));
+  CHECK(!QuicBlocked(s, udp) && !hasQuicRule(ApplyRouting(udp, s, {})));
+  s.quic = RoutingSettings::Quic::Block;
+  CHECK(QuicBlocked(s, udp) && hasQuicRule(ApplyRouting(udp, s, {})));
+  s.quic = RoutingSettings::Quic::Allow;
+  CHECK(!QuicBlocked(s, tcp) && !hasQuicRule(ApplyRouting(tcp, s, {})));
+  s.quic = RoutingSettings::Quic::Auto;
+  CHECK(QuicBlocked(s, "not json"));  // no servers to go by: refused
 }
 
 void TestOwn() {
@@ -693,6 +724,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestNaiveInsecure();
     TestLocalDnsFallback();
     TestWarpWatch();
+    TestQuic();
     if (check) {
       int failed = 0;
       for (const auto& [name, config] : Checked()) {

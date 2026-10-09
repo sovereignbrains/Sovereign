@@ -223,6 +223,30 @@ void GroupServers(const Json& outbounds, const std::string& tag, std::vector<std
   }
 }
 
+// Whether every server behind `proxy` carries UDP as UDP - Hysteria, TUIC:
+// QUIC goes through them as well as anything. Through any other (VLESS,
+// Trojan, AnyTLS, Shadowsocks over TCP...) it'd be UDP packed in TCP.
+bool ServersCarryQuic(const Json& outbounds, const std::string& proxy) {
+  std::vector<std::string> servers;
+  if (!proxy.empty()) {
+    GroupServers(outbounds, proxy, servers);
+  }
+  return !servers.empty() && std::all_of(servers.begin(), servers.end(), [&](const std::string& tag) {
+    return std::any_of(outbounds.begin(), outbounds.end(), [&](const Json& o) {
+      const std::string type = Str(o, "type");
+      return Str(o, "tag") == tag && (type == "hysteria" || type == "hysteria2" || type == "tuic");
+    });
+  });
+}
+
+bool BlockQuic(const RoutingSettings& s, const Json& config) {
+  if (s.quic != RoutingSettings::Quic::Auto) {
+    return s.quic == RoutingSettings::Quic::Block;
+  }
+  return !config.contains("outbounds") || !config["outbounds"].is_array() ||
+         !ServersCarryQuic(config["outbounds"], MainSelector(config));
+}
+
 std::set<std::string> Tags(const Json& list) {
   std::set<std::string> tags;
   if (list.is_array()) {
@@ -358,7 +382,9 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
   }
   return {{"russiaDirect", s.russiaDirect},
           {"blockAds", s.blockAds},
-          {"blockQuic", s.blockQuic},
+          {"quic", s.quic == RoutingSettings::Quic::Block   ? "block"
+                   : s.quic == RoutingSettings::Quic::Allow ? "allow"
+                                                            : "auto"},
           {"finalDirect", s.finalDirect},
           {"remoteDns", s.remoteDns == RoutingSettings::RemoteDns::Google  ? "google"
                         : s.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "quad9"
@@ -391,7 +417,15 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   };
   flag("russiaDirect", s.russiaDirect);
   flag("blockAds", s.blockAds);
-  flag("blockQuic", s.blockQuic);
+  // "blockQuic" before 0.4.56: off stays off; on, the default, is auto now.
+  bool blockQuic = true;
+  flag("blockQuic", blockQuic);
+  s.quic = blockQuic ? RoutingSettings::Quic::Auto : RoutingSettings::Quic::Allow;
+  if (const std::string quic = text("quic"); quic == "auto" || quic == "block" || quic == "allow") {
+    s.quic = quic == "block"   ? RoutingSettings::Quic::Block
+             : quic == "allow" ? RoutingSettings::Quic::Allow
+                               : RoutingSettings::Quic::Auto;
+  }
   flag("finalDirect", s.finalDirect);
   flag("ipv4Only", s.ipv4Only);
   if (const auto it = json.find("services"); it != json.end() && it->is_array()) {
@@ -922,7 +956,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       rules.push_back(Json{{"rule_set", kGeoipRu}, {"outbound", direct}});
     }
   }
-  if (settings.blockQuic) {
+  if (BlockQuic(settings, config)) {
     rules.push_back(Json{{"protocol", "quic"}, {"action", "reject"}});
   }
   std::size_t at = 0;
@@ -1001,6 +1035,12 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     dns.erase("strategy");
   }
   return config.dump(2, ' ', false, Json::error_handler_t::replace);
+}
+
+bool QuicBlocked(const RoutingSettings& settings, std::string_view config) {
+  const Json c =
+      NestingDepth(config) > kMaxConfigDepth ? Json() : Json::parse(config, nullptr, /*allow_exceptions=*/false);
+  return c.is_object() ? BlockQuic(settings, c) : settings.quic != RoutingSettings::Quic::Allow;
 }
 
 std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns pick) {

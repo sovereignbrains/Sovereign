@@ -173,7 +173,7 @@ int Migrate(const fs::path& localAppData) {
   }
   const auto& r = settings.routing;
   std::cout << "routing:" << (r.russiaDirect ? " russia direct" : "") << (r.blockAds ? ", ads blocked" : "")
-            << (r.blockQuic ? ", quic blocked" : "") << ", rules: " << r.rules.size() << "\n";
+            << (r.quic == RoutingSettings::Quic::Block ? ", quic blocked" : "") << ", rules: " << r.rules.size() << "\n";
   for (const RouteRule& rule : r.rules) {
     std::cout << "  " << RuleText(rule) << " -> " << static_cast<int>(rule.action) << "\n";
   }
