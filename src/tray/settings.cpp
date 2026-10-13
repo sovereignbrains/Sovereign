@@ -232,6 +232,8 @@ TraySettings LoadSettings() {
   }
   if (const auto v = json.find("killSwitch"); v != json.end() && v->is_boolean()) {
     settings.killSwitch = v->get<bool>();
+  } else {
+    settings.killSwitch = false;  // a tray.json from before it was the default: off, as it was
   }
   if (const auto v = json.find("lanClosed"); v != json.end() && v->is_boolean()) {
     settings.lanClosed = v->get<bool>();

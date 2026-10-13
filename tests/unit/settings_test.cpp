@@ -38,6 +38,19 @@ std::string Read(const fs::path& path) {
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
+// The kill switch: on for a new user; a tray.json that says nothing of it
+// (from before it was the default) keeps it off; what it says stays.
+void TestKillSwitchDefault(const fs::path& data) {
+  std::error_code ec;
+  fs::remove_all(data, ec);
+  CHECK(LoadSettings().killSwitch);
+  Write(data / "tray.json", R"({"wantOn":false})");
+  CHECK(!LoadSettings().killSwitch);
+  Write(data / "tray.json", R"({"wantOn":false,"killSwitch":true})");
+  CHECK(LoadSettings().killSwitch);
+  fs::remove_all(data, ec);
+}
+
 void TestMigration(const fs::path& data) {
   Write(data / "tray.json",
         R"({"wantOn":true,"subscriptionUrl":"https://sub.example.com/s?token=x","lastRefresh":1790770050,)"
@@ -190,6 +203,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     fs::create_directories(root);
     SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str());
     const fs::path data = root / "Sovereign";
+    TestKillSwitchDefault(data);
     TestMigration(data);
     TestFrom043(data);
     TestRelay(data);
