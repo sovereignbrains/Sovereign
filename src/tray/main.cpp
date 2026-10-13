@@ -2364,6 +2364,19 @@ class Worker {
 
   void Publish() {
     auto& shared = State();
+    // The pick gone from the options - a refresh dropped the server, its
+    // configuration was turned off: the config's default (auto) runs instead,
+    // as before, but said now, once - the pick is forgotten with it.
+    if (combined_ && !settings_.protocol.empty()) {
+      const auto options = sovereign::tray::FindProtocolChoices(*combined_).options;
+      if (!options.empty() && std::find(options.begin(), options.end(), settings_.protocol) == options.end()) {
+        Notify(L"Sovereign: выбранного сервера больше нет",
+               L"«" + Widen(settings_.protocol) + L"» пропал из списка — выбираю лучший сам (Авто).", false,
+               UiPage::Servers);
+        settings_.protocol.clear();
+        Save();
+      }
+    }
     auto [choices, current] = Choices();
     std::string autoServer;  // "" until measured
     if (IsAuto(choices, current)) {
