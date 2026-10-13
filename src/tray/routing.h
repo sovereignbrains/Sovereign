@@ -93,6 +93,12 @@ struct RoutingSettings {
   enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9 };
   bool russiaDirect = true;
   bool blockAds = true;
+  // The "accept cookies?" windows of sites: the names their scripts are
+  // loaded from (OneTrust, Cookiebot, Usercentrics...) given no addresses, so
+  // the window never comes up and nothing is agreed to. Only a window that's
+  // someone else's script - a site's own stays; and a site that waits for the
+  // answer may not work without it, so it's off until asked for.
+  bool cookieWindows = false;
   // QUIC (HTTP/3 over UDP) refused, so browsers take TCP. Auto: refused
   // unless every server carries UDP as UDP (Hysteria, TUIC) - through a TCP
   // one (VLESS, Trojan, AnyTLS...) it's UDP packed in TCP, worse than TCP.
@@ -174,8 +180,10 @@ std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings);
 inline bool IsRuleSetFile(std::string_view bytes) { return bytes.starts_with("SRS"); }
 // An AdGuard filter ("||ads.example.com^", "@@||ok.example.com^" its
 // exceptions) as a sing-box source rule-set, JSON: the plain names, the rest
-// (masks, regular expressions, ~0.4%) left out. Nullopt if it has none - not
-// a filter.
+// (masks, regular expressions, ~0.4%) left out. A browser filter's
+// "||cmp.example.com^$third-party" is a plain name too: by name there's no
+// telling whose page asks, so it's blocked everywhere; its rules for a path
+// or for some sites only are left out. Nullopt if it has none - not a filter.
 std::optional<std::string> AdGuardRuleSet(std::string_view filter);
 
 // The frame of "own" mode: TUN, DNS (remote through "proxy", local direct),

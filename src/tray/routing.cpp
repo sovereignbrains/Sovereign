@@ -30,6 +30,11 @@ constexpr const char* kAds = "sov-ads";
 // ads list beside sing-geosite's small one, made a rule-set here.
 constexpr const char* kAdsAdGuard = "sov-ads-adguard";
 constexpr std::string_view kAdGuardFilter = "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt";
+// AdGuard Cookie Notices filter, a browser's: its ~190 whole names are the
+// consent windows' scripts. "sov-ads" in the tag: gocore/blocked.go says what
+// it blocked the way it does for the ads lists.
+constexpr const char* kCookieWindows = "sov-ads-cookies";
+constexpr std::string_view kCookieFilter = "https://filters.adtidy.org/extension/ublock/filters/18.txt";
 constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kServicePrefix = "sov-svc-";  // a service's list: sov-svc-<id>
 
@@ -394,6 +399,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
   }
   return {{"russiaDirect", s.russiaDirect},
           {"blockAds", s.blockAds},
+          {"cookieWindows", s.cookieWindows},
           {"quic", s.quic == RoutingSettings::Quic::Block   ? "block"
                    : s.quic == RoutingSettings::Quic::Allow ? "allow"
                                                             : "auto"},
@@ -430,6 +436,7 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   };
   flag("russiaDirect", s.russiaDirect);
   flag("blockAds", s.blockAds);
+  flag("cookieWindows", s.cookieWindows);
   // "blockQuic" before 0.4.56: off stays off; on, the default, is auto now.
   bool blockQuic = true;
   flag("blockQuic", blockQuic);
@@ -785,8 +792,11 @@ std::optional<std::string> AdGuardRuleSet(std::string_view filter) {
       continue;
     }
     line.remove_prefix(2);
-    if (line.ends_with("$important")) {
-      line.remove_suffix(std::string_view("$important").size());
+    for (const std::string_view modifier : {"$important", "$third-party", "$3p"}) {
+      if (line.ends_with(modifier)) {
+        line.remove_suffix(modifier.size());
+        break;
+      }
     }
     if (line.ends_with('|')) {
       line.remove_suffix(1);
@@ -823,6 +833,9 @@ std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
   if (settings.blockAds) {
     sets.push_back({std::string(kAds), std::string(kGeositeBase) + "geosite-category-ads-all.srs", false});
     sets.push_back({std::string(kAdsAdGuard), std::string(kAdGuardFilter), false, true});
+  }
+  if (settings.cookieWindows) {
+    sets.push_back({std::string(kCookieWindows), std::string(kCookieFilter), false, true});
   }
   for (const ServiceRoute& r : settings.services) {
     if (const ServiceInfo* info = FindService(r.id)) {
@@ -982,11 +995,13 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   if (route["rule_set"].empty()) {
     route.erase("rule_set");
   }
-  // The ads lists there are - sing-geosite's, AdGuard's: one rule for both.
+  // The ads lists there are - sing-geosite's, AdGuard's - and the cookie
+  // windows' one: one rule for all.
   Json adsLists = Json::array();
-  for (const char* tag : {kAds, kAdsAdGuard}) {
-    if (settings.blockAds && lists.contains(tag)) {
-      adsLists.push_back(tag);
+  for (const std::string_view tag : {kAds, kAdsAdGuard, kCookieWindows}) {
+    const bool on = tag == kCookieWindows ? settings.cookieWindows : settings.blockAds;
+    if (on && lists.contains(std::string(tag))) {
+      adsLists.push_back(std::string(tag));
     }
   }
   if (adsLists.size() == 1) {

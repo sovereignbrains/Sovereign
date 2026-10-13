@@ -236,6 +236,13 @@ void TestAdGuard() {
   const auto plain = AdGuardRuleSet("||ads.example.com^\n");
   CHECK(plain && json::parse(*plain)["rules"][0]["domain_suffix"] == json::array({"ads.example.com"}));
   CHECK(!AdGuardRuleSet("<!DOCTYPE html><title>Page not found</title>"));
+  // A browser's filter (the cookie windows' one): a third party's name is a
+  // plain one; a path, some sites only, a page's element - left out.
+  const auto cookies = AdGuardRuleSet(
+      "||cookielaw.org^$3p\n||cookiebot.com^$third-party\n||cmp.osano.com^\n||cdn.iubenda.com^$domain=a.it|b.it\n"
+      "||app.termly.io/resource-blocker/\n||x.example^$3p,script\nexample.com###cookie-banner\n");
+  CHECK(cookies && json::parse(*cookies)["rules"][0]["domain_suffix"] ==
+                       json::array({"cookielaw.org", "cookiebot.com", "cmp.osano.com"}));
 
   // Both ads lists in one rule; a site the user sent through the proxy has
   // its DNS said ahead of them - an ad name sent there gets through.
@@ -258,6 +265,25 @@ void TestAdGuard() {
     ads = ads < 0 && rule.find("sov-ads-adguard") != std::string::npos ? static_cast<int>(n) : ads;
   }
   CHECK(criteo >= 0 && ads > criteo);
+
+  // The cookie windows' list: off by default and kept in tray.json; on - in
+  // the ads' rule, blocked the same way, with the ads off too.
+  CHECK(!RoutingSettings{}.cookieWindows && !c.dump().contains("sov-ads-cookies"));
+  s.cookieWindows = true;
+  s.blockAds = false;
+  CHECK(RoutingFromJson(json::parse(RoutingToJson(s).dump())).cookieWindows);
+  bool needed = false;
+  for (const RuleSetSource& source : NeededRuleSets(s)) {
+    needed = needed || (source.tag == "sov-ads-cookies" && source.adguard);
+  }
+  CHECK(needed);
+  const json k = json::parse(ApplyRouting(
+      config, s, {{"sov-ads", "C:/lists/sov-ads.srs"}, {"sov-ads-cookies", "C:/lists/sov-ads-cookies.json"}}));
+  bool refused = false;
+  for (const json& rule : k["route"]["rules"]) {
+    refused = refused || (rule.value("rule_set", json()) == "sov-ads-cookies" && rule.value("action", "") == "reject");
+  }
+  CHECK(refused && k["dns"]["rules"].dump().contains("sov-ads-cookies") && !k.dump().contains("\"sov-ads\""));
 }
 
 // The order: a blocked program first (no network at all), then the sites, the
@@ -830,6 +856,13 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     return TryReal(argc, argv);
   }
   try {
+    // `--adguard <filter.txt>`: the rule-set a downloaded filter makes, to look at.
+    if (argc == 3 && std::string_view(argv[1]) == "--adguard") {
+      std::ifstream file(argv[2], std::ios::binary);
+      const std::string filter{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+      std::cout << AdGuardRuleSet(filter).value_or("not a filter") << "\n";
+      return 0;
+    }
     const bool check = argc == 3 && std::string_view(argv[1]) == "--check";
     const auto dir = std::filesystem::temp_directory_path() / "sovereign-routing-check";
     if (check) {

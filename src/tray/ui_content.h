@@ -99,12 +99,12 @@ struct UiService {
   std::wstring way;   // "через WARP"
 };
 // A thing on the routing board: a service, a site or a program (a rule), one
-// of the two lists - Russian sites, ads - or the local network (directly,
-// always - it only says so). Its bucket is where it goes, a
+// of the lists - Russian sites, ads, cookie windows - or the local network
+// (directly, always - it only says so). Its bucket is where it goes, a
 // RouteRule::Action's number: 0 directly, 1 through the proxy, 2 blocked,
 // 3 through WARP.
 struct UiChip {
-  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Lan };
+  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Cookies, Lan };
   Kind kind = Kind::Rule;
   int index = 0;        // Service: into the routing's services; Rule: into its rules
   int bucket = 1;

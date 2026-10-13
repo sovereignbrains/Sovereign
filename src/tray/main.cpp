@@ -380,6 +380,7 @@ struct RoutingChange {
   enum class What : std::uint8_t {
     RussiaDirect,   // on
     BlockAds,       // on
+    CookieWindows,  // on
     Quic,           // value: RoutingSettings::Quic's number
     HysteriaMbps,   // value: Mbit/s, 0: BBR
     FinalDirect,    // on
@@ -990,6 +991,7 @@ class Worker {
     switch (change.what) {
       case RoutingChange::What::RussiaDirect: r.russiaDirect = change.on; break;
       case RoutingChange::What::BlockAds: r.blockAds = change.on; break;
+      case RoutingChange::What::CookieWindows: r.cookieWindows = change.on; break;
       case RoutingChange::What::Quic:
         r.quic = static_cast<sovereign::tray::RoutingSettings::Quic>(std::clamp(change.value, 0, 2));
         break;
@@ -3352,6 +3354,10 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     board.push_back({.kind = UiChip::Kind::Ads, .index = 0, .bucket = sovereign::tray::kBucketBlock,
                      .text = L"Реклама", .detail = {}, .icon = {}, .logo = {}});
   }
+  if (r.cookieWindows) {
+    board.push_back({.kind = UiChip::Kind::Cookies, .index = 0, .bucket = sovereign::tray::kBucketBlock,
+                     .text = L"Окна cookie", .detail = {}, .icon = {}, .logo = {}});
+  }
   for (std::size_t n = 0; n < r.services.size(); ++n) {
     const ServiceRoute& s = r.services[n];
     const auto* info = sovereign::tray::FindService(s.id);
@@ -4368,7 +4374,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::BoardAdd: {
       // What can go to this bucket: a list that's off, a service, a program, a site.
-      enum class Add : std::uint8_t { Russia, Ads, Service, Program, Site };
+      enum class Add : std::uint8_t { Russia, Ads, Cookies, Service, Program, Site };
       const int bucket = args.index;
       std::vector<std::wstring> items;
       std::vector<Add> adds;
@@ -4379,6 +4385,10 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       if (bucket == sovereign::tray::kBucketBlock && !r.blockAds) {
         items.emplace_back(L"Реклама");
         adds.push_back(Add::Ads);
+      }
+      if (bucket == sovereign::tray::kBucketBlock && !r.cookieWindows) {
+        items.emplace_back(L"Окна cookie на сайтах");
+        adds.push_back(Add::Cookies);
       }
       items.emplace_back(L"Сервис…");
       adds.push_back(Add::Service);
@@ -4396,6 +4406,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       switch (adds[*picked]) {
         case Add::Russia: send(What::RussiaDirect, true); break;
         case Add::Ads: send(What::BlockAds, true); break;
+        case Add::Cookies: send(What::CookieWindows, true); break;
         case Add::Service: {
           std::vector<std::wstring> names;
           std::vector<std::string> ids;
@@ -4446,9 +4457,11 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         break;
       }
-      if (chip.kind == UiChip::Kind::Ads) {
-        // What the lists blocked lately: a click lets one through - a rule of
-        // its own where everything else goes (the user's sites come first).
+      if (chip.kind == UiChip::Kind::Ads || chip.kind == UiChip::Kind::Cookies) {
+        // What the lists blocked lately (the ads' and the cookie windows'
+        // alike): a click lets one through - a rule of its own where
+        // everything else goes (the user's sites come first).
+        const bool cookies = chip.kind == UiChip::Kind::Cookies;
         std::vector<std::wstring> items;
         if (view.blockedAds.empty()) {
           items.emplace_back(L"Пока ничего не заблокировано");
@@ -4459,13 +4472,13 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           }
         }
         items.emplace_back();
-        items.emplace_back(L"Не блокировать рекламу");
+        items.emplace_back(cookies ? L"Не убирать окна cookie" : L"Не блокировать рекламу");
         const auto picked = PickFromMenu(owner, cursor, items, -1, {}, {0});
         if (!picked) {
           break;
         }
         if (*picked == items.size() - 1) {
-          send(What::BlockAds, false);
+          send(cookies ? What::CookieWindows : What::BlockAds, false);
         } else if (*picked >= 1 && *picked - 1 < view.blockedAds.size()) {
           send(What::AddRule, false, r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
                0, view.blockedAds[*picked - 1]);
