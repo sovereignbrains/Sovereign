@@ -3391,8 +3391,8 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     if (chip.bucket != rest) {
       continue;
     }
-    if (chip.kind == UiChip::Kind::Russia) {
-      chip.idle = true;
+    if (chip.kind == UiChip::Kind::Russia || chip.kind == UiChip::Kind::Lan) {
+      chip.idle = true;  // everything else is direct: so are these, nothing to say
     } else if (chip.kind == UiChip::Kind::Rule) {
       const sovereign::tray::RouteRule& rule = r.rules[static_cast<std::size_t>(chip.index)];
       chip.idle = !rule.processes.empty() && rule.domains.empty() && rule.keywords.empty() && rule.ips.empty();

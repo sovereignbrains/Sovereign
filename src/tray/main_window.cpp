@@ -1067,8 +1067,9 @@ class Painter {
   // The board: a bucket a way - through the proxy, directly, through WARP,
   // blocked - with what goes there in it: services, sites, programs, the
   // Russian sites and the ads lists, wrapped in rows. The bucket everything
-  // else goes to (the mode, Routing's switch) says so and doesn't show what
-  // changes nothing there (UiChip::idle); an empty one is its head alone. A click
+  // else goes to (the mode, Routing's switch) doesn't show what changes
+  // nothing there (UiChip::idle) and isn't there at all with nothing else in
+  // it - the others are the mode's exceptions; an empty one is its head alone. A click
   // on one: where it goes instead, or away (ChipMenu); the "+" in a bucket's
   // corner: what can go there, a site typed across the bucket (BoardAdd).
   // WARP's bucket says how WARP goes, a click on that picks over the proxy or
@@ -1092,7 +1093,9 @@ class Painter {
     }
     // Where everything else goes: said on that bucket, with how many it doesn't show.
     const int restBucket = r.finalDirect ? kBucketDirect : kBucketProxy;
-    const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
+    const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) {
+      return chip.idle && chip.kind != UiChip::Kind::Lan;  // the local network isn't the user's to count
+    });
     const std::wstring rest = idle > 0 ? std::format(L"и всё остальное · скрыто {}", idle) : std::wstring(L"и всё остальное");
     const std::wstring restHint =
         idle > 0 ? std::wstring(L"Скрытое и так идёт сюда вместе со всем остальным, поэтому ничего не меняет. Оно "
@@ -1131,6 +1134,9 @@ class Painter {
         }
         placed.emplace_back(n, D2D1_RECT_F{cx, cy, cx + w, cy + kTag});
         cx += w + kChipGap;
+      }
+      if (b.id == restBucket && placed.empty()) {
+        continue;  // where everything else goes, and nothing else: not an exception, not shown
       }
       const float h = placed.empty() ? kHead + 2 : kHead + cy + kTag + 12;  // empty: its head alone
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
@@ -1838,15 +1844,24 @@ class Painter {
     const UiRouting& r = c.routing;
     y = PageTitle(l, L"Маршруты и DNS", nullptr, x0, x1, y, UiPage::Overview,
                   L"Куда идёт трафик и через какой DNS узнаются адреса. Всё это решает Sovereign: из подписок "
-                  L"берутся только серверы, их правила и DNS не используются.");
+                  L"берутся только серверы, их правила и DNS не используются.\n\n«Всё, кроме исключений» — через "
+                  L"VPN идёт всё, а ниже то, что идёт иначе. «Только выбранное» — через VPN идёт лишь то, что "
+                  L"лежит в «Через прокси», остальное напрямую. Списки для обоих режимов хранятся: программы "
+                  L"одного не видны в другом, потому что там ничего не меняют.");
     // The mode (RoutingSettings::finalDirect): everything through the VPN but
     // what's sent elsewhere, or only what's sent through it.
     {
+      // Read with the segments: "Через VPN идёт: всё, кроме исключений" - the
+      // buckets under it are those exceptions ("Всё через VPN" over a list of
+      // what doesn't was a lie).
+      l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 20}, L"Через VPN идёт"));
+      y += 20 + 6;
       const float mid = (x0 + x1) / 2;
-      Item all = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Всё через VPN", nullptr, UiCommand::SetRouteMode, 0);
+      Item all = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"всё, кроме исключений", nullptr,
+                             UiCommand::SetRouteMode, 0);
       all.checked = !r.finalDirect;
       Item chosen =
-          CommandItem(Kind::Segment, {mid + 4, y, x1, y + 36}, L"Только выбранное", nullptr, UiCommand::SetRouteMode, 1);
+          CommandItem(Kind::Segment, {mid + 4, y, x1, y + 36}, L"только выбранное", nullptr, UiCommand::SetRouteMode, 1);
       chosen.checked = r.finalDirect;
       l.items.push_back(std::move(all));
       l.items.push_back(std::move(chosen));
