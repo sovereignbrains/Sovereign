@@ -1066,7 +1066,9 @@ class Painter {
 
   // The board: a bucket a way - through the proxy, directly, through WARP,
   // blocked - with what goes there in it: services, sites, programs, the
-  // Russian sites and the ads lists, everything else, wrapped in rows. A click
+  // Russian sites and the ads lists, wrapped in rows. The bucket everything
+  // else goes to (the mode, Routing's switch) says so and doesn't show what
+  // changes nothing there (UiChip::idle); an empty one is its head alone. A click
   // on one: where it goes instead, or away (ChipMenu); the "+" in a bucket's
   // corner: what can go there, a site typed across the bucket (BoardAdd).
   // WARP's bucket says how WARP goes, a click on that picks over the proxy or
@@ -1076,7 +1078,6 @@ class Painter {
       int id;
       const wchar_t* name;
       std::wstring note;
-      const wchar_t* empty;
       std::wstring hint;
       UiCommand noteCommand = UiCommand::Toggle;  // Toggle: the note is just said
     };
@@ -1089,12 +1090,21 @@ class Painter {
     if (!r.warpAddress.empty()) {
       warpHint += L"\n\nАдрес устройства в WARP: " + r.warpAddress + L".";
     }
+    // Where everything else goes: said on that bucket, with how many it doesn't show.
+    const int restBucket = r.finalDirect ? kBucketDirect : kBucketProxy;
+    const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
+    const std::wstring rest = idle > 0 ? std::format(L"и всё остальное · скрыто {}", idle) : std::wstring(L"и всё остальное");
+    const std::wstring restHint =
+        idle > 0 ? std::wstring(L"Скрытое и так идёт сюда вместе со всем остальным, поэтому ничего не меняет. Оно "
+                                L"не удалено: переключи режим наверху — и вернётся на экран.")
+                 : std::wstring();
     const std::array<Bucket, 4> buckets = {{
-        {kBucketProxy, L"Через прокси", std::wstring(), L"Пока ничего", std::wstring()},
-        {kBucketDirect, L"Напрямую", std::wstring(), L"Пока ничего", std::wstring()},
-        {kBucketWarp, L"Через WARP", r.warpState, L"Сюда — то, что не пускает с адресов VPN", warpHint,
-         r.warp ? UiCommand::ChooseWarpVia : UiCommand::Toggle},
-        {kBucketBlock, L"Блок", std::wstring(), L"Пока ничего", std::wstring()},
+        {kBucketProxy, L"Через прокси", restBucket == kBucketProxy ? rest : std::wstring(),
+         restBucket == kBucketProxy ? restHint : std::wstring()},
+        {kBucketDirect, L"Напрямую", restBucket == kBucketDirect ? rest : std::wstring(),
+         restBucket == kBucketDirect ? restHint : std::wstring()},
+        {kBucketWarp, L"Через WARP", r.warpState, warpHint, r.warp ? UiCommand::ChooseWarpVia : UiCommand::Toggle},
+        {kBucketBlock, L"Блок", std::wstring(), std::wstring()},
     }};
     constexpr float kHead = 42;
     constexpr float kChipGap = 6;
@@ -1107,7 +1117,7 @@ class Painter {
       float cy = 0;  // from the first row's top
       for (std::size_t n = 0; n < r.board.size(); ++n) {
         const UiChip& chip = r.board[n];
-        if (chip.bucket != b.id) {
+        if (chip.bucket != b.id || chip.idle) {
           continue;
         }
         float w = 20 + TextWidth(chip.text, body_.get()) + (chip.icon.empty() && chip.logo.empty() ? 0.0f : 22.0f) +
@@ -1122,7 +1132,7 @@ class Painter {
         placed.emplace_back(n, D2D1_RECT_F{cx, cy, cx + w, cy + kTag});
         cx += w + kChipGap;
       }
-      const float h = kHead + cy + kTag + 12;
+      const float h = placed.empty() ? kHead + 2 : kHead + cy + kTag + 12;  // empty: its head alone
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
       const float nameWidth = TextWidth(b.name, heading_.get());
       l.items.push_back(Make(Kind::Heading, {left + 2, y + 6, left + 2 + nameWidth + 4, y + kHead - 4}, b.name));
@@ -1144,9 +1154,6 @@ class Painter {
       }
       l.items.push_back(CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd,
                                     UiCommand::BoardAdd, b.id));
-      if (placed.empty()) {
-        l.items.push_back(Make(Kind::Muted, {left + 2, y + kHead, right, y + kHead + kTag}, b.empty));
-      }
       for (const auto& [n, at] : placed) {
         const UiChip& chip = r.board[n];
         const D2D1_RECT_F place = {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom};
@@ -1832,13 +1839,37 @@ class Painter {
     y = PageTitle(l, L"Маршруты и DNS", nullptr, x0, x1, y, UiPage::Overview,
                   L"Куда идёт трафик и через какой DNS узнаются адреса. Всё это решает Sovereign: из подписок "
                   L"берутся только серверы, их правила и DNS не используются.");
-    // Where everything goes: the board; under it the fine settings - God
-    // Mode's, once it's there.
+    // The mode (RoutingSettings::finalDirect): everything through the VPN but
+    // what's sent elsewhere, or only what's sent through it.
+    {
+      const float mid = (x0 + x1) / 2;
+      Item all = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Всё через VPN", nullptr, UiCommand::SetRouteMode, 0);
+      all.checked = !r.finalDirect;
+      Item chosen =
+          CommandItem(Kind::Segment, {mid + 4, y, x1, y + 36}, L"Только выбранное", nullptr, UiCommand::SetRouteMode, 1);
+      chosen.checked = r.finalDirect;
+      l.items.push_back(std::move(all));
+      l.items.push_back(std::move(chosen));
+      y += 36 + kGap;
+    }
+    // Where everything goes: the board; under it, folded, the fine settings -
+    // God Mode's, once it's there.
     y = Board(l, r, x0, x1, y);
-    if (!r.lists.empty()) {
+    if (!r.lists.empty()) {  // only while the lists are downloading, or failed
       y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0 + 4, x1, y) + 4;
     }
     y += kGap;
+    {
+      Item more = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Ещё", nullptr, UiCommand::ToggleRoutingMore);
+      more.detail = c.routingMore ? L"свернуть" : L"QUIC, Hysteria 2, DNS";
+      l.items.push_back(Make(Kind::Card, more.rect));
+      more.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
+      l.items.push_back(std::move(more));
+      y += kRow + kGap + 4;
+    }
+    if (!c.routingMore) {
+      return c.appsInclude ? Apps(l, c, x0, x1, y) : y;
+    }
 
     y = Heading(l, L"Тонкая настройка", x0, x1, y, L"То, что обычно трогать не нужно.");
     {

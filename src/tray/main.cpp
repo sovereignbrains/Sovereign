@@ -330,6 +330,7 @@ struct View {
   bool hideExitIp = false;
   bool delaysDetailed = false;
   bool connectAtStartup = true;
+  bool routingMore = false;
   // Turned on, shut by the kill switch, nothing getting through for a while
   // (UpdateLockout): why, for the window's way out.
   bool lockedOut = false;
@@ -469,6 +470,7 @@ struct Shared {
   bool pendingToggleExitIp = false;
   bool pendingToggleDelayDetails = false;
   std::optional<bool> pendingConnectAtStartup;
+  bool pendingToggleRoutingMore = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
   bool pendingToggleLanClosed = false;
@@ -487,7 +489,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingLogLevel || pendingToggleKillSwitch ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -652,6 +654,7 @@ class Worker {
       bool toggleExitIp = false;
       bool toggleDelayDetails = false;
       std::optional<bool> connectAtStartup;
+      bool toggleRoutingMore = false;
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
       bool toggleLanClosed = false;
@@ -674,6 +677,7 @@ class Worker {
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
         toggleDelayDetails = std::exchange(shared.pendingToggleDelayDetails, false);
         connectAtStartup = std::exchange(shared.pendingConnectAtStartup, std::nullopt);
+        toggleRoutingMore = std::exchange(shared.pendingToggleRoutingMore, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
         toggleLanClosed = std::exchange(shared.pendingToggleLanClosed, false);
@@ -776,6 +780,10 @@ class Worker {
       }
       if (connectAtStartup && *connectAtStartup != settings_.connectAtStartup) {
         settings_.connectAtStartup = *connectAtStartup;
+        Save();
+      }
+      if (toggleRoutingMore) {
+        settings_.routingMore = !settings_.routingMore;
         Save();
       }
       if (toggleKillSwitch) {
@@ -2489,6 +2497,7 @@ class Worker {
       v.hideExitIp = settings_.hideExitIp;
       v.delaysDetailed = settings_.delaysDetailed;
       v.connectAtStartup = settings_.connectAtStartup;
+      v.routingMore = settings_.routingMore;
       v.lockedOut = LockedOut();
       v.lockoutReason = lockoutReason_;
       v.localNetwork = localNetwork_.forUser;
@@ -3376,9 +3385,19 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     }
     board.push_back(std::move(chip));
   }
-  board.push_back({.kind = UiChip::Kind::Rest, .index = 0,
-                   .bucket = r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
-                   .text = L"Всё остальное", .detail = {}, .icon = {}, .logo = {}});
+  // In the bucket everything else goes to (ui_content.h UiChip::idle).
+  const int rest = r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy;
+  for (UiChip& chip : board) {
+    if (chip.bucket != rest) {
+      continue;
+    }
+    if (chip.kind == UiChip::Kind::Russia) {
+      chip.idle = true;
+    } else if (chip.kind == UiChip::Kind::Rule) {
+      const sovereign::tray::RouteRule& rule = r.rules[static_cast<std::size_t>(chip.index)];
+      chip.idle = !rule.processes.empty() && rule.domains.empty() && rule.keywords.empty() && rule.ips.empty();
+    }
+  }
   return board;
 }
 
@@ -3911,11 +3930,8 @@ UiContent ContentFrom(const View& v) {
     c.routing.listsFailed = true;
   } else if (v.listsReady < v.listsNeeded) {
     c.routing.lists = std::format(L"Списки правил скачиваются: {} из {}.", v.listsReady, v.listsNeeded);
-  } else if (v.listsNeeded > 0) {
-    c.routing.lists = L"Списки правил на месте" +
-                      (v.listsUpdated ? L", обновлены " + LocalTime(v.listsUpdated) : std::wstring()) +
-                      L"; обновляются раз в сутки.";
-  }  c.appsInclude = v.appsMode == AppsMode::Include;
+  }
+  c.appsInclude = v.appsMode == AppsMode::Include;
   for (const std::string& app : v.apps) {
     c.apps.push_back(Widen(app));
   }
@@ -3990,6 +4006,7 @@ UiContent ContentFrom(const View& v) {
   c.hideExitIp = v.hideExitIp;
   c.delaysDetailed = v.delaysDetailed;
   c.connectAtStartup = v.connectAtStartup;
+  c.routingMore = v.routingMore;
   c.lockedOut = v.lockedOut;
   c.lockoutReason = Widen(v.lockoutReason);
   c.localNetwork = Widen(v.localNetwork);
@@ -4248,6 +4265,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         send(What::Quic, false, static_cast<int>(*picked));
       }
       break;
+    case UiCommand::SetRouteMode: send(What::FinalDirect, args.index == 1); break;
     case UiCommand::ChooseHysteriaSpeed: {
       static constexpr std::array kSpeeds = {0, 50, 100, 200, 300, 500, 1000};
       std::vector<std::wstring> items;
@@ -4362,8 +4380,15 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         items.emplace_back(L"Реклама");
         adds.push_back(Add::Ads);
       }
-      items.insert(items.end(), {L"Сервис…", L"Программа…", L"Сайт или адрес…"});
-      adds.insert(adds.end(), {Add::Service, Add::Program, Add::Site});
+      items.emplace_back(L"Сервис…");
+      adds.push_back(Add::Service);
+      // Not where everything else goes anyway: a program there would change nothing.
+      if (bucket != (r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy)) {
+        items.emplace_back(L"Программа…");
+        adds.push_back(Add::Program);
+      }
+      items.emplace_back(L"Сайт или адрес…");
+      adds.push_back(Add::Site);
       const auto picked = PickFromMenu(owner, args.anchor, items, -1);
       if (!picked) {
         break;
@@ -4450,15 +4475,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       if (chip.kind == UiChip::Kind::Lan) {
         break;  // nowhere else to go
       }
-      if (chip.kind == UiChip::Kind::Rest) {
-        // Only through the proxy or directly: blocked or through WARP it'd be
-        // the whole internet.
-        if (const auto picked =
-                PickFromMenu(owner, cursor, {L"Через прокси", L"Напрямую"}, r.finalDirect ? 1 : 0)) {
-          send(What::FinalDirect, *picked == 1);
-        }
-        break;
-      }
+
       // The buckets in the board's order, then (a service) the countries, then away.
       static constexpr std::array kOrder = {sovereign::tray::kBucketProxy, sovereign::tray::kBucketDirect,
                                             sovereign::tray::kBucketWarp, sovereign::tray::kBucketBlock};
@@ -4591,6 +4608,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleBlockAds:
     case UiCommand::ChooseQuic:
     case UiCommand::ChooseHysteriaSpeed:
+    case UiCommand::SetRouteMode:
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:
     case UiCommand::ChooseWarpVia:
@@ -4678,6 +4696,13 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       UpdateWindows();
       break;
     }
+    case UiCommand::ToggleRoutingMore:
+      {
+        const std::scoped_lock lock(State().mutex);
+        State().pendingToggleRoutingMore = true;
+      }
+      Wake();
+      break;
     case UiCommand::OpenWithoutVpn:
       {
         const std::scoped_lock lock(State().mutex);

@@ -99,13 +99,12 @@ struct UiService {
   std::wstring way;   // "через WARP"
 };
 // A thing on the routing board: a service, a site or a program (a rule), one
-// of the two lists - Russian sites, ads - everything else (what no rule
-// matches: through the proxy or directly), or the local network (directly,
+// of the two lists - Russian sites, ads - or the local network (directly,
 // always - it only says so). Its bucket is where it goes, a
 // RouteRule::Action's number: 0 directly, 1 through the proxy, 2 blocked,
 // 3 through WARP.
 struct UiChip {
-  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Rest, Lan };
+  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Lan };
   Kind kind = Kind::Rule;
   int index = 0;        // Service: into the routing's services; Rule: into its rules
   int bucket = 1;
@@ -113,6 +112,10 @@ struct UiChip {
   std::wstring detail;  // through a country: "США"
   std::wstring icon;    // a program's exe, for its icon; empty: none known
   std::string logo;     // a service's id, for its logo (icons.h ServiceLogo); empty: none
+  // In the bucket everything else goes to, changing nothing - a program there
+  // (its rule is the last before that very default), the Russian sites when
+  // everything else is direct: kept for the other mode, not shown.
+  bool idle = false;
 };
 inline constexpr int kBucketDirect = 0;
 inline constexpr int kBucketProxy = 1;
@@ -219,6 +222,7 @@ struct UiContent {
   std::wstring killSwitchError;         // why the service couldn't apply it
   bool autostart = false;               // the tray starts when the user signs in
   bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
+  bool routingMore = false;             // the routing page's fine settings and DNS unfolded
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through
   std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
@@ -256,6 +260,8 @@ enum class UiCommand : std::uint8_t {
   ToggleBlockAds,
   ChooseQuic,         // anchor: where to open the menu
   ChooseHysteriaSpeed,  // anchor: where to open the menu
+  SetRouteMode,        // index: 0 everything through the VPN but what's sent elsewhere, 1 only what's sent through it
+  ToggleRoutingMore,   // the fine settings and DNS, unfolded or not
   ToggleIpv4Only,
   ToggleWarp,         // on: registers a WARP device first if there's none
   ChooseWarpVia,      // anchor: over the proxy or directly
