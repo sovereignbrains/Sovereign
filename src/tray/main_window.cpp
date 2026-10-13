@@ -213,7 +213,8 @@ struct Item {
   std::wstring text;
   std::wstring detail;
   std::wstring text2;  // a third line where a kind has one (CheckRow: what the result means)
-  std::string logo;    // a Tag's service logo (icons.h ServiceLogo): the service's id
+  std::string logo;    // a Tag's service logo (icons.h ServiceLogo): the service's id; a ValueRow's, before its title
+  std::string detailLogo;  // a ValueRow's, before its value: a DNS provider's
   ItemAction action = ItemAction::None;
   UiCommand command = UiCommand::Toggle;
   int index = 0;
@@ -725,7 +726,8 @@ class Painter {
         case Kind::ServerCard: room = w - 14 - 34; need = TextWidth(it.text, heading_.get()); break;
         case Kind::ValueRow:
           room = w - 16 - 30;
-          need = TextWidth(it.text, body_.get()) + 12 + TextWidth(it.detail, trailing_.get());
+          need = TextWidth(it.text, body_.get()) + 12 + TextWidth(it.detail, trailing_.get()) +
+                 (it.logo.empty() ? 0.0f : 22.0f) + (it.detailLogo.empty() ? 0.0f : 22.0f);
           break;
         case Kind::Segment: room = w - 8; need = TextWidth(it.text, button_.get()); break;
         case Kind::CheckRow:
@@ -1858,10 +1860,11 @@ class Painter {
       Item speed =
           CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Hysteria 2", nullptr, UiCommand::ChooseHysteriaSpeed);
       speed.detail = r.hysteriaMbps > 0 ? std::format(L"{} Мбит/с, Brutal", r.hysteriaMbps) : std::wstring(L"авто (BBR)");
+      speed.logo = "hysteria";
       l.items.push_back(Make(Kind::Card, speed.rect));
       speed.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
       l.items.push_back(std::move(speed));
-      HintAfter(l, L"Hysteria 2", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
+      HintAfter(l, L"Hysteria 2", body_.get(), x0 + 20 + 22, x1 - 160, y + kRow / 2,
                 L"Скорость твоего канала, как в договоре. Сервер шлёт ровно с ней и не сбавляет при потерях "
                 L"(Brutal): по Wi-Fi с потерями скорость держится. Больше, чем тянет канал, не ставь — забьёт "
                 L"его, и всё начнёт тормозить.\n\nАвто — сервер подбирает скорость сам (BBR).");
@@ -1879,11 +1882,13 @@ class Painter {
       Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Через прокси", nullptr,
                                 UiCommand::ChooseRemoteDns);
       remote.detail = r.remoteDns;
+      remote.detailLogo = r.remoteDnsLogo;
       l.items.push_back(std::move(remote));
       l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
       Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Напрямую", nullptr,
                                UiCommand::ChooseLocalDns);
       local.detail = r.localDns;
+      local.detailLogo = r.localDnsLogo;
       l.items.push_back(std::move(local));
       l.items.push_back(Make(Kind::Divider, {x0 + 16, y + 2 * kRow, x1 - 16, y + 2 * kRow + 1}));
       const float top = y + 2 * kRow;
@@ -2291,9 +2296,20 @@ class Painter {
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
         }
-        const float valueLeft = r.left + 16 + TextWidth(it.text, body_.get()) + 12;
-        k.Text(it.text, body_.get(), {r.left + 16, r.top, valueLeft, r.bottom}, primary);
+        const float cy = (r.top + r.bottom) / 2;
+        float textLeft = r.left + 16;
+        if (ID2D1Bitmap* logo = it.logo.empty() ? nullptr : Logo(k.t, it.logo); logo != nullptr) {
+          k.t->DrawBitmap(logo, {textLeft, cy - 8, textLeft + 16, cy + 8});
+          textLeft += 22;
+        }
+        const float valueLeft = textLeft + TextWidth(it.text, body_.get()) + 12;
+        k.Text(it.text, body_.get(), {textLeft, r.top, valueLeft, r.bottom}, primary);
         k.Text(it.detail, trailing_.get(), {valueLeft, r.top, r.right - 30, r.bottom}, secondary);
+        // The value's logo right before it (the value is set against the right edge).
+        if (ID2D1Bitmap* logo = it.detailLogo.empty() ? nullptr : Logo(k.t, it.detailLogo); logo != nullptr) {
+          const float valueStart = std::max(valueLeft + 22, r.right - 30 - TextWidth(it.detail, trailing_.get()));
+          k.t->DrawBitmap(logo, {valueStart - 22, cy - 8, valueStart - 6, cy + 8});
+        }
         k.Text(kGlyphChevron, glyph_.get(), {r.right - 28, r.top, r.right - 8, r.bottom}, secondary);
         break;
       }

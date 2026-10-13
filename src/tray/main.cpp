@@ -1055,7 +1055,9 @@ class Worker {
         break;
       case RoutingChange::What::AddRule: {
         const auto action = static_cast<RouteRule::Action>(std::clamp(change.value, 0, 3));
-        auto rule = sovereign::tray::ParseRule(change.text, action);
+        // A program picked (its path known): its exe's name as it is, a space in it or not.
+        auto rule = change.path.empty() ? sovereign::tray::ParseRule(change.text, action)
+                                        : sovereign::tray::ProgramRule(change.text, action);
         if (!rule || (action == RouteRule::Action::Warp && !warpOn())) {
           break;
         }
@@ -3854,6 +3856,14 @@ UiContent ContentFrom(const View& v) {
   c.routing.localDns = r.localDns == RoutingSettings::LocalDns::System
                            ? std::wstring(L"системный")
                            : Widen(std::string(sovereign::tray::LocalDnsName(r.localDns))) + L" (DoH)";
+  using LocalDnsPick = RoutingSettings::LocalDns;
+  const auto dnsLogo = [](LocalDnsPick dns) {
+    return dns == LocalDnsPick::Google ? "google" : dns == LocalDnsPick::Quad9 ? "quad9" : dns == LocalDnsPick::System ? "" : "cloudflare";
+  };
+  c.routing.remoteDnsLogo = r.remoteDns == RoutingSettings::RemoteDns::Google  ? "google"
+                            : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "quad9"
+                                                                                : "cloudflare";
+  c.routing.localDnsLogo = dnsLogo(v.dnsInstead ? *v.dnsInstead : r.localDns);
   if (v.dnsInstead) {  // the pick not answering: what runs instead first, the row is narrow
     c.routing.localDns = Widen(std::string(sovereign::tray::LocalDnsName(*v.dnsInstead))) + L" · вместо " +
                          Widen(std::string(sovereign::tray::LocalDnsName(r.localDns)));
@@ -4261,7 +4271,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ChooseRemoteDns:
       if (const auto picked = PickFromMenu(owner, args.anchor, {L"Cloudflare (DoH)", L"Google (DoH)", L"Quad9 (DoH)"},
-                                           static_cast<int>(r.remoteDns))) {
+                                           static_cast<int>(r.remoteDns),
+                                           ServiceMenuIcons({"cloudflare", "google", "quad9"}))) {
         send(What::RemoteDns, false, static_cast<int>(*picked));
       }
       break;
@@ -4273,7 +4284,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       if (const auto picked = PickFromMenu(owner, args.anchor,
                                            {L"Cloudflare (DoH, зашифрованный)", L"Google (DoH, зашифрованный)",
                                             L"Quad9 (DoH, зашифрованный)", L"Системный (провайдера)"},
-                                           static_cast<int>(current))) {
+                                           static_cast<int>(current),
+                                           ServiceMenuIcons({"cloudflare", "google", "quad9", ""}))) {
         send(What::LocalDns, false, static_cast<int>(kChoices.at(*picked)));
       }
       break;

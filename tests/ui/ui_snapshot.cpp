@@ -284,7 +284,7 @@ int Snapshots(const std::wstring& dir) {
 
   // Every service's logo draws (assets/services: what Direct2D's SVG can't
   // draw comes out empty) - at the menus' 16 px and at 150 %.
-  std::vector<std::string_view> logos = {"lan"};  // the local network's chip
+  std::vector<std::string_view> logos = {"lan", "hysteria", "cloudflare", "quad9"};  // the board's, the settings'
   for (const auto& service : sovereign::tray::ServiceCatalog()) {
     logos.push_back(service.id);
   }

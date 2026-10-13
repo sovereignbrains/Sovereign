@@ -484,13 +484,24 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
       if (!entry.is_object()) {
         continue;
       }
+      // Names, keywords and addresses through the text (it cleans them);
+      // programs as they are, in quotes - a name with a space in it
+      // ("SSH Client.exe") came back as a site and a program before 0.4.68.
       std::string line;
       for (const char* key : {"domains", "keywords", "ips", "processes"}) {
-        if (const auto values = entry.find(key); values != entry.end()) {
+        if (const auto values = entry.find(key); values != entry.end() && values->is_array()) {
           for (const auto& v : *values) {
-            if (v.is_string()) {
+            if (!v.is_string()) {
+              continue;
+            }
+            const std::string value = v.get<std::string>();
+            if (std::string_view(key) == "processes") {
+              if (value.find('"') == std::string::npos) {
+                line += "\"" + value + "\" ";
+              }
+            } else {
               // Keywords keep their kind through the text: "~word".
-              line += (std::string_view(key) == "keywords" ? "~" : "") + v.get<std::string>() + " ";
+              line += (std::string_view(key) == "keywords" ? "~" : "") + value + " ";
             }
           }
         }
@@ -508,6 +519,26 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
     }
   }
   return s;
+}
+
+namespace {
+
+// An exe's name, a space in it or not - no path, nothing a file name can't hold.
+bool IsProgramName(std::string_view t) {
+  return t.size() > 4 && Lower(t).ends_with(".exe") && t.find_first_of("\\/:*?\"<>|") == std::string_view::npos &&
+         t.front() != ' ';
+}
+
+}  // namespace
+
+std::optional<RouteRule> ProgramRule(std::string_view exe, RouteRule::Action action) {
+  if (!IsProgramName(exe) || exe.size() > 260) {
+    return std::nullopt;
+  }
+  RouteRule rule;
+  rule.action = action;
+  rule.processes.emplace_back(exe);
+  return rule;
 }
 
 std::optional<RouteRule> ParseRule(std::string_view text, RouteRule::Action action) {
@@ -532,7 +563,7 @@ std::optional<RouteRule> ParseRule(std::string_view text, RouteRule::Action acti
       }
       return;
     }
-    if (Lower(t).ends_with(".exe") && t.size() > 4 && t.find_first_of("\\/:*?\"<>|") == std::string::npos) {
+    if (IsProgramName(t)) {
       add(rule.processes, std::move(t));
       return;
     }
@@ -556,10 +587,14 @@ std::optional<RouteRule> ParseRule(std::string_view text, RouteRule::Action acti
       add(rule.domains, std::move(name));
     }
   };
+  // In quotes a space is part of the token: "SSH Client.exe".
+  bool quoted = false;
   for (const char c : text) {
-    if (c == ',' || c == ';' || c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+    if (c == '"') {
+      quoted = !quoted;
+    } else if (!quoted && (c == ',' || c == ';' || c == ' ' || c == '\t' || c == '\r' || c == '\n')) {
       take();
-    } else if (token.size() < 300) {
+    } else if (c != '\r' && c != '\n' && token.size() < 300) {
       token.push_back(c);
     }
   }

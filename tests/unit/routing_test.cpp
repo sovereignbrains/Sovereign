@@ -94,6 +94,19 @@ void TestJsonAndParse() {
   CHECK(back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Block);
   CHECK(!back.rules.empty() && back.rules[0].keywords == std::vector<std::string>({"tracker"}));
   CHECK(RoutingFromJson(json::parse(R"({"russiaDirect":"yes","rules":[5,{"domains":[1]}]})")).russiaDirect);
+  // A program with a space in its name: whole when picked, in quotes when
+  // typed, and whole back from tray.json (it came back split before 0.4.68).
+  const auto ssh = ProgramRule("SSH Client.exe", RouteRule::Action::Proxy);
+  CHECK(ssh && ssh->processes == std::vector<std::string>({"SSH Client.exe"}) && ssh->domains.empty());
+  CHECK(!ProgramRule("C:\\x\\app.exe", RouteRule::Action::Proxy) && !ProgramRule("readme.txt", RouteRule::Action::Proxy));
+  const auto typed = ParseRule("\"SSH Client.exe\", bank.ru", RouteRule::Action::Direct);
+  CHECK(typed && typed->processes == std::vector<std::string>({"SSH Client.exe"}) &&
+        typed->domains == std::vector<std::string>({"bank.ru"}));
+  RoutingSettings spaced;
+  spaced.rules.push_back(*ssh);
+  const RoutingSettings spacedBack = RoutingFromJson(json::parse(RoutingToJson(spaced).dump()));
+  CHECK(spacedBack.rules.size() == 1 && spacedBack.rules[0].processes == std::vector<std::string>({"SSH Client.exe"}) &&
+        spacedBack.rules[0].domains.empty());
   // One thing, one bucket: added again elsewhere, it moves; twice in tray.json
   // (before 0.4.57), the first - the one that worked - stays.
   std::vector<RouteRule> board;

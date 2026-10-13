@@ -139,8 +139,13 @@ nlohmann::json RoutingToJson(const RoutingSettings& settings);
 RoutingSettings RoutingFromJson(const nlohmann::json& json);
 
 // What the user typed for a rule: "qwen.ai, alicdn.com 10.0.0.0/8 app.exe" -
-// names, address ranges and programs told apart. Nothing usable: nullopt.
+// names, address ranges and programs told apart; a program with a space in
+// its name goes in quotes ("SSH Client.exe"). Nothing usable: nullopt.
 std::optional<RouteRule> ParseRule(std::string_view text, RouteRule::Action action);
+// A rule for one program by its exe's name as it is - "SSH Client.exe" with
+// its space, which typed text would split (there it takes quotes). Nullopt
+// if it isn't an exe's name.
+std::optional<RouteRule> ProgramRule(std::string_view exe, RouteRule::Action action);
 // A rule as one line: "qwen.ai, alicdn.com, 10.0.0.0/8".
 std::string RuleText(const RouteRule& rule);
 

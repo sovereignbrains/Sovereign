@@ -129,6 +129,8 @@ struct UiRouting {
   bool ipv4Only = true;
   std::wstring remoteDns;  // "Cloudflare"
   std::wstring localDns;   // "Cloudflare (DoH)"
+  std::string remoteDnsLogo;  // its logo (icons.h ServiceLogo): "cloudflare"; empty: none
+  std::string localDnsLogo;   // the one running; the system's resolver has none
   std::vector<UiRule> rules;
   std::wstring lists;      // "списки обновлены 01.10 14:00", "скачиваются: 2 из 4"
   bool listsFailed = false;
