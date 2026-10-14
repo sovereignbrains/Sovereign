@@ -211,8 +211,7 @@ int Snapshots(const std::wstring& dir) {
                             {L"chatgpt.com", L"через WARP", true}};
     routed.routing.warp = true;
     routed.routing.warpRegistered = true;
-    routed.routing.warpAddress = L"172.16.0.2";
-    routed.routing.warpState = L"через «4G | Whitelist №1»";
+      routed.routing.warpState = L"через «4G | Whitelist №1»";
     routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
     routed.routing.board = SampleBoard();
     routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
@@ -439,7 +438,6 @@ int LayoutTest(const std::wstring& dir) {
                           {L"chatgpt.com, openai.com", L"через WARP", true}};
   routed.routing.warp = true;
   routed.routing.warpRegistered = true;
-  routed.routing.warpAddress = L"172.16.0.2";
   routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
   routed.routing.board = SampleBoard();
   const std::array<std::pair<UiPage, const wchar_t*>, 8> pages = {{{UiPage::Overview, L"overview"},

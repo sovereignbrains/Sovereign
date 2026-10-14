@@ -3956,7 +3956,6 @@ UiContent ContentFrom(const View& v) {
   c.routing.warp = r.warp;
   c.routing.warpRegistered = r.warpAccount.has_value();
   c.routing.warpViaProxy = r.warpViaProxy;
-  c.routing.warpAddress = r.warpAccount ? Widen(r.warpAccount->address4) : std::wstring();
   // The WARP bucket's note, a click on it picks the way: the way, and how it goes.
   if (r.warp) {
     const std::wstring way = r.warpViaProxy ? L"поверх VPN" : L"напрямую";

@@ -1082,15 +1082,11 @@ class Painter {
       std::wstring hint;
       UiCommand noteCommand = UiCommand::Toggle;  // Toggle: the note is just said
     };
-    std::wstring warpHint =
-        L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
-        L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nПоверх VPN — "
-        L"WireGuard идёт к Cloudflare через твой сервер: провайдер его не видит и не может заблокировать. "
-        L"Если WARP не проходит ни через один сервер, Sovereign сам переводит его на «напрямую». Как "
-        L"подключаться — нажми на состояние справа от названия.";
-    if (!r.warpAddress.empty()) {
-      warpHint += L"\n\nАдрес устройства в WARP: " + r.warpAddress + L".";
-    }
+    const std::wstring warpHint =
+        L"WARP — бесплатный выход через Cloudflare. Выручает там, где сайт не пускает с адресов VPN-серверов "
+        L"или режет контент (Gemini, ChatGPT, Netflix): сайт видит адрес Cloudflare.\n\nWARP идёт поверх "
+        L"твоего VPN — провайдер его не видит. Не проходит так — Sovereign сам пустит WARP напрямую. "
+        L"Выбрать вручную — нажми «через …» справа от названия.";
     // Where everything else goes: said on that bucket, with how many it doesn't show.
     const int restBucket = r.finalDirect ? kBucketDirect : kBucketProxy;
     const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
