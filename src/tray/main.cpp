@@ -3380,7 +3380,7 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   }
   if (r.cookieWindows) {
     board.push_back({.kind = UiChip::Kind::Cookies, .index = 0, .bucket = sovereign::tray::kBucketBlock,
-                     .text = L"Окна cookie", .detail = {}, .icon = {}, .logo = "cookies"});
+                     .text = L"Баннеры cookie", .detail = {}, .icon = {}, .logo = "cookies"});
   }
   for (std::size_t n = 0; n < r.services.size(); ++n) {
     const ServiceRoute& s = r.services[n];
@@ -4477,7 +4477,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         adds.push_back(Add::Ads);
       }
       if (bucket == sovereign::tray::kBucketBlock && !r.cookieWindows) {
-        items.emplace_back(L"Окна cookie на сайтах");
+        items.emplace_back(L"Баннеры cookie на сайтах");
         adds.push_back(Add::Cookies);
       }
       items.emplace_back(L"Сервис…");
@@ -4488,7 +4488,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       // nothing and isn't shown (UiChip::idle): their menus say so first.
       std::wstring idleNote;
       if (bucket == (r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy)) {
-        idleNote = r.finalDirect ? L"Идёт напрямую и так: пригодится в режиме «всё, кроме исключений»"
+        idleNote = r.finalDirect ? L"Идёт напрямую и так: пригодится в режиме «всё»"
                                  : L"Идёт через VPN и так: пригодится в режиме «только выбранное»";
       }
       items.emplace_back(L"Сайт или адрес…");
@@ -4597,7 +4597,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           }
         }
         items.emplace_back();
-        items.emplace_back(cookies ? L"Не убирать окна cookie" : L"Не блокировать рекламу");
+        items.emplace_back(cookies ? L"Не убирать баннеры cookie" : L"Не блокировать рекламу");
         const auto picked = PickFromMenu(owner, cursor, items, -1, {}, {0});
         if (!picked) {
           break;

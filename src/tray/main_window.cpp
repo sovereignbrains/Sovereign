@@ -1835,20 +1835,21 @@ class Painter {
     const UiRouting& r = c.routing;
     y = PageTitle(l, L"Маршруты и DNS", nullptr, x0, x1, y, UiPage::Overview,
                   L"Куда идёт трафик и через какой DNS узнаются адреса. Всё это решает Sovereign: из подписок "
-                  L"берутся только серверы, их правила и DNS не используются.\n\n«Всё, кроме исключений» — через "
-                  L"VPN идёт всё, а ниже то, что идёт иначе. «Только выбранное» — через VPN идёт лишь то, что "
+                  L"берутся только серверы, их правила и DNS не используются.\n\n«Всё» — через VPN идёт всё, а "
+                  L"ниже исключения: то, что идёт иначе. «Только выбранное» — через VPN идёт лишь то, что "
                   L"лежит в «Через VPN», остальное напрямую. Списки для обоих режимов хранятся: программы "
                   L"одного не видны в другом, потому что там ничего не меняют.");
     // The mode (RoutingSettings::finalDirect): everything through the VPN but
     // what's sent elsewhere, or only what's sent through it.
     {
-      // Read with the segments: "Через VPN идёт: всё, кроме исключений" - the
-      // buckets under it are those exceptions ("Всё через VPN" over a list of
-      // what doesn't was a lie).
+      // Read with the segments: "Через VPN идёт: всё" - and the buckets under
+      // it captioned as the exceptions to that ("Всё через VPN" over a list
+      // of what doesn't, uncaptioned, was a lie; "всё, кроме исключений" on
+      // the segment said both at once and outweighed the board).
       l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 20}, L"Через VPN идёт"));
       y += 20 + 6;
       const float mid = (x0 + x1) / 2;
-      Item all = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"всё, кроме исключений", nullptr,
+      Item all = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"всё", nullptr,
                              UiCommand::SetRouteMode, 0);
       all.checked = !r.finalDirect;
       Item chosen =
@@ -1857,6 +1858,10 @@ class Painter {
       l.items.push_back(std::move(all));
       l.items.push_back(std::move(chosen));
       y += 36 + kGap;
+      if (!r.finalDirect) {  // everything through the VPN: the board is what isn't
+        l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 20}, L"Исключения"));
+        y += 20 + 6;
+      }
     }
     // Where everything goes: the board; under it, folded, the fine settings -
     // God Mode's, once it's there.
@@ -2462,13 +2467,16 @@ class Painter {
         break;
       }
       case Kind::Segment: {
+        // Picked: tinted, as a picked chip - not the accent's full fill, which
+        // outshouted the board a mode switch sits over.
         if (it.checked) {
-          k.Round(r, 6, accent);
+          k.Round(r, 6, FromColorRef(ui::kAccent, pressed ? 0.12f : (hovered ? 0.24f : 0.18f)));
+          k.Outline(r, 6, FromColorRef(ui::kAccent, 0.35f));
         } else {
           k.Round(r, 6, Rgb(255, 255, 255, 0.04f + hoverAlpha));
           k.Outline(r, 6, Rgb(255, 255, 255, 0.08f));
         }
-        k.Text(it.text, button_.get(), r, it.checked ? Rgb(12, 20, 36) : primary);
+        k.Text(it.text, button_.get(), r, it.checked ? accent : primary);
         break;
       }
       case Kind::Chip:
