@@ -39,7 +39,8 @@ using sovereign::tray::UiPage;
 std::vector<sovereign::tray::UiChip> SampleBoard() {
   using sovereign::tray::UiChip;
   return {
-      {.kind = UiChip::Kind::Lan, .index = 0, .bucket = 0, .text = L"Локальная сеть", .detail = {}, .icon = {},
+      // Closed, the printer let in (SampleContent's lanClosed and lanHosts).
+      {.kind = UiChip::Kind::Lan, .index = 0, .bucket = 2, .text = L"Локальная сеть", .detail = L"кроме 1", .icon = {},
        .logo = "lan"},
       {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"},
       {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads"},

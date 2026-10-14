@@ -100,7 +100,8 @@ struct UiService {
 };
 // A thing on the routing board: a service, a site or a program (a rule), one
 // of the lists - Russian sites, ads, cookie windows - or the local network
-// (directly, always - it only says so). Its bucket is where it goes, a
+// (directly, or blocked when the computer is closed from it: a click
+// toggles that). Its bucket is where it goes, a
 // RouteRule::Action's number: 0 directly, 1 through the proxy, 2 blocked,
 // 3 through WARP.
 struct UiChip {

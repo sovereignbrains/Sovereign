@@ -1093,9 +1093,7 @@ class Painter {
     }
     // Where everything else goes: said on that bucket, with how many it doesn't show.
     const int restBucket = r.finalDirect ? kBucketDirect : kBucketProxy;
-    const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) {
-      return chip.idle && chip.kind != UiChip::Kind::Lan;  // the local network isn't the user's to count
-    });
+    const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
     const std::wstring rest = idle > 0 ? std::format(L"и всё остальное · скрыто {}", idle) : std::wstring(L"и всё остальное");
     const std::wstring restHint =
         idle > 0 ? std::wstring(L"Скрытое и так идёт сюда вместе со всем остальным, поэтому ничего не меняет. Оно "
@@ -1163,10 +1161,7 @@ class Painter {
       for (const auto& [n, at] : placed) {
         const UiChip& chip = r.board[n];
         const D2D1_RECT_F place = {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom};
-        // The local network goes nowhere else: no click.
-        Item tag = chip.kind == UiChip::Kind::Lan
-                       ? Make(Kind::Tag, place, chip.text)
-                       : CommandItem(Kind::Tag, place, chip.text, nullptr, UiCommand::ChipMenu, static_cast<int>(n));
+        Item tag = CommandItem(Kind::Tag, place, chip.text, nullptr, UiCommand::ChipMenu, static_cast<int>(n));
         tag.detail = chip.detail;
         tag.text2 = chip.icon;
         tag.logo = chip.logo;

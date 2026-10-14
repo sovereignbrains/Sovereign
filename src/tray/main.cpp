@@ -3343,9 +3343,13 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   using sovereign::tray::ServiceRoute;
   using sovereign::tray::UiChip;
   const auto& r = v.routing;
-  // The local network: directly before any rule (OwnFrame) - said, not changed.
-  std::vector<UiChip> board = {{.kind = UiChip::Kind::Lan, .index = 0, .bucket = sovereign::tray::kBucketDirect,
-                                .text = L"Локальная сеть", .detail = {}, .icon = {}, .logo = "lan"}};
+  // The local network: directly before any rule (OwnFrame), or closed both
+  // ways - but for the devices let in - by the service's filter (lanClosed).
+  std::vector<UiChip> board = {
+      {.kind = UiChip::Kind::Lan, .index = 0,
+       .bucket = v.lanClosed ? sovereign::tray::kBucketBlock : sovereign::tray::kBucketDirect, .text = L"Локальная сеть",
+       .detail = v.lanClosed && !v.lanAllowed.empty() ? std::format(L"кроме {}", v.lanAllowed.size()) : std::wstring(),
+       .icon = {}, .logo = "lan"}};
   if (r.russiaDirect) {
     board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
                      .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"});
@@ -3427,7 +3431,7 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     if (chip.bucket != rest) {
       continue;
     }
-    if (chip.kind == UiChip::Kind::Russia || chip.kind == UiChip::Kind::Lan) {
+    if (chip.kind == UiChip::Kind::Russia) {
       chip.idle = true;  // everything else is direct: so are these, nothing to say
     } else if (chip.kind == UiChip::Kind::Service) {
       // Through a country is an exception still; otherwise it goes where it would anyway.
@@ -4133,6 +4137,16 @@ void ShowMainWindow(UiPage page) {
   }
 }
 
+// The local network closed both ways, or open again (settings' lanClosed).
+void RequestToggleLanClosed() {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingToggleLanClosed = true;
+  }
+  Wake();
+}
+
 // An address let into the closed local network (true) or shut out again.
 void RequestLan(sovereign::tray::LanHost host, bool allow) {
   {
@@ -4417,10 +4431,14 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::BoardAdd: {
       // What can go to this bucket: a list that's off, a service, a program, a site.
-      enum class Add : std::uint8_t { Russia, Ads, Cookies, Service, Program, Site };
+      enum class Add : std::uint8_t { Lan, Russia, Ads, Cookies, Service, Program, Site };
       const int bucket = args.index;
       std::vector<std::wstring> items;
       std::vector<Add> adds;
+      if (bucket == (view.lanClosed ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketBlock)) {
+        items.emplace_back(L"Локальная сеть");
+        adds.push_back(Add::Lan);
+      }
       if (bucket == sovereign::tray::kBucketDirect && !r.russiaDirect) {
         items.emplace_back(L"Российские сайты");
         adds.push_back(Add::Russia);
@@ -4451,6 +4469,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
       switch (adds[*picked]) {
+        case Add::Lan: RequestToggleLanClosed(); break;
         case Add::Russia: send(What::RussiaDirect, true); break;
         case Add::Ads: send(What::BlockAds, true); break;
         case Add::Cookies: send(What::CookieWindows, true); break;
@@ -4544,7 +4563,16 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
       if (chip.kind == UiChip::Kind::Lan) {
-        break;  // nowhere else to go
+        // Open or closed (the settings' switch, here too); who's let in is said there.
+        const std::vector<std::wstring> items = {
+            view.lanClosed ? L"Открыть компьютер для сети" : L"Закрыть компьютер от сети: никто к нему, он ни к кому",
+            L"Кому разрешить связь…"};
+        if (const auto picked = PickFromMenu(owner, cursor, items, -1); picked && *picked == 0) {
+          RequestToggleLanClosed();
+        } else if (picked) {
+          ShowMainWindow(UiPage::Settings);
+        }
+        break;
       }
 
       // The buckets in the board's order, then (a service) the countries, then away.
