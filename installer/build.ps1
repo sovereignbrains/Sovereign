@@ -46,19 +46,19 @@ try {
   # The flags in the tray's resources are flag-icons' (MIT): its notice ships too.
   Copy-Item 'assets/flags/LICENSE' (Join-Path $stage 'LICENSE-flag-icons.txt')
 
-  $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+  # A path either way: where it's in PATH, or where its installer puts it.
+  $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
   if (-not $iscc) {
-    $known = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-    if (-not (Test-Path $known)) {
+    $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+    if (-not (Test-Path $iscc)) {
       choco install innosetup -y --no-progress
       if ($LASTEXITCODE -ne 0) { throw "installing Inno Setup failed" }
     }
-    $iscc = Get-Item $known
   }
 
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   $out = (Resolve-Path $OutDir).Path
-  & $iscc.Source "/DAppVersion=$Version" "/DSourceDir=$stage" "/DOutputDir=$out" 'installer/sovereign.iss'
+  & $iscc "/DAppVersion=$Version" "/DSourceDir=$stage" "/DOutputDir=$out" 'installer/sovereign.iss'
   if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
   $name = "Sovereign-Setup-$Version.exe"
