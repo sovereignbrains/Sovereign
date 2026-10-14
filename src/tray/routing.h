@@ -78,16 +78,23 @@ std::string CountryNameVia(std::string_view code);
 
 // Two uppercase Latin letters.
 bool IsCountryCode(std::string_view code);
+// A service is its site and its app together: its names (the geosite
+// list), its addresses where its app dials them rather than names
+// (Telegram's), and its desktop app's exes - picked once, it takes all three.
 struct ServiceInfo {
   std::string_view id;
   std::string_view name;     // as people know it: "Netflix"
   std::string_view geosite;  // the list: geosite-<geosite>.srs
+  std::string_view apps;     // its desktop app's exe names, ","-separated: "steam.exe,steamwebhelper.exe"
+  std::string_view geoip;    // a list of its addresses (an .srs URL); empty: none
 };
+// A service's apps, one name each.
+std::vector<std::string> ServiceApps(const ServiceInfo& service);
 // The services that can be sent their own way, in the order offered.
 std::span<const ServiceInfo> ServiceCatalog();
 const ServiceInfo* FindService(std::string_view id);
-// The service a program is the app of, by its exe's name: "Telegram.exe" is
-// Telegram's, "steam.exe" Steam's; nullptr: none.
+// The service a program is the app of, by its exe's name: one of its apps
+// ("EpicGamesLauncher.exe"), or named as it ("Telegram.exe"); nullptr: none.
 const ServiceInfo* ServiceOfProgram(std::string_view exe);
 
 struct RoutingSettings {

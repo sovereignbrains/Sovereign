@@ -3416,9 +3416,10 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     }
     board.push_back(std::move(chip));
   }
-  // A service's own program beside it (Telegram.exe by Telegram): folded into
-  // the service's chip (UiChip::program) - not through a country, which the
-  // program doesn't go by.
+  // A service's own app with a rule of its own in the same bucket (Telegram.exe
+  // by Telegram, from before a service took its app in): nothing apart -
+  // folded into the service's chip (UiChip::program), moved and removed with
+  // it. In another bucket it's the app sent apart: shown.
   for (const UiChip& program : board) {
     if (program.kind != UiChip::Kind::Rule) {
       continue;
@@ -3434,7 +3435,6 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     });
     if (own != board.end()) {
       own->program = program.index;
-      own->detail = L"и программа";
     }
   }
   std::vector<int> folded;
@@ -3625,9 +3625,15 @@ std::optional<RunningApp> PickProgram(HWND window, POINT at, const std::vector<s
 
 void AddProgram(HWND window, POINT at, int bucket, const std::wstring& note) {
   const View view = CurrentView();
-  std::vector<std::string> named;  // on the board already
+  std::vector<std::string> named;  // on the board already, as programs or as services' apps
   for (const auto& rule : view.routing.rules) {
     named.insert(named.end(), rule.processes.begin(), rule.processes.end());
+  }
+  for (const auto& service : view.routing.services) {
+    if (const auto* info = sovereign::tray::FindService(service.id)) {
+      const std::vector<std::string> apps = sovereign::tray::ServiceApps(*info);
+      named.insert(named.end(), apps.begin(), apps.end());
+    }
   }
   if (const auto app = PickProgram(window, at, named, note)) {
     RequestRoutingChange({.what = RoutingChange::What::AddRule, .on = false, .value = bucket, .index = 0,
@@ -4687,41 +4693,87 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
 
-      // A service: the buckets, then the countries, then away.
-      std::vector<std::wstring> items(kBuckets.begin(), kBuckets.end());
-      const auto at = std::find(kOrder.begin(), kOrder.end(), chip.bucket);
-      int current = at == kOrder.end() ? -1 : static_cast<int>(at - kOrder.begin());
-      std::vector<std::string> countries;
-      if (chip.kind == UiChip::Kind::Service) {
-        const sovereign::tray::ServiceRoute& s = r.services[static_cast<std::size_t>(chip.index)];
-        current = s.way == sovereign::tray::ServiceRoute::Way::Country ? -1 : current;
-        countries = KnownExitCountries(view);
-        for (const std::string& code : countries) {
-          current = s.way == sovereign::tray::ServiceRoute::Way::Country && s.country == code
-                        ? static_cast<int>(items.size())
-                        : current;
-          items.push_back(L"Через " + Widen(sovereign::tray::CountryNameVia(code)));
-        }
+      // A service: what it takes in (its site and its app) said first; the
+      // buckets, the countries, its app sent apart, away.
+      if (chip.kind != UiChip::Kind::Service) {
+        break;
+      }
+      const sovereign::tray::ServiceRoute& s = r.services[static_cast<std::size_t>(chip.index)];
+      const auto* info = sovereign::tray::FindService(s.id);
+      const std::vector<std::string> apps =
+          info != nullptr ? sovereign::tray::ServiceApps(*info) : std::vector<std::string>{};
+      std::wstring appNames;
+      for (const std::string& app : apps) {
+        appNames += (appNames.empty() ? L"" : L", ") + Widen(app);
+      }
+      enum class Do : std::uint8_t { Nothing, Way, Country, Apart, Away };
+      std::vector<std::wstring> items;
+      std::vector<std::pair<Do, std::size_t>> does;  // per item: what, and which way or country
+      std::vector<std::size_t> labels;
+      if (!apps.empty()) {
+        labels.push_back(items.size());
+        items.push_back(L"Сайт и приложение (" + appNames + L")");
+        items.emplace_back();
+        does.insert(does.end(), 2, {Do::Nothing, 0});
+      }
+      int current = -1;
+      for (std::size_t i = 0; i < kOrder.size(); ++i) {
+        const bool here = kOrder.at(i) == chip.bucket && s.way != sovereign::tray::ServiceRoute::Way::Country;
+        current = here ? static_cast<int>(items.size()) : current;
+        items.emplace_back(kBuckets.at(i));
+        does.emplace_back(Do::Way, i);
+      }
+      const std::vector<std::string> countries = KnownExitCountries(view);
+      for (std::size_t i = 0; i < countries.size(); ++i) {
+        const bool here = s.way == sovereign::tray::ServiceRoute::Way::Country && s.country == countries[i];
+        current = here ? static_cast<int>(items.size()) : current;
+        items.push_back(L"Через " + Widen(sovereign::tray::CountryNameVia(countries[i])));
+        does.emplace_back(Do::Country, i);
+      }
+      items.emplace_back();
+      does.emplace_back(Do::Nothing, 0);
+      if (!apps.empty()) {
+        items.emplace_back(L"Приложение — отдельно…");
+        does.emplace_back(Do::Apart, 0);
       }
       items.emplace_back(L"Убрать");
-      const auto picked = PickFromMenu(owner, cursor, items, current);
+      does.emplace_back(Do::Away, 0);
+      const auto picked = PickFromMenu(owner, cursor, items, current, {}, labels);
       if (!picked) {
         break;
       }
-      const bool away = *picked == items.size() - 1;
-      if (away) {
-        send(What::RemoveService, false, 0, chip.index);
-        if (chip.program >= 0) {
-          send(What::RemoveRule, false, 0, chip.program);  // its program with it: they were one thing
+      const auto [what, which] = does.at(*picked);
+      switch (what) {
+        case Do::Nothing: break;
+        case Do::Way: {
+          static constexpr std::array<const char*, 4> kWays = {"proxy", "direct", "warp", "block"};
+          send(What::SetServiceWay, true, 0, chip.index, kWays.at(which));
+          if (chip.program >= 0) {
+            send(What::SetRuleAction, false, kOrder.at(which), chip.program);
+          }
+          break;
         }
-      } else if (*picked < kOrder.size()) {
-        static constexpr std::array<const char*, 4> kWays = {"proxy", "direct", "warp", "block"};
-        send(What::SetServiceWay, true, 0, chip.index, kWays.at(*picked));
-        if (chip.program >= 0) {
-          send(What::SetRuleAction, false, kOrder.at(*picked), chip.program);
+        case Do::Country: send(What::SetServiceWay, true, 0, chip.index, countries.at(which)); break;
+        case Do::Apart: {
+          // Its app a rule of its own, in a bucket of its own: before the
+          // service (routing.cpp), so it goes there whatever its names say.
+          std::vector<std::wstring> ways = {L"Куда приложение " + appNames + L":", L""};
+          ways.insert(ways.end(), kBuckets.begin(), kBuckets.end());
+          if (const auto to = PickFromMenu(owner, cursor, ways, -1, {}, {0}); to && *to >= 2) {
+            std::string typed;
+            for (const std::string& app : apps) {
+              typed += app + " ";
+            }
+            send(What::AddRule, false, kOrder.at(*to - 2), 0, typed);
+          }
+          break;
         }
-      } else {
-        send(What::SetServiceWay, true, 0, chip.index, countries.at(*picked - kOrder.size()));
+        case Do::Away:
+          send(What::RemoveService, false, 0, chip.index);
+          if (chip.program >= 0) {
+            send(What::RemoveRule, false, 0, chip.program);  // its app's rule with it: they were one thing
+          }
+          break;
       }
       break;
     }

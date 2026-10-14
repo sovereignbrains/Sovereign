@@ -680,6 +680,41 @@ void TestServices() {
   }
 }
 
+// A service is its site and its app: Telegram by its names, its addresses
+// (its app dials them) and Telegram.exe, all one way. The app sent apart by
+// the user goes before the service - else the service's lists took it.
+void TestServiceApps() {
+  CHECK(ServiceOfProgram("EpicGamesLauncher.exe") == FindService("epicgames"));
+  CHECK(ServiceOfProgram("steamwebhelper.exe") == FindService("steam"));
+  CHECK(ServiceApps(*FindService("steam")) == std::vector<std::string>({"steam.exe", "steamwebhelper.exe"}));
+  CHECK(ServiceApps(*FindService("netflix")).empty());
+  RoutingSettings s;
+  s.services.push_back({.id = "telegram", .way = ServiceRoute::Way::Proxy, .country = {}});
+  bool ips = false;
+  for (const RuleSetSource& set : NeededRuleSets(s)) {
+    ips = ips || (set.tag == "sov-svc-telegram-ip" && set.ips && set.url.ends_with("/telegram.srs"));
+  }
+  CHECK(ips);
+  const auto keys = BuildConfigFromLinks({"trojan://pw@nl.example.com:443#NL"}).config.value_or("{}");
+  const std::string config = CombineConfigs({{"Ключи", keys, {}}}, OwnFrame(s)).config.value_or("{}");
+  const std::map<std::string, std::string> files = {{"sov-svc-telegram", "C:/lists/a.srs"},
+                                                    {"sov-svc-telegram-ip", "C:/lists/b.srs"}};
+  const auto order = [&](const RoutingSettings& settings) {
+    std::vector<std::string> seen;
+    for (const json& r : json::parse(ApplyRouting(config, settings, files))["route"]["rules"]) {
+      if (r.value("rule_set", json()) == json::array({"sov-svc-telegram", "sov-svc-telegram-ip"})) {
+        seen.push_back("lists:" + r.value("outbound", ""));
+      } else if (r.contains("process_name") && r["process_name"][0] == "Telegram.exe") {
+        seen.push_back("app:" + r.value("outbound", ""));
+      }
+    }
+    return seen;
+  };
+  CHECK(order(s) == std::vector<std::string>({"lists:proxy", "app:proxy"}));
+  s.rules.push_back(*ParseRule("Telegram.exe", RouteRule::Action::Direct));  // the app apart
+  CHECK(order(s) == std::vector<std::string>({"app:direct", "lists:proxy"}));
+}
+
 // The routing board: a service directly, through the proxy or blocked, kept
 // in tray.json; a site the user sent somewhere wins over a program sent
 // elsewhere - the program rules after the site rules, whatever the order
@@ -934,6 +969,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestTypos();
     TestServices();
     TestServiceCountry();
+    TestServiceApps();
     TestBoard();
     TestWarp();
     TestNaiveInsecure();

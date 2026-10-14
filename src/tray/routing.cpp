@@ -38,38 +38,45 @@ constexpr std::string_view kCookieFilter = "https://filters.adtidy.org/extension
 constexpr const char* kLocalDns = "sov-local";
 constexpr std::string_view kServicePrefix = "sov-svc-";  // a service's list: sov-svc-<id>
 
+// A service's addresses' list (ServiceInfo::geoip): sov-svc-<id>-ip.
+std::string ServiceIpsTag(std::string_view id) { return std::string(kServicePrefix) + std::string(id) + "-ip"; }
+
 // What people want sent elsewhere: shut to a VPS's country (video, AI) or
 // wanted apart, or wanted directly (games, the system's updates). Each list
 // checked to exist in sing-geosite (06.10.2026, the second half 08.10.2026).
+// Telegram's addresses: its app dials them, not names (MTProto, no name to
+// sniff) - sing-geoip has no such list, MetaCubeX's meta-rules-dat has.
+constexpr std::string_view kTelegramIps = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/telegram.srs";
+
 constexpr std::array<ServiceInfo, 28> kServices = {{
-    {"netflix", "Netflix", "netflix"},
-    {"youtube", "YouTube", "youtube"},
-    {"chatgpt", "ChatGPT", "openai"},
-    {"gemini", "Gemini", "google-gemini"},
-    {"claude", "Claude", "anthropic"},
-    {"spotify", "Spotify", "spotify"},
-    {"disney", "Disney+", "disney"},
-    {"hbo", "HBO Max", "hbo"},
-    {"primevideo", "Prime Video", "primevideo"},
-    {"twitch", "Twitch", "twitch"},
-    {"tiktok", "TikTok", "tiktok"},
-    {"instagram", "Instagram", "instagram"},
-    {"facebook", "Facebook", "facebook"},
-    {"x", "X (Twitter)", "twitter"},
-    {"discord", "Discord", "discord"},
-    {"telegram", "Telegram", "telegram"},
-    {"whatsapp", "WhatsApp", "whatsapp"},
-    {"google", "Google", "google"},
-    {"perplexity", "Perplexity", "perplexity"},
-    {"grok", "Grok", "xai"},
-    {"github", "GitHub", "github"},
-    {"reddit", "Reddit", "reddit"},
-    {"linkedin", "LinkedIn", "linkedin"},
-    {"soundcloud", "SoundCloud", "soundcloud"},
-    {"steam", "Steam", "steam"},
-    {"epicgames", "Epic Games", "epicgames"},
-    {"microsoft", "Microsoft", "microsoft"},
-    {"apple", "Apple", "apple"},
+    {"netflix", "Netflix", "netflix", {}, {}},
+    {"youtube", "YouTube", "youtube", {}, {}},
+    {"chatgpt", "ChatGPT", "openai", "ChatGPT.exe", {}},
+    {"gemini", "Gemini", "google-gemini", {}, {}},
+    {"claude", "Claude", "anthropic", {}, {}},
+    {"spotify", "Spotify", "spotify", "Spotify.exe", {}},
+    {"disney", "Disney+", "disney", {}, {}},
+    {"hbo", "HBO Max", "hbo", {}, {}},
+    {"primevideo", "Prime Video", "primevideo", {}, {}},
+    {"twitch", "Twitch", "twitch", {}, {}},
+    {"tiktok", "TikTok", "tiktok", {}, {}},
+    {"instagram", "Instagram", "instagram", {}, {}},
+    {"facebook", "Facebook", "facebook", {}, {}},
+    {"x", "X (Twitter)", "twitter", {}, {}},
+    {"discord", "Discord", "discord", "Discord.exe", {}},
+    {"telegram", "Telegram", "telegram", "Telegram.exe", kTelegramIps},
+    {"whatsapp", "WhatsApp", "whatsapp", "WhatsApp.exe,WhatsApp.Root.exe", {}},
+    {"google", "Google", "google", {}, {}},
+    {"perplexity", "Perplexity", "perplexity", "Perplexity.exe", {}},
+    {"grok", "Grok", "xai", {}, {}},
+    {"github", "GitHub", "github", "GitHubDesktop.exe", {}},
+    {"reddit", "Reddit", "reddit", {}, {}},
+    {"linkedin", "LinkedIn", "linkedin", {}, {}},
+    {"soundcloud", "SoundCloud", "soundcloud", {}, {}},
+    {"steam", "Steam", "steam", "steam.exe,steamwebhelper.exe", {}},
+    {"epicgames", "Epic Games", "epicgames", "EpicGamesLauncher.exe,EpicWebHelper.exe", {}},
+    {"microsoft", "Microsoft", "microsoft", {}, {}},
+    {"apple", "Apple", "apple", {}, {}},
 }};
 
 constexpr std::string_view kGeositeBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/";
@@ -855,10 +862,29 @@ const ServiceInfo* FindService(std::string_view id) {
   return it == kServices.end() ? nullptr : &*it;
 }
 
+std::vector<std::string> ServiceApps(const ServiceInfo& service) {
+  std::vector<std::string> apps;
+  for (std::string_view rest = service.apps; !rest.empty();) {
+    const std::size_t comma = std::min(rest.find(','), rest.size());
+    if (comma > 0) {
+      apps.emplace_back(rest.substr(0, comma));
+    }
+    rest.remove_prefix(std::min(comma + 1, rest.size()));
+  }
+  return apps;
+}
+
 const ServiceInfo* ServiceOfProgram(std::string_view exe) {
   std::string name = Lower(exe);
   if (!name.ends_with(".exe")) {
     return nullptr;
+  }
+  for (const ServiceInfo& s : kServices) {
+    for (const std::string& app : ServiceApps(s)) {
+      if (Lower(app) == name) {
+        return &s;
+      }
+    }
   }
   name.resize(name.size() - 4);
   // The name's letters and digits alone: "Epic Games" would be epicgames.exe.
@@ -943,6 +969,9 @@ std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
     if (const ServiceInfo* info = FindService(r.id)) {
       sets.push_back({std::string(kServicePrefix) + r.id,
                       std::string(kGeositeBase) + "geosite-" + std::string(info->geosite) + ".srs", false});
+      if (!info->geoip.empty()) {
+        sets.push_back({ServiceIpsTag(r.id), std::string(info->geoip), true});
+      }
     }
   }
   return sets;
@@ -1188,20 +1217,61 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   // bank directly even from a browser sent through WARP), and a browser sent
   // through the proxy has its ads cut too (before 0.4.58 it went past them).
   add(any, sites);
-  // Services: each by its list, after the user's sites.
+  // A service's app the user sent its own way (Telegram.exe while Telegram
+  // goes elsewhere - "the app apart"): before the services, or the service's
+  // names and addresses would take the app's traffic first.
+  std::vector<std::string> serviceApps;  // of the services there are, lower case
   for (const ServiceRoute& s : settings.services) {
-    const std::string tag = std::string(kServicePrefix) + s.id;
-    if (!lists.contains(tag)) {
+    if (const ServiceInfo* info = FindService(s.id)) {
+      for (const std::string& app : ServiceApps(*info)) {
+        serviceApps.push_back(Lower(app));
+      }
+    }
+  }
+  const auto appApart = [&](const RouteRule& r) {
+    return std::any_of(r.processes.begin(), r.processes.end(), [&](const std::string& p) {
+      return std::find(serviceApps.begin(), serviceApps.end(), Lower(p)) != serviceApps.end();
+    });
+  };
+  add([&](const RouteRule& r) { return r.action != RouteRule::Action::Block && appApart(r); }, programs);
+  // Services: each by its names and addresses, and its app - but one the
+  // user has a rule of their own for - after the user's sites.
+  std::set<std::string> ruled;  // programs with a rule of the user's, lower case
+  for (const RouteRule& r : settings.rules) {
+    for (const std::string& p : r.processes) {
+      ruled.insert(Lower(p));
+    }
+  }
+  for (const ServiceRoute& s : settings.services) {
+    const ServiceInfo* info = FindService(s.id);
+    if (info == nullptr) {
       continue;
     }
+    Json sets = Json::array();
+    for (const std::string& tag : {std::string(kServicePrefix) + s.id, ServiceIpsTag(s.id)}) {
+      if (lists.contains(tag)) {
+        sets.push_back(tag);
+      }
+    }
+    std::vector<std::string> apps;
+    for (const std::string& app : ServiceApps(*info)) {
+      if (!ruled.contains(Lower(app))) {
+        apps.push_back(app);
+      }
+    }
+    if (sets.empty() && apps.empty()) {
+      continue;
+    }
+    // Where it goes, as a rule's ending: an outbound or a refusal.
+    Json to = Json::object();
     if (s.way == ServiceRoute::Way::Warp && !warp.empty()) {
-      rules.push_back(Json{{"rule_set", tag}, {"outbound", warp}});
+      to["outbound"] = warp;
     } else if (s.way == ServiceRoute::Way::Direct) {
-      rules.push_back(Json{{"rule_set", tag}, {"outbound", direct}});
+      to["outbound"] = direct;
     } else if (s.way == ServiceRoute::Way::Proxy && !proxy.empty()) {
-      rules.push_back(Json{{"rule_set", tag}, {"outbound", proxy}});
+      to["outbound"] = proxy;
     } else if (s.way == ServiceRoute::Way::Block) {
-      rules.push_back(Json{{"rule_set", tag}, {"action", "reject"}});
+      to["action"] = "reject";
     } else if (s.way == ServiceRoute::Way::Country && !proxy.empty()) {
       // A selector of its own: the main group first (its default - as usual
       // until the tray knows which server is in that country), then the
@@ -1211,8 +1281,23 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       const std::string out = ServiceOutboundTag(s.id);
       if (members.size() > 1 && !Tags(outbounds).contains(out)) {
         outbounds.push_back(Json{{"type", "selector"}, {"tag", out}, {"outbounds", members}, {"default", proxy}});
-        rules.push_back(Json{{"rule_set", tag}, {"outbound", out}});
+        to["outbound"] = out;
       }
+    }
+    if (to.empty()) {
+      continue;
+    }
+    if (!sets.empty()) {
+      Json rule = Json::object();
+      rule["rule_set"] = sets.size() == 1 ? sets[0] : sets;
+      rule.update(to);
+      rules.push_back(std::move(rule));
+    }
+    if (!apps.empty()) {
+      Json rule = Json::object();
+      rule["process_name"] = apps;
+      rule.update(to);
+      rules.push_back(std::move(rule));
     }
   }
   if (!adsLists.empty()) {
@@ -1230,7 +1315,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   if (BlockQuic(settings, config)) {
     rules.push_back(Json{{"protocol", "quic"}, {"action", "reject"}});
   }
-  add([](const RouteRule& r) { return r.action != RouteRule::Action::Block; }, programs);
+  add([&](const RouteRule& r) { return r.action != RouteRule::Action::Block && !appApart(r); }, programs);
   std::size_t at = 0;
   for (const Json& r : route["rules"]) {
     const std::string action = Str(r, "action");
