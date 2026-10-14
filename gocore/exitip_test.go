@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -95,4 +99,26 @@ func TestExitIPLive(t *testing.T) {
 		}()
 	}
 	wait.Wait()
+}
+
+// What a QUIC-based outbound's stream returns at its end: the last data with
+// io.EOF wrapped (sing-quic's qtls.WrapError). eofConn hands io.EOF itself,
+// as crypto/tls needs, and leaves other errors alone.
+type wrappedEOFConn struct {
+	net.Conn
+	err error
+}
+
+func (c wrappedEOFConn) Read(p []byte) (int, error) { return copy(p, "tail"), c.err }
+
+func TestEOFConnUnwrapsEOF(t *testing.T) {
+	buf := make([]byte, 8)
+	n, err := eofConn{wrappedEOFConn{err: fmt.Errorf("stream: %w", io.EOF)}}.Read(buf)
+	if n != 4 || err != io.EOF {
+		t.Errorf("wrapped EOF: got %d, %v; want 4, io.EOF itself", n, err)
+	}
+	other := errors.New("reset")
+	if _, err := (eofConn{wrappedEOFConn{err: other}}).Read(buf); err != other {
+		t.Errorf("another error: got %v", err)
+	}
 }

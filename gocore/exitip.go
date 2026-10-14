@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -161,7 +162,11 @@ func lookupExitIP(ctx context.Context, outbound adapter.Outbound) exitIPState {
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(addr))
+				conn, err := outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(addr))
+				if err != nil {
+					return nil, err
+				}
+				return eofConn{conn}, nil
 			},
 			TLSClientConfig: &tls.Config{
 				Time:    ntp.TimeFuncFromContext(ctx),
@@ -177,13 +182,7 @@ func lookupExitIP(ctx context.Context, outbound adapter.Outbound) exitIPState {
 	var found exitIPState
 	var failure string
 	for _, source := range exitIPSources {
-		// Twice: QUIC-based servers (Hysteria2, TUIC) drop about every other
-		// new stream at once with EOF (seen 02.10.2026 on the user's own);
-		// the next one goes through.
 		body, err := fetchExitIP(ctx, &client, source.url)
-		if err != nil && ctx.Err() == nil {
-			body, err = fetchExitIP(ctx, &client, source.url)
-		}
 		if err == nil {
 			state := source.parse(body)
 			switch {
@@ -209,6 +208,22 @@ func lookupExitIP(ctx context.Context, outbound adapter.Outbound) exitIPState {
 		return found
 	}
 	return exitIPState{Error: failure}
+}
+
+// eofConn hands its reader io.EOF itself. The QUIC-based outbounds (TUIC,
+// Hysteria2: sing-quic's qtls.WrapError) return it wrapped, and crypto/tls
+// compares with ==: an answer that comes together with the stream's end - a
+// server closing right after it, as "Connection: close" asks - was dropped,
+// and every lookup through them failed with "EOF" (14.10.2026). The core's
+// own relaying doesn't care: it writes what was read before the error.
+type eofConn struct{ net.Conn }
+
+func (c eofConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err != nil && err != io.EOF && errors.Is(err, io.EOF) {
+		err = io.EOF
+	}
+	return n, err
 }
 
 func fetchExitIP(ctx context.Context, client *http.Client, url string) ([]byte, error) {

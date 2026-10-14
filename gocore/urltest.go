@@ -179,7 +179,11 @@ func newProbeClient(ctx context.Context, dialer N.Dialer, destination M.Socksadd
 				return nil, errors.New("connection lost")
 			}
 			used = true
-			return dialer.DialContext(dialCtx, N.NetworkTCP, destination)
+			conn, err := dialer.DialContext(dialCtx, N.NetworkTCP, destination)
+			if err != nil {
+				return nil, err
+			}
+			return eofConn{conn}, nil // TUIC and Hysteria2 wrap the EOF: see eofConn
 		},
 		TLSClientConfig: &tls.Config{
 			Time:    ntp.TimeFuncFromContext(ctx),
