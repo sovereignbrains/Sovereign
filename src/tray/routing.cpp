@@ -48,35 +48,41 @@ std::string ServiceIpsTag(std::string_view id) { return std::string(kServicePref
 // sniff) - sing-geoip has no such list, MetaCubeX's meta-rules-dat has.
 constexpr std::string_view kTelegramIps = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/telegram.srs";
 
+// Where Steam and the Epic Games launcher put games: Steam in every library's
+// steamapps\common, on any drive; Epic in an "Epic Games" folder (its default -
+// moved when installing, a game isn't found).
+constexpr std::string_view kSteamGames = R"((?i)\\steamapps\\common\\)";
+constexpr std::string_view kEpicGames = R"((?i)\\Epic Games\\)";
+
 constexpr std::array<ServiceInfo, 28> kServices = {{
-    {"netflix", "Netflix", "netflix", {}, {}},
-    {"youtube", "YouTube", "youtube", {}, {}},
-    {"chatgpt", "ChatGPT", "openai", "ChatGPT.exe", {}},
-    {"gemini", "Gemini", "google-gemini", {}, {}},
-    {"claude", "Claude", "anthropic", {}, {}},
-    {"spotify", "Spotify", "spotify", "Spotify.exe", {}},
-    {"disney", "Disney+", "disney", {}, {}},
-    {"hbo", "HBO Max", "hbo", {}, {}},
-    {"primevideo", "Prime Video", "primevideo", {}, {}},
-    {"twitch", "Twitch", "twitch", {}, {}},
-    {"tiktok", "TikTok", "tiktok", {}, {}},
-    {"instagram", "Instagram", "instagram", {}, {}},
-    {"facebook", "Facebook", "facebook", {}, {}},
-    {"x", "X (Twitter)", "twitter", {}, {}},
-    {"discord", "Discord", "discord", "Discord.exe", {}},
-    {"telegram", "Telegram", "telegram", "Telegram.exe", kTelegramIps},
-    {"whatsapp", "WhatsApp", "whatsapp", "WhatsApp.exe,WhatsApp.Root.exe", {}},
-    {"google", "Google", "google", {}, {}},
-    {"perplexity", "Perplexity", "perplexity", "Perplexity.exe", {}},
-    {"grok", "Grok", "xai", {}, {}},
-    {"github", "GitHub", "github", "GitHubDesktop.exe", {}},
-    {"reddit", "Reddit", "reddit", {}, {}},
-    {"linkedin", "LinkedIn", "linkedin", {}, {}},
-    {"soundcloud", "SoundCloud", "soundcloud", {}, {}},
-    {"steam", "Steam", "steam", "steam.exe,steamwebhelper.exe", {}},
-    {"epicgames", "Epic Games", "epicgames", "EpicGamesLauncher.exe,EpicWebHelper.exe", {}},
-    {"microsoft", "Microsoft", "microsoft", {}, {}},
-    {"apple", "Apple", "apple", {}, {}},
+    {"netflix", "Netflix", "netflix", {}, {}, {}},
+    {"youtube", "YouTube", "youtube", {}, {}, {}},
+    {"chatgpt", "ChatGPT", "openai", "ChatGPT.exe", {}, {}},
+    {"gemini", "Gemini", "google-gemini", {}, {}, {}},
+    {"claude", "Claude", "anthropic", {}, {}, {}},
+    {"spotify", "Spotify", "spotify", "Spotify.exe", {}, {}},
+    {"disney", "Disney+", "disney", {}, {}, {}},
+    {"hbo", "HBO Max", "hbo", {}, {}, {}},
+    {"primevideo", "Prime Video", "primevideo", {}, {}, {}},
+    {"twitch", "Twitch", "twitch", {}, {}, {}},
+    {"tiktok", "TikTok", "tiktok", {}, {}, {}},
+    {"instagram", "Instagram", "instagram", {}, {}, {}},
+    {"facebook", "Facebook", "facebook", {}, {}, {}},
+    {"x", "X (Twitter)", "twitter", {}, {}, {}},
+    {"discord", "Discord", "discord", "Discord.exe", {}, {}},
+    {"telegram", "Telegram", "telegram", "Telegram.exe", kTelegramIps, {}},
+    {"whatsapp", "WhatsApp", "whatsapp", "WhatsApp.exe,WhatsApp.Root.exe", {}, {}},
+    {"google", "Google", "google", {}, {}, {}},
+    {"perplexity", "Perplexity", "perplexity", "Perplexity.exe", {}, {}},
+    {"grok", "Grok", "xai", {}, {}, {}},
+    {"github", "GitHub", "github", "GitHubDesktop.exe", {}, {}},
+    {"reddit", "Reddit", "reddit", {}, {}, {}},
+    {"linkedin", "LinkedIn", "linkedin", {}, {}, {}},
+    {"soundcloud", "SoundCloud", "soundcloud", {}, {}, {}},
+    {"steam", "Steam", "steam", "steam.exe,steamwebhelper.exe", {}, kSteamGames},
+    {"epicgames", "Epic Games", "epicgames", "EpicGamesLauncher.exe,EpicWebHelper.exe", {}, kEpicGames},
+    {"microsoft", "Microsoft", "microsoft", {}, {}, {}},
+    {"apple", "Apple", "apple", {}, {}, {}},
 }};
 
 constexpr std::string_view kGeositeBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/";
@@ -1242,6 +1248,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       ruled.insert(Lower(p));
     }
   }
+  std::vector<Json> games;  // the services' games: after the user's programs (below)
   for (const ServiceRoute& s : settings.services) {
     const ServiceInfo* info = FindService(s.id);
     if (info == nullptr) {
@@ -1259,7 +1266,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
         apps.push_back(app);
       }
     }
-    if (sets.empty() && apps.empty()) {
+    if (sets.empty() && apps.empty() && info->games.empty()) {
       continue;
     }
     // Where it goes, as a rule's ending: an outbound or a refusal.
@@ -1299,6 +1306,12 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       rule.update(to);
       rules.push_back(std::move(rule));
     }
+    if (!info->games.empty()) {
+      Json rule = Json::object();
+      rule["process_path_regex"] = Json::array({std::string(info->games)});
+      rule.update(to);
+      games.push_back(std::move(rule));
+    }
   }
   if (!adsLists.empty()) {
     rules.push_back(Json{{"rule_set", adsLists}, {"action", "reject"}});
@@ -1316,6 +1329,10 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     rules.push_back(Json{{"protocol", "quic"}, {"action", "reject"}});
   }
   add([&](const RouteRule& r) { return r.action != RouteRule::Action::Block && !appApart(r); }, programs);
+  // The services' games after the user's programs: one sent its own way
+  // (cs2.exe) goes there; the rest where their service goes - a game's own
+  // traffic, to its servers' addresses, nothing before took.
+  rules.insert(rules.end(), std::make_move_iterator(games.begin()), std::make_move_iterator(games.end()));
   std::size_t at = 0;
   for (const Json& r : route["rules"]) {
     const std::string action = Str(r, "action");

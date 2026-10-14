@@ -87,6 +87,10 @@ struct ServiceInfo {
   std::string_view geosite;  // the list: geosite-<geosite>.srs
   std::string_view apps;     // its desktop app's exe names, ","-separated: "steam.exe,steamwebhelper.exe"
   std::string_view geoip;    // a list of its addresses (an .srs URL); empty: none
+  // Where the games it installs are (a process_path_regex): a game is a
+  // program of its own, dialing its servers' addresses - neither the
+  // service's names nor its app catch it. Empty: none.
+  std::string_view games;
 };
 // A service's apps, one name each.
 std::vector<std::string> ServiceApps(const ServiceInfo& service);

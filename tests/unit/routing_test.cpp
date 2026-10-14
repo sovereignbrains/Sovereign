@@ -713,6 +713,27 @@ void TestServiceApps() {
   CHECK(order(s) == std::vector<std::string>({"lists:proxy", "app:proxy"}));
   s.rules.push_back(*ParseRule("Telegram.exe", RouteRule::Action::Direct));  // the app apart
   CHECK(order(s) == std::vector<std::string>({"app:direct", "lists:proxy"}));
+
+  // Steam's games by where they lie, its way; after a game the user sent
+  // elsewhere. The real sing-box checks the regex (Checked).
+  RoutingSettings g;
+  g.services.push_back({.id = "steam", .way = ServiceRoute::Way::Direct, .country = {}});
+  g.rules.push_back(*ParseRule("cs2.exe", RouteRule::Action::Proxy));
+  const std::string text = ApplyRouting(config, g, {});
+  Checked().emplace_back("games", text);
+  int game = -1;
+  int games = -1;
+  const json parsed = json::parse(text);
+  const json& rules = parsed["route"]["rules"];
+  for (std::size_t i = 0; i < rules.size(); ++i) {
+    const json& r = rules[i];
+    game = r.contains("process_name") && r["process_name"][0] == "cs2.exe" ? static_cast<int>(i) : game;
+    if (r.contains("process_path_regex")) {
+      CHECK(r["process_path_regex"] == json::array({R"((?i)\\steamapps\\common\\)"}) && r.value("outbound", "") == "direct");
+      games = static_cast<int>(i);
+    }
+  }
+  CHECK(game >= 0 && games > game);
 }
 
 // The routing board: a service directly, through the proxy or blocked, kept
