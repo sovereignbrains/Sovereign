@@ -390,6 +390,9 @@ struct RoutingChange {
     AddRule,        // text: what was typed; value: RouteRule::Action (WARP: turned on); path: a program's exe
     SetRuleAction,  // index; value: RouteRule::Action (WARP: turned on)
     RemoveRule,     // index
+    EditRule,       // index; text: its sites and programs anew (routing.h EditRule)
+    AddToRule,      // index; text: a program's exe name; path: its exe, for the icon
+    NameRule,       // index; text: its name (empty: none)
     ImportFrom,     // text: a configuration's id - its rules copied
     Warp,           // on (a device registered first if there's none)
     AddService,     // text: the service's id; value: the board's bucket (WARP: turned on)
@@ -1093,6 +1096,23 @@ class Worker {
       case RoutingChange::What::RemoveRule:
         if (change.index >= 0 && static_cast<std::size_t>(change.index) < r.rules.size()) {
           r.rules.erase(r.rules.begin() + change.index);
+        }
+        break;
+      case RoutingChange::What::EditRule:
+        if (change.index >= 0) {
+          sovereign::tray::EditRule(r.rules, static_cast<std::size_t>(change.index), change.text);
+        }
+        break;
+      case RoutingChange::What::AddToRule:
+        if (change.index >= 0 &&
+            sovereign::tray::AddProgramToRule(r.rules, static_cast<std::size_t>(change.index), change.text) &&
+            !change.path.empty()) {
+          sovereign::tray::SetAppPath(settings_, change.text, change.path);  // its icon
+        }
+        break;
+      case RoutingChange::What::NameRule:
+        if (change.index >= 0 && static_cast<std::size_t>(change.index) < r.rules.size()) {
+          r.rules[static_cast<std::size_t>(change.index)].name = sovereign::tray::CleanRuleName(change.text);
         }
         break;
       case RoutingChange::What::ImportFrom:
@@ -3385,7 +3405,8 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   for (std::size_t n = 0; n < r.rules.size(); ++n) {
     const sovereign::tray::RouteRule& rule = r.rules[n];
     UiChip chip{.kind = UiChip::Kind::Rule, .index = static_cast<int>(n), .bucket = static_cast<int>(rule.action),
-                .text = Widen(sovereign::tray::RuleText(rule)), .detail = {}, .icon = {}, .logo = {}};
+                .text = Widen(rule.name.empty() ? sovereign::tray::RuleText(rule) : rule.name), .detail = {},
+                .icon = {}, .logo = {}};
     if (rule.processes.size() == 1 && rule.domains.empty() && rule.keywords.empty() && rule.ips.empty()) {
       for (const auto& [name, path] : v.programPaths) {
         if (SameName(name, rule.processes.front())) {
@@ -3566,13 +3587,11 @@ void AddExe(HWND window) {
   }
 }
 
-void AddProgram(HWND window, POINT at, int bucket, const std::wstring& note) {
-  const View view = CurrentView();
-  std::vector<std::string> named;  // on the board already
-  for (const auto& rule : view.routing.rules) {
-    named.insert(named.end(), rule.processes.begin(), rule.processes.end());
-  }
-  const std::vector<RunningApp> running = RunningApps(named);
+// A program picked: one with a window now (not of `listed`), or an exe from
+// a file; `note`: a grey line said first (empty: none). Nullopt: none picked.
+std::optional<RunningApp> PickProgram(HWND window, POINT at, const std::vector<std::string>& listed,
+                                      const std::wstring& note) {
+  const std::vector<RunningApp> running = RunningApps(listed);
   std::vector<std::wstring> items;
   std::vector<wil::unique_hbitmap> icons;
   items.reserve(running.size() + 3);
@@ -3593,22 +3612,27 @@ void AddProgram(HWND window, POINT at, int bucket, const std::wstring& note) {
   const auto picked =
       PickFromMenu(window, at, items, -1, icons, skip > 0 ? std::vector<std::size_t>{0} : std::vector<std::size_t>{});
   if (!picked || *picked < skip) {
-    return;
+    return std::nullopt;
   }
-  const std::size_t app = *picked - skip;
-  std::string name;
-  std::string path;
-  if (app < running.size()) {
-    name = running[app].name;
-    path = running[app].path;
-  } else if (const auto exe = PickExe(window)) {
-    path = Narrow(*exe);
-    name = Narrow(exe->substr(exe->find_last_of(L'\\') + 1));
-  } else {
-    return;
+  if (const std::size_t app = *picked - skip; app < running.size()) {
+    return running[app];
   }
-  RequestRoutingChange(
-      {.what = RoutingChange::What::AddRule, .on = false, .value = bucket, .index = 0, .text = name, .path = path});
+  if (const auto exe = PickExe(window)) {
+    return RunningApp{.name = Narrow(exe->substr(exe->find_last_of(L'\\') + 1)), .path = Narrow(*exe)};
+  }
+  return std::nullopt;
+}
+
+void AddProgram(HWND window, POINT at, int bucket, const std::wstring& note) {
+  const View view = CurrentView();
+  std::vector<std::string> named;  // on the board already
+  for (const auto& rule : view.routing.rules) {
+    named.insert(named.end(), rule.processes.begin(), rule.processes.end());
+  }
+  if (const auto app = PickProgram(window, at, named, note)) {
+    RequestRoutingChange({.what = RoutingChange::What::AddRule, .on = false, .value = bucket, .index = 0,
+                          .text = app->name, .path = app->path});
+  }
 }
 
 void RequestUrlTest() {
@@ -4521,6 +4545,25 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         send(What::AddRule, false, args.index, 0, Narrow(args.text));
       }
       break;
+    case UiCommand::ChipRuleText:
+    case UiCommand::ChipRuleName: {  // typed over a rule's chip
+      const std::vector<sovereign::tray::UiChip> board = BoardOf(view);
+      if (args.index < 0 || static_cast<std::size_t>(args.index) >= board.size() ||
+          board[static_cast<std::size_t>(args.index)].kind != sovereign::tray::UiChip::Kind::Rule) {
+        break;
+      }
+      const int rule = board[static_cast<std::size_t>(args.index)].index;
+      if (command == UiCommand::ChipRuleName) {
+        send(What::NameRule, false, 0, rule, Narrow(args.text));  // empty: the name gone
+      } else if (!sovereign::tray::ParseRule(Narrow(args.text), sovereign::tray::RouteRule::Action::Direct)) {
+        if (g_trayIcon != nullptr && !args.text.empty()) {
+          g_trayIcon->Balloon(L"Sovereign", L"Не понял: нужны сайты (example.com), IP-подсети или программы (.exe).");
+        }
+      } else {
+        send(What::EditRule, false, 0, rule, Narrow(args.text));
+      }
+      break;
+    }
     case UiCommand::ChipMenu: {
       using sovereign::tray::UiChip;
       const std::vector<UiChip> board = BoardOf(view);
@@ -4574,11 +4617,78 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         break;
       }
-
-      // The buckets in the board's order, then (a service) the countries, then away.
+      // The buckets in the board's order.
       static constexpr std::array kOrder = {sovereign::tray::kBucketProxy, sovereign::tray::kBucketDirect,
                                             sovereign::tray::kBucketWarp, sovereign::tray::kBucketBlock};
-      std::vector<std::wstring> items = {L"Через прокси", L"Напрямую", L"Через WARP", L"Блок"};
+      static constexpr std::array<const wchar_t*, 4> kBuckets = {L"Через прокси", L"Напрямую", L"Через WARP", L"Блок"};
+
+      if (chip.kind == UiChip::Kind::Rule) {
+        // Its way; then what's in it typed anew, a program added - its sites
+        // and its app, a service of the user's own - a name; or away. Named,
+        // what the name stands for is said first.
+        const sovereign::tray::RouteRule& rule = r.rules[static_cast<std::size_t>(chip.index)];
+        enum class Do : std::uint8_t { Nothing, Way, Edit, AddApp, Name, Away };
+        std::vector<std::wstring> items;
+        std::vector<std::pair<Do, int>> does;  // per item: what, and for a way its bucket
+        std::vector<std::size_t> labels;
+        int current = -1;
+        if (!rule.name.empty()) {
+          std::wstring inside = Widen(sovereign::tray::RuleText(rule));
+          if (inside.size() > 60) {
+            inside = inside.substr(0, 59) + L"…";
+          }
+          labels.push_back(items.size());
+          items.push_back(std::move(inside));
+          items.emplace_back();
+          does.insert(does.end(), 2, {Do::Nothing, 0});
+        }
+        for (std::size_t i = 0; i < kOrder.size(); ++i) {
+          current = kOrder.at(i) == chip.bucket ? static_cast<int>(items.size()) : current;
+          items.emplace_back(kBuckets.at(i));
+          does.emplace_back(Do::Way, kOrder.at(i));
+        }
+        items.emplace_back();
+        does.emplace_back(Do::Nothing, 0);
+        for (const auto& [text, what] : std::initializer_list<std::pair<const wchar_t*, Do>>{
+                 {L"Изменить…", Do::Edit},
+                 {L"Добавить программу…", Do::AddApp},
+                 {rule.name.empty() ? L"Назвать…" : L"Переименовать…", Do::Name},
+                 {L"Убрать", Do::Away}}) {
+          items.emplace_back(text);
+          does.emplace_back(what, 0);
+        }
+        const auto picked = PickFromMenu(owner, cursor, items, current, {}, labels);
+        if (!picked) {
+          break;
+        }
+        switch (does.at(*picked).first) {
+          case Do::Nothing: break;
+          case Do::Way: send(What::SetRuleAction, false, does.at(*picked).second, chip.index); break;
+          case Do::Edit:
+            if (g_mainWindow != nullptr) {
+              g_mainWindow->EditInPlace(UiCommand::ChipMenu, args.index, UiCommand::ChipRuleText,
+                                        Widen(sovereign::tray::RuleInput(rule)), false);
+            }
+            break;
+          case Do::AddApp:
+            if (const auto app = PickProgram(owner, cursor, rule.processes, {})) {
+              RequestRoutingChange({.what = What::AddToRule, .on = false, .value = 0, .index = chip.index,
+                                    .text = app->name, .path = app->path});
+            }
+            break;
+          case Do::Name:
+            if (g_mainWindow != nullptr) {
+              g_mainWindow->EditInPlace(UiCommand::ChipMenu, args.index, UiCommand::ChipRuleName, Widen(rule.name),
+                                        false);
+            }
+            break;
+          case Do::Away: send(What::RemoveRule, false, 0, chip.index); break;
+        }
+        break;
+      }
+
+      // A service: the buckets, then the countries, then away.
+      std::vector<std::wstring> items(kBuckets.begin(), kBuckets.end());
       const auto at = std::find(kOrder.begin(), kOrder.end(), chip.bucket);
       int current = at == kOrder.end() ? -1 : static_cast<int>(at - kOrder.begin());
       std::vector<std::string> countries;
@@ -4599,13 +4709,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
       const bool away = *picked == items.size() - 1;
-      if (chip.kind == UiChip::Kind::Rule) {
-        if (away) {
-          send(What::RemoveRule, false, 0, chip.index);
-        } else {
-          send(What::SetRuleAction, false, kOrder.at(*picked), chip.index);
-        }
-      } else if (away) {
+      if (away) {
         send(What::RemoveService, false, 0, chip.index);
         if (chip.program >= 0) {
           send(What::RemoveRule, false, 0, chip.program);  // its program with it: they were one thing
@@ -4730,6 +4834,8 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::BoardAdd:
     case UiCommand::BoardSiteText:
     case UiCommand::ChipMenu:
+    case UiCommand::ChipRuleText:
+    case UiCommand::ChipRuleName:
       OnRoutingCommand(owner, command, args, view);
       break;
     case UiCommand::ToggleProfile:

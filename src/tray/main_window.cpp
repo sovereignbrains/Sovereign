@@ -3016,12 +3016,14 @@ struct MainWindow::Impl {
       const bool button = it.action == ItemAction::Command && it.command == anchor && it.index == index;
       if (title || button) {
         D2D1_RECT_F rect = it.rect;
-        if (anchor == UiCommand::BoardAdd) {
-          // Its button is a "+" in a bucket's corner: a site is typed across the bucket.
+        if (anchor == UiCommand::BoardAdd || anchor == UiCommand::ChipMenu) {
+          // A "+" in a bucket's corner: a site is typed across the bucket, up
+          // to the "+"; a chip: what's in it, or its name, across the bucket.
           for (const Item& card : layout.items) {
             if (card.kind == Kind::Card && card.rect.top <= it.rect.top && card.rect.bottom >= it.rect.bottom &&
                 card.rect.left <= it.rect.left && card.rect.right >= it.rect.right) {
-              rect = {card.rect.left + 8, it.rect.top, it.rect.left - 4, it.rect.bottom};
+              rect = {card.rect.left + 8, it.rect.top,
+                      anchor == UiCommand::BoardAdd ? it.rect.left - 4 : card.rect.right - 8, it.rect.bottom};
             }
           }
         }

@@ -157,6 +157,12 @@ void TestImport() {
   MergeRules(merged, rules);
   CHECK(merged.size() == 3);
   CHECK(ImportRules("not json").empty());
+  // A program and a site at once there is both together; a rule here is
+  // either - not taken over.
+  CHECK(ImportRules(R"({"outbounds":[{"type":"direct","tag":"d"}],"route":{"rules":[)"
+                    R"({"process_name":["app.exe"],"domain_suffix":["a.example"],"outbound":"d"},)"
+                    R"({"process_name":["app.exe"],"outbound":"d"}]}})")
+            .size() == 1);
 }
 
 // QUIC: auto refuses it through TCP servers, lets it through when every
@@ -310,6 +316,24 @@ void TestOrder() {
     }
   }
   CHECK(order == std::vector<std::string>({"Bad.exe", "bank", "ads", "quic", "msedge.exe"}));
+
+  // A site and a program in one rule: either matches - each its own sing-box
+  // rule in its place, neither asking for both at once.
+  s.rules.push_back(*ParseRule("qwen.ai, Qwen.exe", RouteRule::Action::Direct));
+  const json m = json::parse(ApplyRouting(config, s, {{"sov-ads", "C:/lists/sov-ads.srs"}}));
+  std::vector<std::string> parts;
+  for (const json& r : m["route"]["rules"]) {
+    if (r.contains("process_name") && r.contains("domain_suffix")) {
+      parts.emplace_back("both");
+    } else if (r.contains("domain_suffix") && r["domain_suffix"][0] == "qwen.ai") {
+      parts.emplace_back("qwen.ai");
+    } else if (r.contains("process_name") && r["process_name"][0] == "Qwen.exe") {
+      parts.emplace_back("Qwen.exe");
+    } else if (r.value("rule_set", json()) == "sov-ads" || r.value("rule_set", json()) == json::array({"sov-ads"})) {
+      parts.emplace_back("ads");
+    }
+  }
+  CHECK(parts == std::vector<std::string>({"qwen.ai", "ads", "Qwen.exe"}));
 }
 
 void TestOwn() {
@@ -599,6 +623,30 @@ void TestServices() {
   CHECK(list);
   CHECK(FindService("chatgpt") != nullptr && FindService("chatgpt")->geosite == "openai");
   CHECK(ServiceCatalog().size() >= 10);
+  // A service of the user's own: sites and the app in one rule, named; kept.
+  {
+    std::vector<RouteRule> rules = {*ParseRule("qwen.ai", RouteRule::Action::Proxy),
+                                    *ParseRule("Qwen.exe", RouteRule::Action::Direct),
+                                    *ParseRule("other.example", RouteRule::Action::Block)};
+    CHECK(AddProgramToRule(rules, 0, "Qwen.exe"));  // its lone rule goes: part of this one now
+    CHECK(rules.size() == 2 && rules[0].processes == std::vector<std::string>({"Qwen.exe"}) &&
+          rules[0].action == RouteRule::Action::Proxy);
+    CHECK(AddProgramToRule(rules, 0, "QWEN.EXE") && rules[0].processes.size() == 1);  // not twice
+    CHECK(!AddProgramToRule(rules, 0, "not a program") && !AddProgramToRule(rules, 7, "a.exe"));
+    rules[0].name = CleanRuleName("  Qwen\n ");
+    CHECK(rules[0].name == "Qwen");
+    CHECK(EditRule(rules, 0, "qwen.ai, qwenlm.ai, \"Qwen Chat.exe\""));
+    CHECK(rules[0].name == "Qwen" && rules[0].action == RouteRule::Action::Proxy && rules[0].domains.size() == 2 &&
+          rules[0].processes == std::vector<std::string>({"Qwen Chat.exe"}));
+    CHECK(RuleInput(rules[0]) == "qwen.ai, qwenlm.ai, \"Qwen Chat.exe\"");
+    CHECK(!EditRule(rules, 0, "!!!") && rules[0].domains.size() == 2);  // nothing understood: as it was
+    CHECK(EditRule(rules, 0, "other.example") && rules.size() == 1);    // the same as another: that one gives way
+    RoutingSettings named;
+    named.rules = rules;
+    CHECK(RoutingFromJson(json::parse(RoutingToJson(named).dump())).rules.at(0).name == "Qwen");
+    CHECK(CleanRuleName(std::string(50, 'a')).size() == 40);
+    CHECK(CleanRuleName("Российские нейронки и ещё кое-что очень длинное") == "Российские нейронки и ещё кое-что очень");
+  }
   // A program by its service: the exe's name, any case; not a part of it.
   CHECK(ServiceOfProgram("Telegram.exe") == FindService("telegram"));
   CHECK(ServiceOfProgram("STEAM.EXE") == FindService("steam"));

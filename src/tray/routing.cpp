@@ -383,11 +383,15 @@ void AnswerTyposAtOnce(Json& dns) {
 nlohmann::json RoutingToJson(const RoutingSettings& s) {
   nlohmann::json rules = nlohmann::json::array();
   for (const RouteRule& r : s.rules) {
-    rules.push_back({{"domains", r.domains},
-                     {"keywords", r.keywords},
-                     {"ips", r.ips},
-                     {"processes", r.processes},
-                     {"action", ActionName(r.action)}});
+    nlohmann::json rule = {{"domains", r.domains},
+                           {"keywords", r.keywords},
+                           {"ips", r.ips},
+                           {"processes", r.processes},
+                           {"action", ActionName(r.action)}};
+    if (!r.name.empty()) {
+      rule["name"] = r.name;
+    }
+    rules.push_back(std::move(rule));
   }
   nlohmann::json services = nlohmann::json::array();
   for (const ServiceRoute& r : s.services) {
@@ -514,13 +518,16 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
         }
       }
       const std::string action = entry.contains("action") && entry["action"].is_string() ? entry["action"].get<std::string>() : "";
-      const auto rule = ParseRule(line, action == "block"   ? RouteRule::Action::Block
+      auto rule = ParseRule(line, action == "block"   ? RouteRule::Action::Block
                                         : action == "proxy" ? RouteRule::Action::Proxy
                                         : action == "warp"  ? RouteRule::Action::Warp
                                                             : RouteRule::Action::Direct);
       // One the same as an earlier one (in two buckets, before 0.4.57): only
       // the first ever worked - the rest dropped.
       if (rule && std::none_of(s.rules.begin(), s.rules.end(), [&](const RouteRule& r) { return SameThings(r, *rule); })) {
+        if (const auto name = entry.find("name"); name != entry.end() && name->is_string()) {
+          rule->name = CleanRuleName(name->get<std::string>());
+        }
         s.rules.push_back(*rule);
       }
     }
@@ -653,7 +660,11 @@ std::vector<RouteRule> ImportRules(std::string_view config) {
     for (auto it = r.begin(); it != r.end(); ++it) {
       simple = simple && kKnown.contains(it.key());
     }
-    if (!simple) {
+    // A program and sites together match both at once there; here a rule
+    // matches either - not the same rule, left out.
+    const bool sitesToo = r.contains("domain") || r.contains("domain_suffix") || r.contains("domain_keyword") ||
+                          r.contains("ip_cidr");
+    if (!simple || (r.contains("process_name") && sitesToo)) {
       continue;
     }
     const std::string action = Str(r, "action");
@@ -703,6 +714,76 @@ void MergeRules(std::vector<RouteRule>& into, const std::vector<RouteRule>& more
 void AddRule(std::vector<RouteRule>& rules, const RouteRule& rule) {
   std::erase_if(rules, [&](const RouteRule& r) { return SameThings(r, rule); });
   rules.push_back(rule);
+}
+
+std::string RuleInput(const RouteRule& rule) {
+  RouteRule quoted = rule;
+  for (std::string& p : quoted.processes) {
+    if (p.find(' ') != std::string::npos) {
+      p.insert(p.begin(), '"');
+      p += '"';
+    }
+  }
+  return RuleText(quoted);
+}
+
+bool EditRule(std::vector<RouteRule>& rules, std::size_t index, std::string_view text) {
+  if (index >= rules.size()) {
+    return false;
+  }
+  auto parsed = ParseRule(text, rules[index].action);
+  if (!parsed) {
+    return false;
+  }
+  parsed->name = rules[index].name;
+  rules[index] = *parsed;
+  const RouteRule& edited = *parsed;  // not rules[index]: the ones before it may go
+  for (std::size_t i = rules.size(); i-- > 0;) {
+    if (i != index && SameThings(rules[i], edited)) {
+      rules.erase(rules.begin() + static_cast<std::ptrdiff_t>(i));
+      index -= i < index ? 1 : 0;
+    }
+  }
+  return true;
+}
+
+bool AddProgramToRule(std::vector<RouteRule>& rules, std::size_t index, std::string_view exe) {
+  const auto alone = ProgramRule(exe, RouteRule::Action::Direct);
+  if (!alone || index >= rules.size()) {
+    return false;
+  }
+  std::vector<std::string>& processes = rules[index].processes;
+  if (std::none_of(processes.begin(), processes.end(), [&](const std::string& p) { return Lower(p) == Lower(exe); })) {
+    processes.emplace_back(exe);
+  }
+  for (std::size_t i = rules.size(); i-- > 0;) {
+    if (i != index && SameThings(rules[i], *alone)) {
+      rules.erase(rules.begin() + static_cast<std::ptrdiff_t>(i));
+      index -= i < index ? 1 : 0;
+    }
+  }
+  return true;
+}
+
+std::string CleanRuleName(std::string_view name) {
+  std::string out;
+  std::size_t characters = 0;
+  for (const char c : name) {
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte < 0x20 || byte == 0x7F) {
+      continue;  // one line
+    }
+    const bool starts = (byte & 0xC0) != 0x80;  // not a UTF-8 continuation byte
+    if (starts && ++characters > 40) {
+      break;
+    }
+    out += c;
+  }
+  const std::size_t first = out.find_first_not_of(' ');
+  if (first == std::string::npos) {
+    return {};
+  }
+  return out.substr(first, out.find_last_not_of(' ') - first + 1);
 }
 
 std::span<const ServiceInfo> ServiceCatalog() { return kServices; }
@@ -1046,7 +1127,12 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
 
   // Routing: the client's rules first, after sniffing and DNS hijacking.
   std::vector<Json> rules;
-  const auto match = [](const RouteRule& r) {
+  // A rule's sites (names, keywords, addresses) and its programs match
+  // apart, each part in its place below: in one sing-box rule they'd have to
+  // match together - only that program, only to those sites - where the
+  // user means either (before 0.4.78 "qwen.ai, Qwen.exe" missed the site in
+  // a browser).
+  const auto sites = [](const RouteRule& r) {
     Json m = Json::object();
     if (!r.domains.empty()) {
       m["domain_suffix"] = r.domains;
@@ -1057,18 +1143,25 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     if (!r.ips.empty()) {
       m["ip_cidr"] = r.ips;
     }
+    return m;
+  };
+  const auto programs = [](const RouteRule& r) {
+    Json m = Json::object();
     if (!r.processes.empty()) {
       m["process_name"] = r.processes;
     }
     return m;
   };
-  // The user's rules `pick` takes, in their order.
-  const auto add = [&](const auto& pick) {
+  // The part `match` makes of the user's rules `pick` takes, in their order.
+  const auto add = [&](const auto& pick, const auto& match) {
     for (const RouteRule& r : settings.rules) {
       if (!pick(r)) {
         continue;
       }
       Json rule = match(r);
+      if (rule.empty()) {
+        continue;  // nothing of that kind in it
+      }
       if (r.action == RouteRule::Action::Block) {
         rule["action"] = "reject";
       } else if (r.action == RouteRule::Action::Proxy) {
@@ -1087,14 +1180,14 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       rules.push_back(std::move(rule));
     }
   };
-  const auto program = [](const RouteRule& r) { return !r.processes.empty(); };
+  const auto any = [](const RouteRule&) { return true; };
   // A blocked program first of all: no network, whatever it asks for.
-  add([&](const RouteRule& r) { return program(r) && r.action == RouteRule::Action::Block; });
+  add([](const RouteRule& r) { return r.action == RouteRule::Action::Block; }, programs);
   // Then the sites, and the lists - services, ads, Russia, QUIC - before the
   // other programs: a site goes where it was sent from every program (the
   // bank directly even from a browser sent through WARP), and a browser sent
   // through the proxy has its ads cut too (before 0.4.58 it went past them).
-  add([&](const RouteRule& r) { return !program(r); });
+  add(any, sites);
   // Services: each by its list, after the user's sites.
   for (const ServiceRoute& s : settings.services) {
     const std::string tag = std::string(kServicePrefix) + s.id;
@@ -1137,7 +1230,7 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   if (BlockQuic(settings, config)) {
     rules.push_back(Json{{"protocol", "quic"}, {"action", "reject"}});
   }
-  add([&](const RouteRule& r) { return program(r) && r.action != RouteRule::Action::Block; });
+  add([](const RouteRule& r) { return r.action != RouteRule::Action::Block; }, programs);
   std::size_t at = 0;
   for (const Json& r : route["rules"]) {
     const std::string action = Str(r, "action");

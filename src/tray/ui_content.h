@@ -284,6 +284,8 @@ enum class UiCommand : std::uint8_t {
   BoardAdd,           // index: a bucket (UiChip::bucket); anchor: what can go there - a site typed across it
   BoardSiteText,      // index: the bucket; text: sites (or subnets) typed
   ChipMenu,           // index: into the board; anchor: where it goes instead, or away
+  ChipRuleText,       // index: into the board (a rule's chip); text: its sites and programs typed anew
+  ChipRuleName,       // index: into the board (a rule's chip); text: its name typed (empty: none)
   // The checks':
   RunChecks,          // everything but speed and an address
   RunSpeed,

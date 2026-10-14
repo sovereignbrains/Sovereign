@@ -35,6 +35,10 @@ struct RouteRule {
   std::vector<std::string> ips;        // ip_cidr ("1.2.3.0/24", a bare address is /32 or /128)
   std::vector<std::string> processes;  // process_name ("app.exe")
   Action action = Action::Direct;
+  // What the user calls it - "Qwen" for its sites and its app together, a
+  // service of their own; empty: none, the board says what's in it.
+  // Sites and programs of a rule match either, not both (ApplyRouting).
+  std::string name;
 };
 
 // A whole service sent its own way: Netflix through WARP (from a VPS's
@@ -167,6 +171,20 @@ void MergeRules(std::vector<RouteRule>& into, const std::vector<RouteRule>& more
 // `rule` put on the board: a rule for the same things in another bucket
 // gives way - one thing, one bucket (only the first of them ever worked).
 void AddRule(std::vector<RouteRule>& rules, const RouteRule& rule);
+
+// A rule as it's typed back to ParseRule: RuleText, a program with a space
+// in quotes - what editing it starts from.
+std::string RuleInput(const RouteRule& rule);
+// The rule at `index` holding what `text` says instead (ParseRule's), its
+// way and name kept; another rule for the same things gives way. False:
+// nothing understood (or no such rule), nothing changed.
+bool EditRule(std::vector<RouteRule>& rules, std::size_t index, std::string_view text);
+// `exe` added to the rule at `index` (not twice, case-blind): the app with
+// its sites, either matching. A rule that was that program alone goes - it's
+// part of this one now. False: not an exe's name, or no such rule.
+bool AddProgramToRule(std::vector<RouteRule>& rules, std::size_t index, std::string_view exe);
+// A rule's name as kept: one line, spaces trimmed, at most 40 characters.
+std::string CleanRuleName(std::string_view name);
 
 // The lists the rules need: downloaded by the tray (rule_set.srs files),
 // given to the box as local files - a list that can't be fetched never
