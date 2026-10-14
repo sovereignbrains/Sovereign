@@ -19,7 +19,7 @@ menus are always dark): a black logo is white here.
 - [Hysteria](https://github.com/apernet/hysteria) (MIT): hysteria - the "H" of its logo.svg (the first
   letter's polygons and the yellow stroke; the rest is lettering), white for the dark background.
 - Drawn for this app: disney, primevideo - their logos are lettering, unreadable at 16 px; a badge
-  in the brand's color instead. And lan, a router: the board's "local network" chip.
+  in the brand's color instead. And the board's lists: lan, a router (the local network), russia, the flag (Russian sites), ads, a shield (the ads lists), cookies, a cookie (cookie windows).
 
 Iconify's files lose their `width`/`height` (1em: the size is the viewport's). Checked by
 `ui-snapshot`: every service's logo draws.

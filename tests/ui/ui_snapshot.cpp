@@ -41,8 +41,8 @@ std::vector<sovereign::tray::UiChip> SampleBoard() {
   return {
       {.kind = UiChip::Kind::Lan, .index = 0, .bucket = 0, .text = L"Локальная сеть", .detail = {}, .icon = {},
        .logo = "lan"},
-      {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = {}},
-      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = {}},
+      {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"},
+      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads"},
       {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}, .logo = "netflix"},
       {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}, .logo = "chatgpt"},
       {.kind = UiChip::Kind::Service, .index = 2, .bucket = 1, .text = L"YouTube", .detail = L"США", .icon = {}, .logo = "youtube"},
@@ -308,7 +308,7 @@ int Snapshots(const std::wstring& dir) {
 
   // Every service's logo draws (assets/services: what Direct2D's SVG can't
   // draw comes out empty) - at the menus' 16 px and at 150 %.
-  std::vector<std::string_view> logos = {"lan", "hysteria", "cloudflare", "quad9"};  // the board's, the settings'
+  std::vector<std::string_view> logos = {"lan", "russia", "ads", "cookies", "hysteria", "cloudflare", "quad9"};  // the board's, the settings'
   for (const auto& service : sovereign::tray::ServiceCatalog()) {
     logos.push_back(service.id);
   }

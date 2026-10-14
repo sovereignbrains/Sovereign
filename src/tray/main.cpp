@@ -3348,15 +3348,15 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
                                 .text = L"Локальная сеть", .detail = {}, .icon = {}, .logo = "lan"}};
   if (r.russiaDirect) {
     board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
-                     .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = {}});
+                     .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"});
   }
   if (r.blockAds) {
     board.push_back({.kind = UiChip::Kind::Ads, .index = 0, .bucket = sovereign::tray::kBucketBlock,
-                     .text = L"Реклама", .detail = {}, .icon = {}, .logo = {}});
+                     .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads"});
   }
   if (r.cookieWindows) {
     board.push_back({.kind = UiChip::Kind::Cookies, .index = 0, .bucket = sovereign::tray::kBucketBlock,
-                     .text = L"Окна cookie", .detail = {}, .icon = {}, .logo = {}});
+                     .text = L"Окна cookie", .detail = {}, .icon = {}, .logo = "cookies"});
   }
   for (std::size_t n = 0; n < r.services.size(); ++n) {
     const ServiceRoute& s = r.services[n];
