@@ -47,6 +47,9 @@ std::vector<sovereign::tray::UiChip> SampleBoard() {
       {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}, .logo = "chatgpt"},
       {.kind = UiChip::Kind::Service, .index = 2, .bucket = 1, .text = L"YouTube", .detail = L"США", .icon = {}, .logo = "youtube"},
       {.kind = UiChip::Kind::Service, .index = 3, .bucket = 0, .text = L"Steam", .detail = {}, .icon = {}, .logo = "steam"},
+      // Its program folded into it (Telegram.exe).
+      {.kind = UiChip::Kind::Service, .index = 4, .bucket = 3, .text = L"Telegram", .detail = L"и программа",
+       .icon = {}, .logo = "telegram", .idle = false, .program = 5},
       {.kind = UiChip::Kind::Rule, .index = 0, .bucket = 0, .text = L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com",
        .detail = {}, .icon = {}, .logo = {}},
       {.kind = UiChip::Kind::Rule, .index = 1, .bucket = 1, .text = L"10.9.0.0/16, steam.exe", .detail = {},

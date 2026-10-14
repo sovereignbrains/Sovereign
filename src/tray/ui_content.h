@@ -113,9 +113,14 @@ struct UiChip {
   std::wstring icon;    // a program's exe, for its icon; empty: none known
   std::string logo;     // a service's id, for its logo (icons.h ServiceLogo); empty: none
   // In the bucket everything else goes to, changing nothing - a program there
-  // (its rule is the last before that very default), the Russian sites when
-  // everything else is direct: kept for the other mode, not shown.
+  // (its rule is the last before that very default), a service there (not
+  // through a country of its own), the Russian sites when everything else is
+  // direct: kept for the other mode, not shown.
   bool idle = false;
+  // Service: the rule of its own program in the same bucket (Telegram.exe by
+  // Telegram), folded into it - one thing on the board, its menu moves and
+  // removes both; -1: none.
+  int program = -1;
 };
 inline constexpr int kBucketDirect = 0;
 inline constexpr int kBucketProxy = 1;

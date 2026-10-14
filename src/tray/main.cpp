@@ -3391,6 +3391,36 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     }
     board.push_back(std::move(chip));
   }
+  // A service's own program beside it (Telegram.exe by Telegram): folded into
+  // the service's chip (UiChip::program) - not through a country, which the
+  // program doesn't go by.
+  for (const UiChip& program : board) {
+    if (program.kind != UiChip::Kind::Rule) {
+      continue;
+    }
+    const sovereign::tray::RouteRule& rule = r.rules[static_cast<std::size_t>(program.index)];
+    const auto* service = rule.processes.size() == 1 && rule.domains.empty() && rule.keywords.empty() && rule.ips.empty()
+                              ? sovereign::tray::ServiceOfProgram(rule.processes.front())
+                              : nullptr;
+    const auto own = std::find_if(board.begin(), board.end(), [&](const UiChip& chip) {
+      return service != nullptr && chip.kind == UiChip::Kind::Service && chip.bucket == program.bucket &&
+             chip.program < 0 && r.services[static_cast<std::size_t>(chip.index)].id == service->id &&
+             r.services[static_cast<std::size_t>(chip.index)].way != ServiceRoute::Way::Country;
+    });
+    if (own != board.end()) {
+      own->program = program.index;
+      own->detail = L"и программа";
+    }
+  }
+  std::vector<int> folded;
+  for (const UiChip& chip : board) {
+    if (chip.program >= 0) {
+      folded.push_back(chip.program);
+    }
+  }
+  std::erase_if(board, [&](const UiChip& chip) {
+    return chip.kind == UiChip::Kind::Rule && std::find(folded.begin(), folded.end(), chip.index) != folded.end();
+  });
   // In the bucket everything else goes to (ui_content.h UiChip::idle).
   const int rest = r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy;
   for (UiChip& chip : board) {
@@ -3399,6 +3429,9 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
     }
     if (chip.kind == UiChip::Kind::Russia || chip.kind == UiChip::Kind::Lan) {
       chip.idle = true;  // everything else is direct: so are these, nothing to say
+    } else if (chip.kind == UiChip::Kind::Service) {
+      // Through a country is an exception still; otherwise it goes where it would anyway.
+      chip.idle = r.services[static_cast<std::size_t>(chip.index)].way != ServiceRoute::Way::Country;
     } else if (chip.kind == UiChip::Kind::Rule) {
       const sovereign::tray::RouteRule& rule = r.rules[static_cast<std::size_t>(chip.index)];
       chip.idle = !rule.processes.empty() && rule.domains.empty() && rule.keywords.empty() && rule.ips.empty();
@@ -3408,8 +3441,9 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
 }
 
 // A program for a bucket of the board: one with a window now, or an exe
-// picked from a file - its rule added, its exe kept for the icon.
-void AddProgram(HWND window, POINT at, int bucket);
+// picked from a file - its rule added, its exe kept for the icon. `note`: a
+// grey line said first (empty: none).
+void AddProgram(HWND window, POINT at, int bucket, const std::wstring& note = {});
 
 struct RunningApp {
   std::string name;  // the exe's, what the rule matches
@@ -3528,7 +3562,7 @@ void AddExe(HWND window) {
   }
 }
 
-void AddProgram(HWND window, POINT at, int bucket) {
+void AddProgram(HWND window, POINT at, int bucket, const std::wstring& note) {
   const View view = CurrentView();
   std::vector<std::string> named;  // on the board already
   for (const auto& rule : view.routing.rules) {
@@ -3537,23 +3571,32 @@ void AddProgram(HWND window, POINT at, int bucket) {
   const std::vector<RunningApp> running = RunningApps(named);
   std::vector<std::wstring> items;
   std::vector<wil::unique_hbitmap> icons;
-  items.reserve(running.size() + 1);
-  icons.reserve(running.size() + 1);
+  items.reserve(running.size() + 3);
+  icons.reserve(running.size() + 3);
+  const std::size_t skip = note.empty() ? 0 : 2;  // the note and a line under it
+  if (skip > 0) {
+    items.push_back(note);
+    items.emplace_back();
+    icons.emplace_back();
+    icons.emplace_back();
+  }
   for (const RunningApp& app : running) {
     items.push_back(Widen(app.name));
     icons.push_back(MenuIcon(Widen(app.path)));
   }
   icons.push_back(StockMenuIcon(SIID_FOLDER));
   items.emplace_back(L"Файл .exe…");
-  const auto picked = PickFromMenu(window, at, items, -1, icons);
-  if (!picked) {
+  const auto picked =
+      PickFromMenu(window, at, items, -1, icons, skip > 0 ? std::vector<std::size_t>{0} : std::vector<std::size_t>{});
+  if (!picked || *picked < skip) {
     return;
   }
+  const std::size_t app = *picked - skip;
   std::string name;
   std::string path;
-  if (*picked < running.size()) {
-    name = running[*picked].name;
-    path = running[*picked].path;
+  if (app < running.size()) {
+    name = running[app].name;
+    path = running[app].path;
   } else if (const auto exe = PickExe(window)) {
     path = Narrow(*exe);
     name = Narrow(exe->substr(exe->find_last_of(L'\\') + 1));
@@ -4392,10 +4435,14 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       items.emplace_back(L"Сервис…");
       adds.push_back(Add::Service);
-      // Not where everything else goes anyway: a program there would change nothing.
-      if (bucket != (r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy)) {
-        items.emplace_back(L"Программа…");
-        adds.push_back(Add::Program);
+      items.emplace_back(L"Программа…");
+      adds.push_back(Add::Program);
+      // Where everything else goes anyway, a service or a program changes
+      // nothing and isn't shown (UiChip::idle): their menus say so first.
+      std::wstring idleNote;
+      if (bucket == (r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy)) {
+        idleNote = r.finalDirect ? L"Идёт напрямую и так: пригодится в режиме «всё, кроме исключений»"
+                                 : L"Идёт через VPN и так: пригодится в режиме «только выбранное»";
       }
       items.emplace_back(L"Сайт или адрес…");
       adds.push_back(Add::Site);
@@ -4417,13 +4464,24 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
               ids.emplace_back(s.id);
             }
           }
+          if (names.empty()) {
+            break;
+          }
+          std::vector<wil::unique_hbitmap> icons = ServiceMenuIcons(ids);
+          const std::size_t skip = idleNote.empty() ? 0 : 2;  // the note and a line under it
+          if (skip > 0) {
+            names.insert(names.begin(), {idleNote, L""});
+            icons.emplace(icons.begin());
+            icons.emplace(icons.begin());
+          }
           if (const auto service =
-                  names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1, ServiceMenuIcons(ids))) {
-            send(What::AddService, true, bucket, 0, ids[*service]);
+                  PickFromMenu(owner, args.anchor, names, -1, icons, skip > 0 ? std::vector<std::size_t>{0} : std::vector<std::size_t>{});
+              service && *service >= skip) {
+            send(What::AddService, true, bucket, 0, ids[*service - skip]);
           }
           break;
         }
-        case Add::Program: AddProgram(owner, args.anchor, bucket); break;
+        case Add::Program: AddProgram(owner, args.anchor, bucket, idleNote); break;
         case Add::Site:
           if (g_mainWindow != nullptr) {
             g_mainWindow->EditInPlace(UiCommand::BoardAdd, bucket, UiCommand::BoardSiteText, L"", false);
@@ -4521,9 +4579,15 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
       } else if (away) {
         send(What::RemoveService, false, 0, chip.index);
+        if (chip.program >= 0) {
+          send(What::RemoveRule, false, 0, chip.program);  // its program with it: they were one thing
+        }
       } else if (*picked < kOrder.size()) {
         static constexpr std::array<const char*, 4> kWays = {"proxy", "direct", "warp", "block"};
         send(What::SetServiceWay, true, 0, chip.index, kWays.at(*picked));
+        if (chip.program >= 0) {
+          send(What::SetRuleAction, false, kOrder.at(*picked), chip.program);
+        }
       } else {
         send(What::SetServiceWay, true, 0, chip.index, countries.at(*picked - kOrder.size()));
       }

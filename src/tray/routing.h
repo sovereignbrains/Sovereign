@@ -82,6 +82,9 @@ struct ServiceInfo {
 // The services that can be sent their own way, in the order offered.
 std::span<const ServiceInfo> ServiceCatalog();
 const ServiceInfo* FindService(std::string_view id);
+// The service a program is the app of, by its exe's name: "Telegram.exe" is
+// Telegram's, "steam.exe" Steam's; nullptr: none.
+const ServiceInfo* ServiceOfProgram(std::string_view exe);
 
 struct RoutingSettings {
   enum class RemoteDns : std::uint8_t { Cloudflare, Google, Quad9 };

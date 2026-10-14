@@ -774,6 +774,27 @@ const ServiceInfo* FindService(std::string_view id) {
   return it == kServices.end() ? nullptr : &*it;
 }
 
+const ServiceInfo* ServiceOfProgram(std::string_view exe) {
+  std::string name = Lower(exe);
+  if (!name.ends_with(".exe")) {
+    return nullptr;
+  }
+  name.resize(name.size() - 4);
+  // The name's letters and digits alone: "Epic Games" would be epicgames.exe.
+  const auto plain = [](std::string_view text) {
+    std::string out;
+    for (const char c : Lower(text)) {
+      if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+        out += c;
+      }
+    }
+    return out;
+  };
+  const auto it = std::find_if(kServices.begin(), kServices.end(),
+                               [&](const ServiceInfo& s) { return name == s.id || name == plain(s.name); });
+  return it == kServices.end() ? nullptr : &*it;
+}
+
 std::optional<std::string> AdGuardRuleSet(std::string_view filter) {
   std::vector<std::string> blocked;
   std::vector<std::string> allowed;

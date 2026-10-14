@@ -599,6 +599,13 @@ void TestServices() {
   CHECK(list);
   CHECK(FindService("chatgpt") != nullptr && FindService("chatgpt")->geosite == "openai");
   CHECK(ServiceCatalog().size() >= 10);
+  // A program by its service: the exe's name, any case; not a part of it.
+  CHECK(ServiceOfProgram("Telegram.exe") == FindService("telegram"));
+  CHECK(ServiceOfProgram("STEAM.EXE") == FindService("steam"));
+  CHECK(ServiceOfProgram("EpicGames.exe") == FindService("epicgames"));
+  CHECK(ServiceOfProgram("Telegram") == nullptr);
+  CHECK(ServiceOfProgram("TelegramDesktop.exe") == nullptr);
+  CHECK(ServiceOfProgram("chrome.exe") == nullptr);
 
   WarpAccount account;
   account.privateKey = "YJ9Lx3UFbVd6R+1QpYx0K5nV5+OYn5cB4m3Hk4qH0lI=";
