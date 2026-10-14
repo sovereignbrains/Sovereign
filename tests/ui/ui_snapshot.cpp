@@ -172,47 +172,58 @@ int Snapshots(const std::wstring& dir) {
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\overview-150.png");
   // Maximized on a laptop: the navigation kept to the page's width, the switch grown with the window.
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 1280, 800, 96, dir + L"\\overview-wide.png");
+  // Each variant below drawn from a copy of its own, in a function of its own:
+  // one UiContent on the stack at a time, not fourteen (C6262 in analyze).
+  const auto variant = [&content](const auto& draw) {
+    UiContent copy = content;
+    draw(copy);
+  };
   // The first screen: nothing yet - what the clipboard holds offered, or the ways to bring one.
-  UiContent first = content;
-  first.profiles.clear();
-  first.trouble.clear();
-  first.on = false;
-  first.display = sovereign::tray::Display::Off;
-  first.clipboardOffer = L"подписку с packetlab.tech";
-  sovereign::tray::RenderMainWindowSnapshot(first, UiPage::Overview, logs, 400, 700, 96, dir + L"\\first-offer.png");
-  first.clipboardOffer.clear();
-  sovereign::tray::RenderMainWindowSnapshot(first, UiPage::Overview, logs, 400, 700, 96, dir + L"\\first-empty.png");
+  variant([&](UiContent& first) {
+    first.profiles.clear();
+    first.trouble.clear();
+    first.on = false;
+    first.display = sovereign::tray::Display::Off;
+    first.clipboardOffer = L"подписку с packetlab.tech";
+    sovereign::tray::RenderMainWindowSnapshot(first, UiPage::Overview, logs, 400, 700, 96, dir + L"\\first-offer.png");
+    first.clipboardOffer.clear();
+    sovereign::tray::RenderMainWindowSnapshot(first, UiPage::Overview, logs, 400, 700, 96, dir + L"\\first-empty.png");
+  });
   // A subscription in trouble: the line and its support report on the main screen.
-  UiContent troubled = content;
-  troubled.trouble = L"«packetlab.tech»: не отвечает ни один сервер";
-  troubled.troubleProfile = 0;
-  troubled.troubleSupport = true;
-  sovereign::tray::RenderMainWindowSnapshot(troubled, UiPage::Overview, logs, 400, 760, 96, dir + L"\\overview-trouble.png");
+  variant([&](UiContent& troubled) {
+    troubled.trouble = L"«packetlab.tech»: не отвечает ни один сервер";
+    troubled.troubleProfile = 0;
+    troubled.troubleSupport = true;
+    sovereign::tray::RenderMainWindowSnapshot(troubled, UiPage::Overview, logs, 400, 760, 96,
+                                              dir + L"\\overview-trouble.png");
+  });
   // The routing: own, with rules; and a configuration's.
-  UiContent routed = content;
-  routed.routing.remoteDns = L"Cloudflare (DoH)";
-  routed.routing.localDns = L"Cloudflare (DoH)";
-  routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
-                          {L"10.9.0.0/16, steam.exe", L"через прокси"},
-                          {L"~tracker", L"блокировать"},
-                          {L"chatgpt.com", L"через WARP", true}};
-  routed.routing.warp = true;
-  routed.routing.warpRegistered = true;
-  routed.routing.warpAddress = L"172.16.0.2";
-  routed.routing.warpState = L"через «4G | Whitelist №1»";
-  routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
-  routed.routing.board = SampleBoard();
-  routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
-  sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1400, 96, dir + L"\\routing.png");
-  routed.routing.lists = L"Списки правил не скачались: сервер ответил 503. Пока работают зоны .ru/.рф/.su.";
-  routed.routing.listsFailed = true;
-  sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1100, 96,
-                                            dir + L"\\routing-lists-failed.png");
+  variant([&](UiContent& routed) {
+    routed.routing.remoteDns = L"Cloudflare (DoH)";
+    routed.routing.localDns = L"Cloudflare (DoH)";
+    routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
+                            {L"10.9.0.0/16, steam.exe", L"через прокси"},
+                            {L"~tracker", L"блокировать"},
+                            {L"chatgpt.com", L"через WARP", true}};
+    routed.routing.warp = true;
+    routed.routing.warpRegistered = true;
+    routed.routing.warpAddress = L"172.16.0.2";
+    routed.routing.warpState = L"через «4G | Whitelist №1»";
+    routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
+    routed.routing.board = SampleBoard();
+    routed.routing.lists = L"Списки правил на месте, обновлены 01.10 14:00; обновляются раз в сутки.";
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1400, 96, dir + L"\\routing.png");
+    routed.routing.lists = L"Списки правил не скачались: сервер ответил 503. Пока работают зоны .ru/.рф/.su.";
+    routed.routing.listsFailed = true;
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1100, 96,
+                                              dir + L"\\routing-lists-failed.png");
+  });
   // The checks: run, one warning, one failing, one running, speed and an address.
-  UiContent checked = content;
-  checked.checks = SampleChecks();
-  checked.checksRunning = true;
-  sovereign::tray::RenderMainWindowSnapshot(checked, UiPage::Checks, logs, 400, 1300, 96, dir + L"\\checks.png");
+  variant([&](UiContent& checked) {
+    checked.checks = SampleChecks();
+    checked.checksRunning = true;
+    sovereign::tray::RenderMainWindowSnapshot(checked, UiPage::Checks, logs, 400, 1300, 96, dir + L"\\checks.png");
+  });
   // A configuration's page: the first one's.
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Profile, logs, 400, 620, 96, dir + L"\\profile.png");
 
@@ -221,64 +232,76 @@ int Snapshots(const std::wstring& dir) {
   empty.display = sovereign::tray::Display::Off;
   empty.version = content.version;
   sovereign::tray::RenderMainWindowSnapshot(empty, UiPage::Overview, {}, 400, 620, 96, dir + L"\\overview-empty.png");
-  UiContent failed = content;
-  failed.display = sovereign::tray::Display::Error;
-  failed.error = L"уже работает другой клиент sing-box с TUN (адаптер sing-tun) — выключи его, Sovereign подключится сам";
-  failed.profiles[0].failed = true;
-  failed.profiles[0].error = L"сервер ответил 403";
-  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 400, 620, 96, dir + L"\\overview-error.png");
-  sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Profile, logs, 400, 620, 96,
-                                            dir + L"\\profile-error.png");
+  variant([&](UiContent& failed) {
+    failed.display = sovereign::tray::Display::Error;
+    failed.error = L"уже работает другой клиент sing-box с TUN (адаптер sing-tun) — выключи его, Sovereign подключится сам";
+    failed.profiles[0].failed = true;
+    failed.profiles[0].error = L"сервер ответил 403";
+    sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\overview-error.png");
+    sovereign::tray::RenderMainWindowSnapshot(failed, UiPage::Profile, logs, 400, 620, 96,
+                                              dir + L"\\profile-error.png");
+  });
   // A drop with the kill switch on: the internet held closed, and the switch
   // saying so; in settings, both switches.
-  UiContent held = content;
-  held.display = sovereign::tray::Display::Error;
-  held.error = L"ядро остановилось";
-  held.killSwitch = true;
-  held.killSwitchActive = true;
-  sovereign::tray::RenderMainWindowSnapshot(held, UiPage::Overview, logs, 400, 620, 96, dir + L"\\overview-killswitch.png");
-  held.killSwitchError = L"WFP: доступ запрещён";
-  sovereign::tray::RenderMainWindowSnapshot(held, UiPage::Settings, logs, 400, 620, 96, dir + L"\\settings-killswitch.png");
+  variant([&](UiContent& held) {
+    held.display = sovereign::tray::Display::Error;
+    held.error = L"ядро остановилось";
+    held.killSwitch = true;
+    held.killSwitchActive = true;
+    sovereign::tray::RenderMainWindowSnapshot(held, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\overview-killswitch.png");
+    held.killSwitchError = L"WFP: доступ запрещён";
+    sovereign::tray::RenderMainWindowSnapshot(held, UiPage::Settings, logs, 400, 620, 96,
+                                              dir + L"\\settings-killswitch.png");
+  });
 
   // A newer subscription over the user's edits: the choice; then, narrow,
   // the buttons stacked; and after a carry-over, where both sides met.
-  UiContent waiting = content;
-  waiting.profiles[0].edited = true;
-  waiting.profiles[0].waiting = true;
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 400, 620, 96,
-                                            dir + L"\\profile-waiting.png");
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Overview, logs, 400, 620, 96,
-                                            dir + L"\\overview-waiting.png");
-  waiting.profiles[0].choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
-  sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 360, 640, 96,
-                                            dir + L"\\profile-waiting-narrow.png");
+  variant([&](UiContent& waiting) {
+    waiting.profiles[0].edited = true;
+    waiting.profiles[0].waiting = true;
+    sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 400, 620, 96,
+                                              dir + L"\\profile-waiting.png");
+    sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\overview-waiting.png");
+    waiting.profiles[0].choiceError = L"после переноса правок конфиг не годится: в конфиге нет ни одного outbound";
+    sovereign::tray::RenderMainWindowSnapshot(waiting, UiPage::Profile, logs, 360, 640, 96,
+                                              dir + L"\\profile-waiting-narrow.png");
+  });
   // Locked out by the kill switch: why, and the way out.
-  UiContent locked = content;
-  locked.lockedOut = true;
-  locked.lockoutReason = L"ни один сервер не отвечает";
-  sovereign::tray::RenderMainWindowSnapshot(locked, UiPage::Overview, logs, 400, 620, 96,
-                                            dir + L"\\overview-lockout.png");
+  variant([&](UiContent& locked) {
+    locked.lockedOut = true;
+    locked.lockoutReason = L"ни один сервер не отвечает";
+    sovereign::tray::RenderMainWindowSnapshot(locked, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\overview-lockout.png");
+  });
   // The user's own network slow around the proxy too.
-  UiContent slowNet = content;
-  slowNet.localNetwork = L"Тормозит твоя сеть, а не VPN: напрямую до интернета 190 мс (обычно 15). Проверь Wi-Fi или провайдера.";
-  sovereign::tray::RenderMainWindowSnapshot(slowNet, UiPage::Overview, logs, 400, 620, 96,
-                                            dir + L"\\overview-slow-network.png");
+  variant([&](UiContent& slowNet) {
+    slowNet.localNetwork =
+        L"Тормозит твоя сеть, а не VPN: напрямую до интернета 190 мс (обычно 15). Проверь Wi-Fi или провайдера.";
+    sovereign::tray::RenderMainWindowSnapshot(slowNet, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\overview-slow-network.png");
+  });
   // The servers' latency in full: the spread, the requests, the connection.
-  UiContent detailed = content;
-  detailed.delaysDetailed = true;
-  sovereign::tray::RenderMainWindowSnapshot(detailed, UiPage::Servers, logs, 400, 620, 96,
-                                            dir + L"\\servers-detailed.png");
+  variant([&](UiContent& detailed) {
+    detailed.delaysDetailed = true;
+    sovereign::tray::RenderMainWindowSnapshot(detailed, UiPage::Servers, logs, 400, 620, 96,
+                                              dir + L"\\servers-detailed.png");
+  });
   // The exit's address hidden: the flag and the country.
-  UiContent hidden = content;
-  hidden.hideExitIp = true;
-  sovereign::tray::RenderMainWindowSnapshot(hidden, UiPage::Overview, logs, 400, 620, 96,
-                                            dir + L"\\overview-ip-hidden.png");
+  variant([&](UiContent& hidden) {
+    hidden.hideExitIp = true;
+    sovereign::tray::RenderMainWindowSnapshot(hidden, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\overview-ip-hidden.png");
+  });
 
-  UiContent merged = content;
-  merged.profiles[0].edited = true;
-  merged.profiles[0].mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};
-  sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Profile, logs, 400, 620, 96,
-                                            dir + L"\\profile-merged.png");
+  variant([&](UiContent& merged) {
+    merged.profiles[0].edited = true;
+    merged.profiles[0].mergeNotes = {L"route.rules", L"outbounds[nl].server_port"};
+    sovereign::tray::RenderMainWindowSnapshot(merged, UiPage::Profile, logs, 400, 620, 96,
+                                              dir + L"\\profile-merged.png");
+  });
 
   // Every service's logo draws (assets/services: what Direct2D's SVG can't
   // draw comes out empty) - at the menus' 16 px and at 150 %.
