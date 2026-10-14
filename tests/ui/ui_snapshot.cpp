@@ -148,16 +148,16 @@ std::vector<std::wstring> SampleLogs() {
 std::vector<sovereign::tray::UiCheck> SampleChecks() {
   using Check = sovereign::tray::UiCheck;
   return {
-      {L"Выход через прокси", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok, L"Что проверяет и как."},
+      {L"Выход через VPN", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok, L"Что проверяет и как."},
       {L"Российское напрямую", L"46.148.140.142", L"Российские сайты видят твой адрес, не адрес сервера.", Check::Status::Ok, L"Что проверяет и как."},
-      {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через прокси — провайдер их не видит.",
+      {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через VPN — провайдер их не видит.",
        Check::Status::Ok, L"Что проверяет и как."},
       {L"WebRTC / UDP", L"UDP не проходит",
        L"STUN не ответил: звонки в браузере и игры через UDP могут не работать (утечки при этом нет).", Check::Status::Warn, L"Что проверяет и как."},
-      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо прокси — сайты могут увидеть твой адрес.", Check::Status::Fail, L"Что проверяет и как."},
+      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.", Check::Status::Fail, L"Что проверяет и как."},
       {L"Локальная сеть", L"проверяю...", L"", Check::Status::Running, L"Что проверяет и как."},
       {L"Задержка DNS", L"", L"", Check::Status::NotRun, L"Что проверяет и как."},
-      {L"Скорость интернета", L"↓ 151 · ↑ 98 Мбит/с · 84 мс", L"Через прокси, до ближайшего узла Cloudflare.",
+      {L"Скорость интернета", L"↓ 151 · ↑ 98 Мбит/с · 84 мс", L"Через VPN, до ближайшего узла Cloudflare.",
        Check::Status::Ok, L"Что проверяет и как."},
       {L"Куда пойдёт адрес", L"vk.com -> напрямую", L"Ни одно из твоих правил не подошло — решили списки.",
        Check::Status::Ok, L"Что проверяет и как."}};
@@ -206,7 +206,7 @@ int Snapshots(const std::wstring& dir) {
     routed.routing.remoteDns = L"Cloudflare (DoH)";
     routed.routing.localDns = L"Cloudflare (DoH)";
     routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
-                            {L"10.9.0.0/16, steam.exe", L"через прокси"},
+                            {L"10.9.0.0/16, steam.exe", L"через VPN"},
                             {L"~tracker", L"блокировать"},
                             {L"chatgpt.com", L"через WARP", true}};
     routed.routing.warp = true;

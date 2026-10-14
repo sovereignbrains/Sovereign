@@ -2222,7 +2222,7 @@ class Worker {
       return;
     }
     warpDirect_ = true;  // the config changes: the model restarts the box
-    Notify(L"Sovereign: WARP не проходит через прокси",
+    Notify(L"Sovereign: WARP не проходит через VPN",
            L"Ни один сервер не пропустил WARP - теперь он идёт напрямую. Вернуть: «Маршруты» → WARP.", false,
            UiPage::Routing);
   }
@@ -3320,7 +3320,7 @@ std::optional<std::size_t> PickFromMenu(HWND window, POINT at, const std::vector
 
 // A rule's action, as the menus and the page say it (RouteRule::Action's order).
 const std::vector<std::wstring>& RuleActions() {
-  static const std::vector<std::wstring> actions = {L"напрямую", L"через прокси", L"блокировать", L"через WARP"};
+  static const std::vector<std::wstring> actions = {L"напрямую", L"через VPN", L"блокировать", L"через WARP"};
   return actions;
 }
 
@@ -3916,7 +3916,7 @@ UiContent ContentFrom(const View& v) {
     c.profiles.push_back(std::move(shown));
   }
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckTitles = {
-      L"Выход через прокси", L"Российское напрямую", L"Утечка DNS",        L"WebRTC / UDP", L"IPv6",
+      L"Выход через VPN", L"Российское напрямую", L"Утечка DNS",        L"WebRTC / UDP", L"IPv6",
       L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Куда пойдёт адрес"};
   // What each check does - its "?" on the page.
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckHints = {
@@ -3926,11 +3926,11 @@ UiContent ContentFrom(const View& v) {
       L"Чьи DNS-серверы на самом деле узнают адреса сайтов, которые ты открываешь (bash.ws). Российский "
       L"резолвер провайдера — утечка: он видит, куда ты ходишь.",
       L"Какой адрес браузер может выдать через WebRTC — запросом к STUN-серверам Google и Cloudflare по UDP. "
-      L"Должен совпадать с адресом прокси.",
-      L"Есть ли IPv6 и идёт ли он через прокси: IPv6 мимо туннеля раскрывает твой адрес.",
+      L"Должен совпадать с адресом VPN.",
+      L"Есть ли IPv6 и идёт ли он через VPN: IPv6 мимо VPN раскрывает твой адрес.",
       L"Доступен ли роутер — ping шлюза. С kill switch'ем локальная сеть открыта, только если это включено в "
       L"настройках.",
-      L"Сколько занимает узнать адрес сайта: зарубежного (через прокси) и российского (напрямую).",
+      L"Сколько занимает узнать адрес сайта: зарубежного (через VPN) и российского (напрямую).",
       L"Скорость скачивания и отдачи через текущий маршрут (speed.cloudflare.com). Гоняет десятки мегабайт — "
       L"поэтому своей кнопкой.",
       L"Введи сайт — трей откроет его и по журналу ядра покажет, через какой выход он пошёл и по какому "
@@ -3959,8 +3959,8 @@ UiContent ContentFrom(const View& v) {
   c.routing.warpAddress = r.warpAccount ? Widen(r.warpAccount->address4) : std::wstring();
   // The WARP bucket's note, a click on it picks the way: the way, and how it goes.
   if (r.warp) {
-    const std::wstring way = r.warpViaProxy ? L"поверх прокси" : L"напрямую";
-    c.routing.warpState = v.warpDirect                                         ? L"напрямую: через прокси не прошёл"
+    const std::wstring way = r.warpViaProxy ? L"поверх VPN" : L"напрямую";
+    c.routing.warpState = v.warpDirect                                         ? L"напрямую: через VPN не прошёл"
                           : v.warpAnswers && !*v.warpAnswers                   ? way + L" · не отвечает"
                           : r.warpViaProxy && !v.warpServer.empty()            ? L"через «" + Widen(v.serverTitles.contains(v.warpServer) ? v.serverTitles.at(v.warpServer).title : v.warpServer) + L"»"
                                                                                : way;
@@ -4389,7 +4389,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     case UiCommand::ChooseWarpVia:
-      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Поверх прокси", L"Напрямую"}, r.warpViaProxy ? 0 : 1)) {
+      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Поверх VPN", L"Напрямую"}, r.warpViaProxy ? 0 : 1)) {
         send(What::WarpVia, *picked == 0);
       }
       break;
@@ -4626,7 +4626,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       // The buckets in the board's order.
       static constexpr std::array kOrder = {sovereign::tray::kBucketProxy, sovereign::tray::kBucketDirect,
                                             sovereign::tray::kBucketWarp, sovereign::tray::kBucketBlock};
-      static constexpr std::array<const wchar_t*, 4> kBuckets = {L"Через прокси", L"Напрямую", L"Через WARP", L"Блок"};
+      static constexpr std::array<const wchar_t*, 4> kBuckets = {L"Через VPN", L"Напрямую", L"Через WARP", L"Блок"};
 
       if (chip.kind == UiChip::Kind::Rule) {
         // Its way; then what's in it typed anew, a program added - its sites

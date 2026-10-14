@@ -270,10 +270,10 @@ struct Run {
       r.detail = "Утечка: через WebRTC сайты увидят твой настоящий адрес.";
     } else if (!exitIp.empty() && *mapped != exitIp) {
       r.status = Status::Warn;
-      r.detail = "WebRTC видит адрес, отличный от адреса прокси — у UDP другой выход.";
+      r.detail = "WebRTC видит адрес, отличный от адреса VPN — у UDP другой выход.";
     } else {
       r.status = Status::Ok;
-      r.detail = "WebRTC видит адрес прокси — утечки нет.";
+      r.detail = "WebRTC видит адрес VPN — утечки нет.";
     }
     return r;
   }
@@ -284,13 +284,13 @@ struct Run {
     if (!trace) {
       r.status = Status::Ok;
       r.summary = "не используется";
-      r.detail = "Трафик по IPv6 не уходит — мимо туннеля тоже.";
+      r.detail = "Трафик по IPv6 не уходит — мимо VPN тоже.";
       return r;
     }
     r.summary = trace->loc.empty() ? trace->ip : std::format("{} · {}", trace->ip, trace->loc);
     const bool proxied = trace->ip == exitIp || (!trace->loc.empty() && trace->loc == exitLoc);
     r.status = proxied ? Status::Ok : Status::Fail;
-    r.detail = proxied ? "IPv6 идёт через прокси." : "IPv6 уходит мимо прокси — сайты могут увидеть твой адрес.";
+    r.detail = proxied ? "IPv6 идёт через VPN." : "IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.";
     return r;
   }
 
@@ -362,7 +362,7 @@ struct Run {
     r.detail = r.status == Status::Fail ? "DNS не отвечает — сайты не откроются."
                : r.status == Status::Warn
                    ? "Новые имена узнаются медленно (знакомые берутся из кэша сразу). Попробуй другой DNS или сервер."
-                   : "Новые имена: зарубежные — через прокси, российские — напрямую; знакомые — из кэша сразу.";
+                   : "Новые имена: зарубежные — через VPN, российские — напрямую; знакомые — из кэша сразу.";
     return r;
   }
 
@@ -400,7 +400,7 @@ struct Run {
     const auto via = OutboundInLogs(input.logs ? input.logs() : std::vector<std::string>{}, targets);
     r.status = Status::Ok;
     r.summary = std::format("↓ {} · ↑ {} Мбит/с · {}", downText, upText, ping);
-    r.detail = (via ? (*via == "direct" ? std::string("Напрямую") : "Через " + *via) : std::string("Через прокси")) +
+    r.detail = (via ? (*via == "direct" ? std::string("Напрямую") : "Через " + *via) : std::string("Через VPN")) +
                " до ближайшего узла Cloudflare. Зависит от сервера и времени — сравни на странице «Серверы».";
     return r;
   }

@@ -91,7 +91,7 @@ struct UiProfile {
 // The routing's page (routing.h).
 struct UiRule {
   std::wstring text;    // "qwen.ai, alicdn.com"
-  std::wstring action;  // "напрямую" / "через прокси" / "блокировать" / "через WARP"
+  std::wstring action;  // "напрямую" / "через VPN" / "блокировать" / "через WARP"
   bool warp = false;    // "через WARP": listed in WARP's own card while it's on
 };
 struct UiService {
@@ -149,7 +149,7 @@ struct UiRouting {
   bool warpViaProxy = true;
   std::wstring warpAddress;   // the device's address in WARP, once registered
   // How its tunnel is (main.cpp WatchWarp): "работает через «NL»", "не отвечает",
-  // "сейчас напрямую: через прокси не прошёл"; empty: not checked yet.
+  // "сейчас напрямую: через VPN не прошёл"; empty: not checked yet.
   std::wstring warpState;
   std::vector<UiService> services;  // sent their own way, in order
   std::vector<UiChip> board;        // everything sent somewhere, as the board shows it

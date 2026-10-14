@@ -418,7 +418,7 @@ std::wstring RoutingLine(const UiContent& c) {
   for (const std::wstring& part : parts) {
     line += (line.empty() ? L"" : L" · ") + part;
   }
-  return line.empty() ? std::wstring(L"всё через прокси") : line;
+  return line.empty() ? std::wstring(L"всё через VPN") : line;
 }
 
 std::wstring UpdateStatus(const UiContent& c) {
@@ -1084,7 +1084,7 @@ class Painter {
     };
     std::wstring warpHint =
         L"Cloudflare WARP — ещё один выход: бесплатное устройство WARP, зарегистрированное на тебя (ключ "
-        L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nПоверх прокси — "
+        L"WireGuard создаётся здесь и никуда не уходит). Сайты видят адрес Cloudflare.\n\nПоверх VPN — "
         L"WireGuard идёт к Cloudflare через твой сервер: провайдер его не видит и не может заблокировать. "
         L"Если WARP не проходит ни через один сервер, Sovereign сам переводит его на «напрямую». Как "
         L"подключаться — нажми на состояние справа от названия.";
@@ -1100,7 +1100,7 @@ class Painter {
                                 L"не удалено: переключи режим наверху — и вернётся на экран.")
                  : std::wstring();
     const std::array<Bucket, 4> buckets = {{
-        {kBucketProxy, L"Через прокси", restBucket == kBucketProxy ? rest : std::wstring(),
+        {kBucketProxy, L"Через VPN", restBucket == kBucketProxy ? rest : std::wstring(),
          restBucket == kBucketProxy ? restHint : std::wstring()},
         {kBucketDirect, L"Напрямую", restBucket == kBucketDirect ? rest : std::wstring(),
          restBucket == kBucketDirect ? restHint : std::wstring()},
@@ -1841,7 +1841,7 @@ class Painter {
                   L"Куда идёт трафик и через какой DNS узнаются адреса. Всё это решает Sovereign: из подписок "
                   L"берутся только серверы, их правила и DNS не используются.\n\n«Всё, кроме исключений» — через "
                   L"VPN идёт всё, а ниже то, что идёт иначе. «Только выбранное» — через VPN идёт лишь то, что "
-                  L"лежит в «Через прокси», остальное напрямую. Списки для обоих режимов хранятся: программы "
+                  L"лежит в «Через VPN», остальное напрямую. Списки для обоих режимов хранятся: программы "
                   L"одного не видны в другом, потому что там ничего не меняют.");
     // The mode (RoutingSettings::finalDirect): everything through the VPN but
     // what's sent elsewhere, or only what's sent through it.
@@ -1915,12 +1915,12 @@ class Painter {
     // DNS: the client's own - its two resolvers and IPv4 in one card.
     {
       y = Heading(l, L"DNS", x0, x1, y,
-                  L"Через прокси — все имена, кроме прямых. Напрямую — российские и твои прямые адреса и адреса "
+                  L"Через VPN — все имена, кроме прямых. Напрямую — российские и твои прямые адреса и адреса "
                   L"самих серверов.\n\nЗашифрованный DNS (DoH) прячет их от провайдера; если перестанет "
                   L"подключаться — выбери системный.");
       const float h = 2 * kRow + kSwitchRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Через прокси", nullptr,
+      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Через VPN", nullptr,
                                 UiCommand::ChooseRemoteDns);
       remote.detail = r.remoteDns;
       remote.detailLogo = r.remoteDnsLogo;
@@ -1938,7 +1938,7 @@ class Painter {
       v4.checked = r.ipv4Only;
       l.items.push_back(std::move(v4));
       HintAfter(l, L"Только IPv4", body_.get(), x0 + 20, x1 - 80, top + kSwitchRow / 2,
-                L"Адреса IPv6 не выдаются программам — их трафик не уйдёт мимо туннеля.");
+                L"Адреса IPv6 не выдаются программам — их трафик не уйдёт мимо VPN.");
       y += h + kGap + 4;
     }
 
@@ -1958,7 +1958,7 @@ class Painter {
     const float titleTop = y;
     const float allWidth = 140;
     y = PageTitle(l, L"Проверка", nullptr, x0, x1, y, UiPage::Overview,
-                  L"Запросы трея идут как у любой программы — через туннель и правила, поэтому видно то же, что "
+                  L"Запросы трея идут как у любой программы — по тем же правилам, поэтому видно то же, что "
                   L"видят твои программы и сайты.\n\n«Проверить всё» — все строки, кроме скорости и адреса: у них "
                   L"свои кнопки справа. Наведи на «?» у строки — что она проверяет и что значит результат. Правый "
                   L"клик — проверить снова или скопировать результат.",
@@ -2012,7 +2012,7 @@ class Painter {
   // The per-app list - a section of Routing: which programs go through the proxy.
   float Apps(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = Heading(l, L"Приложения", x0, x1, y,
-                L"Какие программы идут через прокси. Имена — как у exe-файла, без пути: правило ловит программу, "
+                L"Какие программы идут через VPN. Имена — как у exe-файла, без пути: правило ловит программу, "
                 L"где бы она ни лежала.");
     const float mid = (x0 + x1) / 2;
     Item except = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"Все, кроме списка", nullptr,
@@ -2024,15 +2024,15 @@ class Painter {
     l.items.push_back(std::move(only));
     y += 36 + 6;
     y = Paragraph(l, Kind::Caption,
-                  c.appsInclude ? L"Через прокси идут только программы из списка, остальной трафик — напрямую."
-                                : L"Весь трафик идёт через прокси, кроме программ из списка — они ходят напрямую.",
+                  c.appsInclude ? L"Через VPN идут только программы из списка, остальной трафик — напрямую."
+                                : L"Весь трафик идёт через VPN, кроме программ из списка — они ходят напрямую.",
                   x0 + 4, x1, y) +
         8;
 
     if (c.apps.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 64}));
       l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 64},
-                             c.appsInclude ? L"Список пуст — через прокси не идёт ничего." : L"Список пуст — всё идёт через прокси."));
+                             c.appsInclude ? L"Список пуст — через VPN не идёт ничего." : L"Список пуст — всё идёт через VPN."));
       y += 64;
     } else {
       const float h = static_cast<float>(c.apps.size()) * kRow;
@@ -2188,7 +2188,7 @@ class Painter {
 
     y = Switches(l,
                  {Row(L"Kill switch",
-                      L"Если подключение оборвётся, трафик не пойдёт мимо прокси: интернет закрыт, пока оно не "
+                      L"Если подключение оборвётся, трафик не пойдёт мимо VPN: интернет закрыт, пока оно не "
                       L"восстановится.",
                       c.killSwitch, UiCommand::ToggleKillSwitch)},
                  x0, x1, y) +

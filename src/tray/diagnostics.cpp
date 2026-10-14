@@ -238,7 +238,7 @@ CheckResult JudgeDnsLeak(const std::vector<DnsResolverSeen>& resolvers) {
     result.detail = "Зарубежные имена спрашивает DNS-сервер в России — скорее всего, провайдера: он видит, куда ты ходишь.";
   } else {
     result.status = CheckResult::Status::Ok;
-    result.detail = "Зарубежные имена спрашиваются через прокси — провайдер их не видит.";
+    result.detail = "Зарубежные имена спрашиваются через VPN — провайдер их не видит.";
   }
   return result;
 }
@@ -288,7 +288,7 @@ std::string ClientRuleFor(std::string_view host, const RoutingSettings& routing)
     });
     if (domain || keyword || ip) {
       const char* action = rule.action == RouteRule::Action::Direct  ? "напрямую"
-                           : rule.action == RouteRule::Action::Proxy ? "через прокси"
+                           : rule.action == RouteRule::Action::Proxy ? "через VPN"
                            : rule.action == RouteRule::Action::Warp  ? "через WARP"
                                                                      : "блокировать";
       std::string text = RuleText(rule);
