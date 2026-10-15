@@ -30,16 +30,18 @@ Stats Running(std::int64_t down, std::int64_t up, std::int64_t generation = 1) {
   return stats;
 }
 
-const Stats kStopped{};
+// Stopped: what box_stats says while no box runs (a function - a Stats holds a map, and a static one
+// could throw before main).
+Stats Stopped() { return {}; }
 
 void TestStartsWhenWantedAndServiceUp() {
   TrayModel m(true);
   CHECK(m.OnPoll(std::nullopt, t0) == Action::None);  // no service yet
   CHECK(m.GetDisplay() == Display::Starting);           // not an error for the first seconds
 
-  CHECK(m.OnPoll(kStopped, t0 + 1s) == Action::Start);
+  CHECK(m.OnPoll(Stopped(), t0 + 1s) == Action::Start);
   CHECK(m.GetDisplay() == Display::Starting);
-  CHECK(m.OnPoll(kStopped, t0 + 2s) == Action::None);  // start still in flight: no second one
+  CHECK(m.OnPoll(Stopped(), t0 + 2s) == Action::None);  // start still in flight: no second one
 
   m.OnStartResult("", t0 + 2s);
   CHECK(m.GetDisplay() == Display::On);
@@ -61,12 +63,12 @@ void TestRates() {
 
 void TestFailedStartRetriesAfterBackoff() {
   TrayModel m(true);
-  CHECK(m.OnPoll(kStopped, t0) == Action::Start);
+  CHECK(m.OnPoll(Stopped(), t0) == Action::Start);
   m.OnStartResult("parse config: bad", t0);
   CHECK(m.GetDisplay() == Display::Error);
   CHECK(m.LastError() == "parse config: bad");
-  CHECK(m.OnPoll(kStopped, t0 + 5s) == Action::None);
-  CHECK(m.OnPoll(kStopped, t0 + TrayModel::kRetryAfter) == Action::Start);
+  CHECK(m.OnPoll(Stopped(), t0 + 5s) == Action::None);
+  CHECK(m.OnPoll(Stopped(), t0 + TrayModel::kRetryAfter) == Action::Start);
   m.OnStartResult("", t0 + TrayModel::kRetryAfter);
   CHECK(m.LastError().empty());
   CHECK(m.GetDisplay() == Display::On);
@@ -74,12 +76,12 @@ void TestFailedStartRetriesAfterBackoff() {
 
 void TestServiceRestartRestartsTheBox() {
   TrayModel m(true);
-  m.OnPoll(kStopped, t0);
+  m.OnPoll(Stopped(), t0);
   m.OnStartResult("", t0);
   m.OnPoll(Running(0, 0), t0 + 1s);
   CHECK(m.OnPoll(std::nullopt, t0 + 2s) == Action::None);  // service restarting
   CHECK(m.GetDisplay() == Display::Starting);               // a few seconds: no alarm
-  CHECK(m.OnPoll(kStopped, t0 + 3s) == Action::Start);      // back, box gone: start again
+  CHECK(m.OnPoll(Stopped(), t0 + 3s) == Action::Start);      // back, box gone: start again
 }
 
 // The service away (an update, a restart): "connecting" - or "off" when the
@@ -95,7 +97,7 @@ void TestServiceDownOnlyAfterGrace() {
   m.OnPoll(std::nullopt, t0 + grace);
   CHECK(m.GetDisplay() == Display::ServiceDown);
 
-  m.OnPoll(kStopped, t0 + grace + 1s);  // back
+  m.OnPoll(Stopped(), t0 + grace + 1s);  // back
   m.OnPoll(std::nullopt, t0 + grace + 2s);
   CHECK(m.GetDisplay() == Display::Starting);  // away again: counted anew
   m.OnPoll(std::nullopt, t0 + 2 * grace + 2s);
@@ -110,14 +112,14 @@ void TestServiceDownOnlyAfterGrace() {
 
 void TestOffStopsOnceAndStaysOff() {
   TrayModel m(true);
-  m.OnPoll(kStopped, t0);
+  m.OnPoll(Stopped(), t0);
   m.OnStartResult("", t0);
   m.OnPoll(Running(0, 0), t0 + 1s);
 
   CHECK(m.SetWantOn(false, t0 + 2s) == Action::Stop);
   m.OnStopResult("");
   CHECK(m.GetDisplay() == Display::Off);
-  CHECK(m.OnPoll(kStopped, t0 + 3s) == Action::None);
+  CHECK(m.OnPoll(Stopped(), t0 + 3s) == Action::None);
   CHECK(m.GetDisplay() == Display::Off);
 
   CHECK(m.SetWantOn(true, t0 + 4s) == Action::Start);  // back on: immediately
@@ -127,13 +129,13 @@ void TestOffWhileServiceDownDoesNothing() {
   TrayModel m(true);
   m.OnPoll(std::nullopt, t0);
   CHECK(m.SetWantOn(false, t0) == Action::None);
-  CHECK(m.OnPoll(kStopped, t0 + 1s) == Action::None);
+  CHECK(m.OnPoll(Stopped(), t0 + 1s) == Action::None);
   CHECK(m.GetDisplay() == Display::Off);
 }
 
 void TestAlreadyStartedElsewhereCountsAsOn() {
   TrayModel m(true);
-  m.OnPoll(kStopped, t0);
+  m.OnPoll(Stopped(), t0);
   m.OnStartResult("box already started; call box_stop first", t0);
   CHECK(m.GetDisplay() == Display::Error);
   CHECK(m.OnPoll(Running(0, 0), t0 + 1s) == Action::None);
@@ -153,7 +155,7 @@ void TestRestartsOnConfigMismatchOnce() {
   CHECK(m.OnPoll(RunningWith("old"), t0) == Action::Stop);  // config.json changed
   m.OnStopResult("");
   CHECK(m.GetDisplay() == Display::Starting);
-  CHECK(m.OnPoll(kStopped, t0 + 1s) == Action::Start);      // started with the new one
+  CHECK(m.OnPoll(Stopped(), t0 + 1s) == Action::Start);      // started with the new one
   m.OnStartResult("", t0 + 1s);
   // The service still reports something else (a hashing disagreement):
   // no restart loop.
@@ -201,7 +203,7 @@ void TestFlowStreams() {
 
 void TestStartsOffAndStaysOff() {
   TrayModel m(false);
-  CHECK(m.OnPoll(kStopped, t0) == Action::None);
+  CHECK(m.OnPoll(Stopped(), t0) == Action::None);
   CHECK(m.GetDisplay() == Display::Off);
 }
 
