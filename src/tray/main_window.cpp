@@ -2963,7 +2963,10 @@ struct MainWindow::Impl {
     // WS_CLIPCHILDREN: a repaint (a hover anywhere repaints it all) leaves an
     // edit box in place over its row alone - drawn over, it flickered as the
     // mouse moved (15.10.2026).
-    window.reset(CreateWindowExW(0, kClassName, L"Sovereign", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
+    // No minimize or maximize: a window of the tray's - the cross hides it
+    // there; its edges still size it (a long log).
+    window.reset(CreateWindowExW(0, kClassName, L"Sovereign",
+                                 (WS_OVERLAPPEDWINDOW & ~(WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) | WS_CLIPCHILDREN, CW_USEDEFAULT,
                                  CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, this));
     THROW_LAST_ERROR_IF(!window);
     const BOOL dark = TRUE;
