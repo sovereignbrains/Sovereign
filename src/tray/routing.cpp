@@ -289,11 +289,45 @@ std::set<std::string> Tags(const Json& list) {
   return tags;
 }
 
-Json LocalDnsServer(RoutingSettings::LocalDns local) {
+// The system's resolver, for the name of a DNS server the user typed by name.
+constexpr const char* kBootstrapDns = "sov-bootstrap";
+
+// A typed DNS server as sing-box takes it, tagged `tag`.
+Json CustomDnsServer(const CustomDns& dns, const std::string& tag) {
+  Json server{{"type", dns.type}, {"tag", tag}, {"server", dns.host}, {"server_port", dns.port}};
+  if (dns.type == "https") {
+    server["path"] = dns.path;
+  }
+  if (dns.named) {
+    server["domain_resolver"] = kBootstrapDns;
+  }
+  return server;
+}
+
+// The local server: an encrypted one by its address, the system's, or the
+// user's own (one that doesn't parse: Cloudflare's, as Auto).
+Json LocalDnsServer(RoutingSettings::LocalDns local, const std::string& custom) {
+  if (local == RoutingSettings::LocalDns::Custom) {
+    if (const auto dns = ParseCustomDns(custom)) {
+      return CustomDnsServer(*dns, kLocalDns);
+    }
+    local = RoutingSettings::LocalDns::Auto;
+  }
   if (const std::string_view address = LocalDnsAddress(local); !address.empty()) {
     return Json{{"type", "https"}, {"tag", kLocalDns}, {"server", std::string(address)}};
   }
   return Json{{"type", "local"}, {"tag", kLocalDns}};
+}
+
+// The servers a name of which is resolved first get the system's resolver
+// to do it.
+void AddBootstrapDns(Json& servers) {
+  const bool wanted = std::any_of(servers.begin(), servers.end(), [](const Json& s) {
+    return s.is_object() && Str(s, "domain_resolver") == kBootstrapDns;
+  });
+  if (wanted && !Tags(servers).contains(kBootstrapDns)) {
+    servers.push_back(Json{{"type", "local"}, {"tag", kBootstrapDns}});
+  }
 }
 
 // `items` into `list` at `at`.
@@ -422,13 +456,19 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
                                                             : "auto"},
           {"hysteriaMbps", s.hysteriaMbps},
           {"finalDirect", s.finalDirect},
-          {"remoteDns", s.remoteDns == RoutingSettings::RemoteDns::Google  ? "google"
-                        : s.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "quad9"
-                                                                            : "cloudflare"},
+          {"remoteDns", s.remoteDns == RoutingSettings::RemoteDns::Google     ? "google"
+                        : s.remoteDns == RoutingSettings::RemoteDns::Quad9    ? "quad9"
+                        : s.remoteDns == RoutingSettings::RemoteDns::Auto     ? "auto"
+                        : s.remoteDns == RoutingSettings::RemoteDns::Custom   ? "custom"
+                                                                               : "cloudflare"},
+          {"remoteDnsCustom", s.remoteDnsCustom},
           {"localDns", s.localDns == RoutingSettings::LocalDns::Google   ? "google"
                        : s.localDns == RoutingSettings::LocalDns::System ? "system"
                        : s.localDns == RoutingSettings::LocalDns::Quad9  ? "quad9"
+                       : s.localDns == RoutingSettings::LocalDns::Auto   ? "auto"
+                       : s.localDns == RoutingSettings::LocalDns::Custom ? "custom"
                                                                           : "cloudflare"},
+          {"localDnsCustom", s.localDnsCustom},
           {"ipv4Only", s.ipv4Only},
           {"rules", std::move(rules)},
           {"services", std::move(services)},
@@ -494,15 +534,27 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   if (const auto it = json.find("warpAccount"); it != json.end()) {
     s.warpAccount = WarpFromJson(*it);
   }
+  // A typed address kept only while it parses (300: a URL, not a page).
+  const auto custom = [&](const char* key) {
+    std::string value = text(key).substr(0, 300);
+    return ParseCustomDns(value) ? value : std::string();
+  };
+  s.remoteDnsCustom = custom("remoteDnsCustom");
+  s.localDnsCustom = custom("localDnsCustom");
+  // Nothing said (before 0.4.84, or a new install): auto.
   const std::string remote = text("remoteDns");
-  s.remoteDns = remote == "google"  ? RoutingSettings::RemoteDns::Google
-                : remote == "quad9" ? RoutingSettings::RemoteDns::Quad9
-                                    : RoutingSettings::RemoteDns::Cloudflare;
+  s.remoteDns = remote == "google"       ? RoutingSettings::RemoteDns::Google
+                : remote == "quad9"      ? RoutingSettings::RemoteDns::Quad9
+                : remote == "cloudflare" ? RoutingSettings::RemoteDns::Cloudflare
+                : remote == "custom" && !s.remoteDnsCustom.empty() ? RoutingSettings::RemoteDns::Custom
+                                                                    : RoutingSettings::RemoteDns::Auto;
   const std::string local = text("localDns");
-  s.localDns = local == "google"   ? RoutingSettings::LocalDns::Google
-               : local == "system" ? RoutingSettings::LocalDns::System
-               : local == "quad9"  ? RoutingSettings::LocalDns::Quad9
-                                   : RoutingSettings::LocalDns::Cloudflare;
+  s.localDns = local == "google"       ? RoutingSettings::LocalDns::Google
+               : local == "system"     ? RoutingSettings::LocalDns::System
+               : local == "quad9"      ? RoutingSettings::LocalDns::Quad9
+               : local == "cloudflare" ? RoutingSettings::LocalDns::Cloudflare
+               : local == "custom" && !s.localDnsCustom.empty() ? RoutingSettings::LocalDns::Custom
+                                                                 : RoutingSettings::LocalDns::Auto;
   if (const auto it = json.find("rules"); it != json.end() && it->is_array()) {
     for (const auto& entry : *it) {
       if (!entry.is_object()) {
@@ -984,12 +1036,19 @@ std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
 }
 
 std::string OwnFrame(const RoutingSettings& settings) {
-  const char* remote = settings.remoteDns == RoutingSettings::RemoteDns::Google  ? "8.8.8.8"
-                       : settings.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "9.9.9.9"
-                                                                                  : "1.1.1.1";
-  Json dns = {{"servers", Json::array({Json{{"type", "https"}, {"tag", "remote"}, {"server", remote}, {"detour", "proxy"}},
-                                       LocalDnsServer(settings.localDns)})},
+  const char* address = settings.remoteDns == RoutingSettings::RemoteDns::Google  ? "8.8.8.8"
+                        : settings.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "9.9.9.9"
+                                                                                   : "1.1.1.1";
+  Json remote{{"type", "https"}, {"tag", "remote"}, {"server", address}};
+  if (settings.remoteDns == RoutingSettings::RemoteDns::Custom) {
+    if (const auto dns = ParseCustomDns(settings.remoteDnsCustom)) {
+      remote = CustomDnsServer(*dns, "remote");
+    }
+  }
+  remote["detour"] = "proxy";
+  Json dns = {{"servers", Json::array({std::move(remote), LocalDnsServer(settings.localDns, settings.localDnsCustom)})},
               {"final", "remote"}};
+  AddBootstrapDns(dns["servers"]);
   if (const char* strategy = DnsStrategy(settings)) {
     dns["strategy"] = strategy;
   }
@@ -1157,7 +1216,8 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
 
   // The local resolver for Russian and direct names.
   if (!Tags(dns["servers"]).contains(std::string(kLocalDns))) {
-    dns["servers"].push_back(LocalDnsServer(settings.localDns));
+    dns["servers"].push_back(LocalDnsServer(settings.localDns, settings.localDnsCustom));
+    AddBootstrapDns(dns["servers"]);
   }
 
   // Routing: the client's rules first, after sniffing and DNS hijacking.
@@ -1437,6 +1497,9 @@ bool QuicBlocked(const RoutingSettings& settings, std::string_view config) {
 
 std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns pick) {
   using LocalDns = RoutingSettings::LocalDns;
+  if (pick == LocalDns::Auto) {
+    pick = LocalDns::Cloudflare;  // auto: the encrypted ones from Cloudflare, the system's last
+  }
   std::vector<LocalDns> order{pick};
   for (const LocalDns dns : {LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::System}) {
     if (dns != pick && dns != LocalDns::System) {
@@ -1451,10 +1514,12 @@ std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns p
 
 std::string_view LocalDnsAddress(RoutingSettings::LocalDns dns) {
   switch (dns) {
+    case RoutingSettings::LocalDns::Auto:
     case RoutingSettings::LocalDns::Cloudflare: return "1.1.1.1";
     case RoutingSettings::LocalDns::Google: return "8.8.8.8";
     case RoutingSettings::LocalDns::Quad9: return "9.9.9.9";
-    case RoutingSettings::LocalDns::System: break;
+    case RoutingSettings::LocalDns::System:
+    case RoutingSettings::LocalDns::Custom: break;
   }
   return {};
 }
@@ -1464,16 +1529,21 @@ std::string_view LocalDnsName(RoutingSettings::LocalDns dns) {
     case RoutingSettings::LocalDns::Cloudflare: return "Cloudflare";
     case RoutingSettings::LocalDns::Google: return "Google";
     case RoutingSettings::LocalDns::Quad9: return "Quad9";
+    case RoutingSettings::LocalDns::Auto: return "авто";
+    case RoutingSettings::LocalDns::Custom: return "свой";
     case RoutingSettings::LocalDns::System: break;
   }
   return "системный";
 }
 
-bool LocalDnsUnreachable(std::string_view line, std::string_view address) {
+bool LocalDnsUnreachable(std::string_view line, std::string_view address, int port) {
   if (address.empty()) {
     return false;
   }
-  const std::string at = std::string(address) + ":443";
+  // As Go writes an address with its port: an IPv6 one in brackets.
+  const std::string at = (address.find(':') != std::string_view::npos ? "[" + std::string(address) + "]"
+                                                                        : std::string(address)) +
+                         ":" + std::to_string(port);
   const std::size_t found = line.find(at);
   // The address itself, not the tail of a longer one ("11.1.1.1:443").
   if (found == std::string_view::npos || (found > 0 && (std::isdigit(static_cast<unsigned char>(line[found - 1])) != 0 ||
@@ -1491,6 +1561,117 @@ bool LocalDnsUnreachable(std::string_view line, std::string_view address) {
                                                                       "forcibly closed", "no route to host",
                                                                       "unreachable network", "deadline exceeded"},
                              [&](std::string_view why) { return line.find(why) != std::string_view::npos; });
+}
+
+std::optional<CustomDns> ParseCustomDns(std::string_view text) {
+  while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '/')) {
+    text.remove_suffix(1);
+  }
+  if (text.empty() || text.size() > 300) {
+    return std::nullopt;
+  }
+  CustomDns dns;
+  dns.type = "udp";
+  if (const std::size_t scheme = text.find("://"); scheme != std::string_view::npos) {
+    static constexpr std::array<std::pair<std::string_view, std::pair<std::string_view, int>>, 5> kSchemes = {{
+        {"udp", {"udp", 53}}, {"tcp", {"tcp", 53}}, {"tls", {"tls", 853}}, {"https", {"https", 443}},
+        {"quic", {"quic", 853}},
+    }};
+    const std::string name = Lower(text.substr(0, scheme));
+    const auto known = std::find_if(kSchemes.begin(), kSchemes.end(), [&](const auto& s) { return s.first == name; });
+    if (known == kSchemes.end()) {
+      return std::nullopt;
+    }
+    dns.type = std::string(known->second.first);
+    dns.port = known->second.second;
+    text.remove_prefix(scheme + 3);
+  }
+  // A path: DoH's only.
+  if (const std::size_t slash = text.find('/'); slash != std::string_view::npos) {
+    if (dns.type != "https") {
+      return std::nullopt;
+    }
+    dns.path = std::string(text.substr(slash));
+    text = text.substr(0, slash);
+  } else if (dns.type == "https") {
+    dns.path = "/dns-query";
+  }
+  if (dns.path.find_first_of(" \t\"\\") != std::string::npos) {
+    return std::nullopt;
+  }
+  // The host, and a port after it: "[v6]:port", "v4:port", "name:port".
+  std::string_view port;
+  if (text.starts_with('[')) {
+    const std::size_t close = text.find(']');
+    if (close == std::string_view::npos) {
+      return std::nullopt;
+    }
+    dns.host = std::string(text.substr(1, close - 1));
+    const std::string_view rest = text.substr(close + 1);
+    if (!rest.empty() && !rest.starts_with(':')) {
+      return std::nullopt;
+    }
+    port = rest.empty() ? rest : rest.substr(1);
+    if (dns.host.find(':') == std::string::npos ||
+        !std::all_of(dns.host.begin(), dns.host.end(), [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0 || c == ':' || c == '.'; })) {
+      return std::nullopt;
+    }
+  } else {
+    const std::size_t colon = text.rfind(':');
+    if (colon != std::string_view::npos && text.find(':') != colon) {
+      return std::nullopt;  // a bare IPv6 address: in brackets, to tell its port apart
+    }
+    dns.host = Lower(text.substr(0, colon == std::string_view::npos ? text.size() : colon));
+    port = colon == std::string_view::npos ? std::string_view() : text.substr(colon + 1);
+    const bool dotted = std::all_of(dns.host.begin(), dns.host.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0 || c == '.'; });
+    if (dotted) {
+      int parts = 0;
+      for (std::string_view rest = dns.host; ; ++parts) {
+        const std::size_t dot = std::min(rest.find('.'), rest.size());
+        const std::string_view part = rest.substr(0, dot);
+        if (part.empty() || part.size() > 3 || std::stoi(std::string(part)) > 255) {
+          return std::nullopt;
+        }
+        if (dot == rest.size()) {
+          break;
+        }
+        rest.remove_prefix(dot + 1);
+      }
+      if (parts != 3) {
+        return std::nullopt;
+      }
+    } else {
+      // A name: letters, digits, hyphens, at least one dot, not at its ends.
+      dns.named = true;
+      if (dns.host.size() > 253 || dns.host.find('.') == std::string::npos || dns.host.front() == '.' ||
+          dns.host.back() == '.' || dns.host.front() == '-' ||
+          !std::all_of(dns.host.begin(), dns.host.end(), [](char c) { return IsDomainChar(c); })) {
+        return std::nullopt;
+      }
+    }
+  }
+  if (!port.empty()) {
+    if (port.size() > 5 || !std::all_of(port.begin(), port.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
+      return std::nullopt;
+    }
+    dns.port = std::stoi(std::string(port));
+    if (dns.port < 1 || dns.port > 65535) {
+      return std::nullopt;
+    }
+  }
+  return dns;
+}
+
+bool HasHysteria2(std::string_view config) {
+  const Json c = Json::parse(config, nullptr, false);
+  if (!c.is_object() || !c.contains("outbounds") || !c["outbounds"].is_array()) {
+    return false;
+  }
+  return std::any_of(c["outbounds"].begin(), c["outbounds"].end(),
+                     [](const Json& o) { return o.is_object() && Str(o, "type") == "hysteria2"; });
 }
 
 std::vector<std::string> WarpViaServers(std::string_view config) {

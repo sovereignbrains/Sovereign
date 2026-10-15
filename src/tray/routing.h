@@ -102,13 +102,17 @@ const ServiceInfo* FindService(std::string_view id);
 const ServiceInfo* ServiceOfProgram(std::string_view exe);
 
 struct RoutingSettings {
-  enum class RemoteDns : std::uint8_t { Cloudflare, Google, Quad9 };
+  // Auto: Cloudflare (through the VPN which one hardly matters: the provider
+  // sees none of it). Custom: remoteDnsCustom, as typed (ParseCustomDns).
+  enum class RemoteDns : std::uint8_t { Cloudflare, Google, Quad9, Auto, Custom };
   // Direct names - Russian, the user's direct ones, the servers' own - over
   // encrypted DNS straight from here (the provider doesn't see what's
   // asked). Its one server is the user's pick; when that stops answering
   // (an ISP blocks its address) the tray moves the box on to the next of
   // LocalDnsOrder, the system's resolver last - the pick stays as it is.
-  enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9 };
+  // Auto: that order from Cloudflare - the default. Custom: localDnsCustom,
+  // first (ParseCustomDns); given way from only when dialled by its address.
+  enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9, Auto, Custom };
   bool russiaDirect = true;
   bool blockAds = true;
   // The "accept cookies?" windows of sites: the names their scripts are
@@ -128,8 +132,10 @@ struct RoutingSettings {
   // server picks its rate (BBR). A config's own speeds stay.
   int hysteriaMbps = 0;
   bool finalDirect = false;  // what no rule matches: directly (else through the proxy)
-  RemoteDns remoteDns = RemoteDns::Cloudflare;  // through the proxy, over HTTPS
-  LocalDns localDns = LocalDns::Cloudflare;     // directly: Russian and direct names, the servers' own
+  RemoteDns remoteDns = RemoteDns::Auto;  // through the proxy
+  LocalDns localDns = LocalDns::Auto;     // directly: Russian and direct names, the servers' own
+  std::string remoteDnsCustom;            // RemoteDns::Custom's address, as typed
+  std::string localDnsCustom;             // LocalDns::Custom's
   bool ipv4Only = true;
   std::vector<RouteRule> rules;  // the user's, first of all
   std::vector<ServiceRoute> services;  // after the user's rules
@@ -244,18 +250,33 @@ bool QuicBlocked(const RoutingSettings& settings, std::string_view config);
 // system's resolver last.
 std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns pick);
 
-// The address an encrypted local server is dialled at ("1.1.1.1"); empty
-// for the system's resolver.
+// The address an encrypted local server is dialled at ("1.1.1.1"; Auto:
+// Cloudflare's); empty for the system's resolver and a custom one.
 std::string_view LocalDnsAddress(RoutingSettings::LocalDns dns);
 
-// "Cloudflare", "Google", "Quad9", "системный".
+// "Cloudflare", "Google", "Quad9", "системный", "авто", "свой".
 std::string_view LocalDnsName(RoutingSettings::LocalDns dns);
 
-// Whether a core log line says the local server at `address` (port 443)
-// couldn't be reached: a dial to it timed out, was refused or reset, had no
-// route. A query that timed out without saying where isn't counted - it may
-// have been the remote DNS, through the proxy.
-bool LocalDnsUnreachable(std::string_view line, std::string_view address);
+// Whether a core log line says the local server at `address`:`port` couldn't
+// be reached: a dial to it timed out, was refused or reset, had no route. A
+// query that timed out without saying where isn't counted - it may have been
+// the remote DNS, through the proxy.
+bool LocalDnsUnreachable(std::string_view line, std::string_view address, int port = 443);
+
+// A DNS server the user typed: "8.8.8.8", "1.2.3.4:5353", "tls://dns.example",
+// "https://dns.example/dns-query", "quic://dns.example", "tcp://..." -
+// UDP when no scheme. Nullopt: not one.
+struct CustomDns {
+  std::string type;  // sing-box's: udp, tcp, tls, https, quic
+  std::string host;  // an address (IPv6 without brackets) or a name
+  int port = 53;
+  std::string path;  // https: "/dns-query"
+  bool named = false;  // `host` a name: resolved first, by the system's resolver
+};
+std::optional<CustomDns> ParseCustomDns(std::string_view text);
+
+// Whether a config has a Hysteria 2 server (its speed setting matters then).
+bool HasHysteria2(std::string_view config);
 
 // The servers WARP may go out through (kWarpViaTag in `config`), in their
 // order - the first is the one it starts on; empty when it goes directly.

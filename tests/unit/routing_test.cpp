@@ -90,7 +90,10 @@ void TestJsonAndParse() {
   CHECK(RoutingFromJson(json{{"source", "profile"}, {"sourceProfile", "p1"}, {"blockAds", false}}).blockAds == false);
   CHECK(!back.russiaDirect && back.blockAds && back.remoteDns == RoutingSettings::RemoteDns::Quad9);
   CHECK(back.localDns == RoutingSettings::LocalDns::System);
-  CHECK(RoutingSettings{}.localDns == RoutingSettings::LocalDns::Cloudflare);  // encrypted, directly, by default
+  // Auto by default, and for a tray.json that says nothing of it.
+  CHECK(RoutingSettings{}.localDns == RoutingSettings::LocalDns::Auto &&
+        RoutingSettings{}.remoteDns == RoutingSettings::RemoteDns::Auto);
+  CHECK(RoutingFromJson(json::object()).localDns == RoutingSettings::LocalDns::Auto);
   CHECK(back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Block);
   CHECK(!back.rules.empty() && back.rules[0].keywords == std::vector<std::string>({"tracker"}));
   CHECK(RoutingFromJson(json::parse(R"({"russiaDirect":"yes","rules":[5,{"domains":[1]}]})")).russiaDirect);
@@ -943,6 +946,70 @@ void TestLocalDnsFallback() {
     quad9 = quad9 || (server.value("tag", "") == "sov-local" && server.value("server", "") == "9.9.9.9");
   }
   CHECK(quad9);
+
+  // Auto: Cloudflare first, then on; a name of its own.
+  CHECK(LocalDnsOrder(LocalDns::Auto) == LocalDnsOrder(LocalDns::Cloudflare));
+  CHECK(LocalDnsAddress(LocalDns::Auto) == "1.1.1.1" && LocalDnsName(LocalDns::Auto) == "авто");
+  // A custom one: watched at its own port, an IPv6 one in brackets.
+  CHECK(LocalDnsUnreachable("dial udp 77.88.8.8:53: i/o timeout", "77.88.8.8", 53));
+  CHECK(!LocalDnsUnreachable("dial udp 77.88.8.8:53: i/o timeout", "77.88.8.8"));
+  CHECK(LocalDnsUnreachable("dial tcp [2a02:6b8::feed:ff]:853: i/o timeout", "2a02:6b8::feed:ff", 853));
+}
+
+// A DNS server typed by the user: what's understood, and how it lands in the
+// config - a name resolved first by the system's resolver.
+void TestCustomDns() {
+  const auto check = [](std::string_view text, std::string_view type, std::string_view host, int port,
+                        std::string_view path, bool named) {
+    const auto dns = ParseCustomDns(text);
+    CHECK(dns.has_value() && dns->type == type && dns->host == host && dns->port == port && dns->path == path &&
+          dns->named == named);
+  };
+  check("77.88.8.8", "udp", "77.88.8.8", 53, "", false);
+  check(" 77.88.8.8:5353 ", "udp", "77.88.8.8", 5353, "", false);
+  check("tcp://1.1.1.1", "tcp", "1.1.1.1", 53, "", false);
+  check("tls://dns.adguard-dns.com", "tls", "dns.adguard-dns.com", 853, "", true);
+  check("https://dns.Example.com/dns-query", "https", "dns.example.com", 443, "/dns-query", true);
+  check("https://dns.example.com", "https", "dns.example.com", 443, "/dns-query", true);
+  check("https://dns.example.com:8443/q/", "https", "dns.example.com", 8443, "/q", true);
+  check("quic://[2a10:50c0::ad1:ff]", "quic", "2a10:50c0::ad1:ff", 853, "", false);
+  check("[2a10:50c0::ad1:ff]:53", "udp", "2a10:50c0::ad1:ff", 53, "", false);
+  for (const std::string_view bad : {"", "  ", "ftp://1.1.1.1", "1.1.1", "1.1.1.256", "tls://1.1.1.1/path",
+                                     "2a10:50c0::ad1:ff", "localhost", "dns.example.com:0", "dns.example.com:70000",
+                                     "https://dns example.com", "[2a10::1", "http://1.1.1.1"}) {
+    CHECK(!ParseCustomDns(bad));
+  }
+
+  RoutingSettings s;
+  s.remoteDns = RoutingSettings::RemoteDns::Custom;
+  s.remoteDnsCustom = "https://dns.example.com/dns-query";
+  s.localDns = RoutingSettings::LocalDns::Custom;
+  s.localDnsCustom = "77.88.8.8";
+  const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
+  CHECK(back.remoteDns == RoutingSettings::RemoteDns::Custom && back.remoteDnsCustom == s.remoteDnsCustom &&
+        back.localDns == RoutingSettings::LocalDns::Custom && back.localDnsCustom == "77.88.8.8");
+  // One that doesn't parse isn't kept: auto instead.
+  json broken = RoutingToJson(s);
+  broken["localDnsCustom"] = "not a server";
+  CHECK(RoutingFromJson(broken).localDns == RoutingSettings::LocalDns::Auto);
+
+  const auto keys = BuildConfigFromLinks({"trojan://pw@nl.example.com:443#NL"}).config.value_or("{}");
+  const std::string text = ApplyRouting(CombineConfigs({{"Ключи", keys, {}}}, OwnFrame(s)).config.value_or("{}"), s, {});
+  Checked().emplace_back("custom-dns", text);
+  const json c = json::parse(text);
+  bool remote = false;
+  bool local = false;
+  bool bootstrap = false;
+  for (const json& server : c["dns"]["servers"]) {
+    const std::string tag = server.value("tag", "");
+    remote = remote || (tag == "remote" && server.value("type", "") == "https" &&
+                        server.value("server", "") == "dns.example.com" && server.value("detour", "") == "proxy" &&
+                        server.value("domain_resolver", "") == "sov-bootstrap");
+    local = local || (tag == "sov-local" && server.value("type", "") == "udp" && server.value("server", "") == "77.88.8.8" &&
+                      server.value("server_port", 0) == 53 && !server.contains("domain_resolver"));
+    bootstrap = bootstrap || (tag == "sov-bootstrap" && server.value("type", "") == "local");
+  }
+  CHECK(remote && local && bootstrap);
 }
 
 // WARP's tunnel not getting through, as the core logs it; its servers when it
@@ -995,6 +1062,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestWarp();
     TestNaiveInsecure();
     TestLocalDnsFallback();
+    TestCustomDns();
     TestWarpWatch();
     TestQuic();
     TestOrder();

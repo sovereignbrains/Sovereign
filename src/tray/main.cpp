@@ -268,6 +268,8 @@ struct View {
   std::string warpServer;
   bool warpDirect = false;
   bool quicBlocked = true;  // RoutingSettings::quic as it came to with the servers (QuicBlocked)
+  bool hasHysteria = false;  // a Hysteria 2 server among them: its speed setting matters
+  std::vector<std::string> rulesFrom;  // the configurations with rules the user hasn't taken yet (ids)
   std::vector<std::string> blockedAds;  // what the ads lists blocked lately, newest first
   std::size_t listsReady = 0;             // the routing's lists downloaded
   std::size_t listsNeeded = 0;
@@ -869,6 +871,7 @@ class Worker {
     using sovereign::tray::RoutingSettings;
     std::vector<sovereign::tray::ProfileConfig> parts;
     std::vector<std::string> notes;
+    std::vector<std::string> rulesFrom;
     for (const Profile& profile : settings_.profiles) {
       if (!profile.enabled) {
         continue;
@@ -878,6 +881,13 @@ class Worker {
       if (!config) {
         notes.push_back(profile.name + ": ещё нет конфига");
         continue;
+      }
+      // Rules of its own the user hasn't taken: "from the subscription" offered.
+      std::vector<sovereign::tray::RouteRule> taken = settings_.routing.rules;
+      const std::size_t before = taken.size();
+      sovereign::tray::MergeRules(taken, sovereign::tray::ImportRules(*config));
+      if (taken.size() > before) {
+        rulesFrom.push_back(profile.id);
       }
       parts.push_back(
           {.name = profile.name, .config = *config, .disabled = profile.disabled, .id = profile.id, .via = profile.via});
@@ -894,6 +904,8 @@ class Worker {
     }
     auto combined = sovereign::tray::CombineConfigs(parts, sovereign::tray::OwnFrame(routing));
     combineError_ = combined.error;
+    rulesFrom_ = std::move(rulesFrom);
+    hasHysteria_ = combined.config && sovereign::tray::HasHysteria2(*combined.config);
     notes.insert(notes.end(), combined.notes.begin(), combined.notes.end());
     combineNotes_ = std::move(notes);
     if (combined.config) {
@@ -1058,14 +1070,30 @@ class Worker {
         r.warpViaProxy = change.on;
         warpDirect_ = false;  // picked by hand: that way, from now
         break;
-      case RoutingChange::What::RemoteDns:
-        r.remoteDns = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 2));
+      case RoutingChange::What::RemoteDns: {
+        const auto pick = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 4));
+        if (pick == RoutingSettings::RemoteDns::Custom) {
+          if (!sovereign::tray::ParseCustomDns(change.text)) {
+            break;  // typed wrong: as it was
+          }
+          r.remoteDnsCustom = change.text.substr(0, 300);
+        }
+        r.remoteDns = pick;
         break;
-      case RoutingChange::What::LocalDns:
-        r.localDns = static_cast<RoutingSettings::LocalDns>(std::clamp(change.value, 0, 3));
+      }
+      case RoutingChange::What::LocalDns: {
+        const auto pick = static_cast<RoutingSettings::LocalDns>(std::clamp(change.value, 0, 5));
+        if (pick == RoutingSettings::LocalDns::Custom) {
+          if (!sovereign::tray::ParseCustomDns(change.text)) {
+            break;
+          }
+          r.localDnsCustom = change.text.substr(0, 300);
+        }
+        r.localDns = pick;
         dnsInstead_.reset();  // picked by hand: that one, from now
         dnsFailures_.clear();
         break;
+      }
       case RoutingChange::What::AddRule: {
         const auto action = static_cast<RouteRule::Action>(std::clamp(change.value, 0, 3));
         // A program picked (its path known): its exe's name as it is, a space in it or not.
@@ -2271,8 +2299,19 @@ class Worker {
   // nothing. The user's pick stays; picking one by hand starts over.
   void WatchLocalDns(std::string_view line) {
     using sovereign::tray::RoutingSettings;
-    const RoutingSettings::LocalDns now = dnsInstead_.value_or(settings_.routing.localDns);
-    if (!sovereign::tray::LocalDnsUnreachable(line, sovereign::tray::LocalDnsAddress(now))) {
+    const RoutingSettings::LocalDns now =
+        dnsInstead_.value_or(sovereign::tray::LocalDnsOrder(settings_.routing.localDns).front());
+    // Where it's dialled: the encrypted ones at 443; the user's own at its
+    // port - by its address only (one by name is dialled at what it resolved to).
+    std::string address(sovereign::tray::LocalDnsAddress(now));
+    int port = 443;
+    if (now == RoutingSettings::LocalDns::Custom) {
+      if (const auto own = sovereign::tray::ParseCustomDns(settings_.routing.localDnsCustom); own && !own->named) {
+        address = own->host;
+        port = own->port;
+      }
+    }
+    if (!sovereign::tray::LocalDnsUnreachable(line, address, port)) {
       return;
     }
     const auto clock = TrayModel::Clock::now();
@@ -2290,7 +2329,9 @@ class Worker {
     dnsInstead_ = next;
     dnsFailures_.clear();
     lastDnsSwitch_ = clock;
-    Notify(std::format(L"Sovereign: DNS {} не отвечает", Widen(std::string(sovereign::tray::LocalDnsName(now)))),
+    Notify(std::format(L"Sovereign: DNS {} не отвечает",
+                       now == RoutingSettings::LocalDns::Custom ? Widen(settings_.routing.localDnsCustom)
+                                                                : Widen(std::string(sovereign::tray::LocalDnsName(now)))),
            std::format(L"Переключился на {}. Выбор в «Маршрутах» не менялся.",
                        Widen(std::string(sovereign::tray::LocalDnsName(next)))),
            false, UiPage::Routing);
@@ -2437,6 +2478,8 @@ class Worker {
       v.warpServer = warpServer_;
       v.warpDirect = warpDirect_;
       v.quicBlocked = quicBlocked_;
+      v.hasHysteria = hasHysteria_;
+      v.rulesFrom = rulesFrom_;
       v.blockedAds = {blocked_.begin(), blocked_.end()};
       v.listsReady = ruleFiles_.size();
       v.listsNeeded = sovereign::tray::NeededRuleSets(settings_.routing).size();
@@ -2590,6 +2633,8 @@ class Worker {
   bool warpDirect_ = false;
   std::deque<std::string> blocked_;  // WatchBlocked's: what the ads lists blocked, newest first
   bool quicBlocked_ = true;  // View::quicBlocked
+  bool hasHysteria_ = false;  // View::hasHysteria
+  std::vector<std::string> rulesFrom_;  // View::rulesFrom
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
   std::vector<std::string> testedTags_;                   // in the test that runs or ran last
@@ -3950,6 +3995,7 @@ UiContent ContentFrom(const View& v) {
   c.routing.blockAds = r.blockAds;
   c.routing.quic = static_cast<int>(r.quic);
   c.routing.quicBlocked = v.quicBlocked;
+  c.routing.hysteria = v.hasHysteria;
   c.routing.hysteriaMbps = r.hysteriaMbps;
   c.routing.finalDirect = r.finalDirect;
   c.routing.ipv4Only = r.ipv4Only;
@@ -3964,23 +4010,48 @@ UiContent ContentFrom(const View& v) {
                           : r.warpViaProxy && !v.warpServer.empty()            ? L"через «" + Widen(v.serverTitles.contains(v.warpServer) ? v.serverTitles.at(v.warpServer).title : v.warpServer) + L"»"
                                                                                : way;
   }
-  c.routing.remoteDns = r.remoteDns == RoutingSettings::RemoteDns::Google  ? L"Google (DoH)"
-                        : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? L"Quad9 (DoH)"
-                                                                            : L"Cloudflare (DoH)";
-  c.routing.localDns = r.localDns == RoutingSettings::LocalDns::System
-                           ? std::wstring(L"системный")
-                           : Widen(std::string(sovereign::tray::LocalDnsName(r.localDns))) + L" (DoH)";
+  // The DNS rows: auto says what it is on now; a typed one its server's name
+  // (the rest - scheme, port, path - is seen when it's edited; the row is narrow).
+  const auto own = [](const std::string& typed) {
+    const auto dns = sovereign::tray::ParseCustomDns(typed);
+    return Widen(dns ? dns->host : typed);
+  };
+  using RemoteDnsPick = RoutingSettings::RemoteDns;
   using LocalDnsPick = RoutingSettings::LocalDns;
   const auto dnsLogo = [](LocalDnsPick dns) {
-    return dns == LocalDnsPick::Google ? "google" : dns == LocalDnsPick::Quad9 ? "quad9" : dns == LocalDnsPick::System ? "" : "cloudflare";
+    return dns == LocalDnsPick::Google ? "google" : dns == LocalDnsPick::Quad9 ? "quad9"
+           : dns == LocalDnsPick::System || dns == LocalDnsPick::Custom ? "" : "cloudflare";
   };
-  c.routing.remoteDnsLogo = r.remoteDns == RoutingSettings::RemoteDns::Google  ? "google"
-                            : r.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "quad9"
-                                                                                : "cloudflare";
-  c.routing.localDnsLogo = dnsLogo(v.dnsInstead ? *v.dnsInstead : r.localDns);
-  if (v.dnsInstead) {  // the pick not answering: what runs instead first, the row is narrow
+  const auto encrypted = [](LocalDnsPick dns) {
+    return dns == LocalDnsPick::System ? std::wstring(L"системный")
+                                       : Widen(std::string(sovereign::tray::LocalDnsName(dns))) + L" (DoH)";
+  };
+  switch (r.remoteDns) {
+    case RemoteDnsPick::Auto: c.routing.remoteDns = L"авто · Cloudflare"; break;
+    case RemoteDnsPick::Custom: c.routing.remoteDns = L"свой · " + own(r.remoteDnsCustom); break;
+    case RemoteDnsPick::Google: c.routing.remoteDns = L"Google (DoH)"; break;
+    case RemoteDnsPick::Quad9: c.routing.remoteDns = L"Quad9 (DoH)"; break;
+    case RemoteDnsPick::Cloudflare: c.routing.remoteDns = L"Cloudflare (DoH)"; break;
+  }
+  c.routing.remoteDnsLogo = r.remoteDns == RemoteDnsPick::Google   ? "google"
+                            : r.remoteDns == RemoteDnsPick::Quad9  ? "quad9"
+                            : r.remoteDns == RemoteDnsPick::Custom ? ""
+                                                                   : "cloudflare";
+  // What runs now: the pick, or what took over when it stopped answering.
+  const LocalDnsPick now = v.dnsInstead ? *v.dnsInstead : sovereign::tray::LocalDnsOrder(r.localDns).front();
+  c.routing.localDnsLogo = dnsLogo(now);
+  if (r.localDns == LocalDnsPick::Auto) {
+    // Auto moving on is auto at work: what it's on, no "instead".
+    c.routing.localDns = L"авто · " + (now == LocalDnsPick::System ? std::wstring(L"системный")
+                                                                    : Widen(std::string(sovereign::tray::LocalDnsName(now))));
+  } else if (v.dnsInstead) {  // the pick not answering: what runs instead first, the row is narrow
     c.routing.localDns = Widen(std::string(sovereign::tray::LocalDnsName(*v.dnsInstead))) + L" · вместо " +
-                         Widen(std::string(sovereign::tray::LocalDnsName(r.localDns)));
+                         (r.localDns == LocalDnsPick::Custom ? own(r.localDnsCustom)
+                                                             : Widen(std::string(sovereign::tray::LocalDnsName(r.localDns))));
+  } else if (r.localDns == LocalDnsPick::Custom) {
+    c.routing.localDns = L"свой · " + own(r.localDnsCustom);
+  } else {
+    c.routing.localDns = encrypted(r.localDns);
   }
   for (const auto& rule : r.rules) {
     c.routing.rules.push_back(
@@ -4392,25 +4463,67 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         send(What::WarpVia, *picked == 0);
       }
       break;
-    case UiCommand::ChooseRemoteDns:
-      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Cloudflare (DoH)", L"Google (DoH)", L"Quad9 (DoH)"},
-                                           static_cast<int>(r.remoteDns),
-                                           ServiceMenuIcons({"cloudflare", "google", "quad9"}))) {
-        send(What::RemoteDns, false, static_cast<int>(*picked));
+    case UiCommand::ChooseRemoteDns: {
+      using RemoteDns = sovereign::tray::RoutingSettings::RemoteDns;
+      static constexpr std::array kChoices = {RemoteDns::Auto, RemoteDns::Cloudflare, RemoteDns::Google, RemoteDns::Quad9,
+                                              RemoteDns::Custom};
+      const auto current = std::find(kChoices.begin(), kChoices.end(), r.remoteDns) - kChoices.begin();
+      if (const auto picked = PickFromMenu(owner, args.anchor,
+                                           {L"Авто (Cloudflare)", L"Cloudflare (DoH)", L"Google (DoH)", L"Quad9 (DoH)",
+                                            L"Свой адрес…"},
+                                           static_cast<int>(current),
+                                           ServiceMenuIcons({"", "cloudflare", "google", "quad9", ""}))) {
+        if (kChoices.at(*picked) == RemoteDns::Custom) {
+          if (g_mainWindow != nullptr) {
+            g_mainWindow->EditInPlace(UiCommand::ChooseRemoteDns, 0, UiCommand::RemoteDnsText,
+                                      Widen(r.remoteDnsCustom), false);
+          }
+        } else {
+          send(What::RemoteDns, false, static_cast<int>(kChoices.at(*picked)));
+        }
       }
       break;
+    }
     case UiCommand::ChooseLocalDns: {
       // In the menu's order; the one that stops answering gives way to the next (routing.h LocalDnsOrder).
       using LocalDns = sovereign::tray::RoutingSettings::LocalDns;
-      static constexpr std::array kChoices = {LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::System};
+      static constexpr std::array kChoices = {LocalDns::Auto, LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9,
+                                              LocalDns::System, LocalDns::Custom};
       const auto current = std::find(kChoices.begin(), kChoices.end(), r.localDns) - kChoices.begin();
       if (const auto picked = PickFromMenu(owner, args.anchor,
-                                           {L"Cloudflare (DoH, зашифрованный)", L"Google (DoH, зашифрованный)",
-                                            L"Quad9 (DoH, зашифрованный)", L"Системный (провайдера)"},
+                                           {L"Авто (Cloudflare, не отвечает — следующий)", L"Cloudflare (DoH, зашифрованный)",
+                                            L"Google (DoH, зашифрованный)", L"Quad9 (DoH, зашифрованный)",
+                                            L"Системный (провайдера)", L"Свой адрес…"},
                                            static_cast<int>(current),
-                                           ServiceMenuIcons({"cloudflare", "google", "quad9", ""}))) {
-        send(What::LocalDns, false, static_cast<int>(kChoices.at(*picked)));
+                                           ServiceMenuIcons({"", "cloudflare", "google", "quad9", "", ""}))) {
+        if (kChoices.at(*picked) == LocalDns::Custom) {
+          if (g_mainWindow != nullptr) {
+            g_mainWindow->EditInPlace(UiCommand::ChooseLocalDns, 0, UiCommand::LocalDnsText, Widen(r.localDnsCustom),
+                                      false);
+          }
+        } else {
+          send(What::LocalDns, false, static_cast<int>(kChoices.at(*picked)));
+        }
       }
+      break;
+    }
+    case UiCommand::RemoteDnsText:
+    case UiCommand::LocalDnsText: {  // a server of the user's own, typed over its row
+      if (args.text.empty()) {
+        break;
+      }
+      if (!sovereign::tray::ParseCustomDns(Narrow(args.text))) {
+        if (g_trayIcon != nullptr) {
+          g_trayIcon->Balloon(L"Sovereign", L"Не понял адрес DNS. Так понимаю: 77.88.8.8, tls://dns.example, "
+                                            L"https://dns.example/dns-query, quic://dns.example");
+        }
+        break;
+      }
+      const bool remote = command == UiCommand::RemoteDnsText;
+      send(remote ? What::RemoteDns : What::LocalDns, false,
+           remote ? static_cast<int>(sovereign::tray::RoutingSettings::RemoteDns::Custom)
+                  : static_cast<int>(sovereign::tray::RoutingSettings::LocalDns::Custom),
+           0, Narrow(args.text));
       break;
     }
     case UiCommand::AddRule:  // what to match, typed over the button; then where it goes
@@ -4460,7 +4573,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::BoardAdd: {
       // What can go to this bucket: a list that's off, a service, a program, a site.
-      enum class Add : std::uint8_t { Lan, Russia, Ads, Cookies, Service, Program, Site };
+      enum class Add : std::uint8_t { Lan, Russia, Ads, Cookies, Service, Program, Site, Import };
       const int bucket = args.index;
       std::vector<std::wstring> items;
       std::vector<Add> adds;
@@ -4493,6 +4606,11 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       items.emplace_back(L"Сайт или адрес…");
       adds.push_back(Add::Site);
+      // A subscription's own rules, while there are ones not taken yet (View::rulesFrom).
+      if (!view.rulesFrom.empty()) {
+        items.emplace_back(L"Правила из подписки…");
+        adds.push_back(Add::Import);
+      }
       const auto picked = PickFromMenu(owner, args.anchor, items, -1);
       if (!picked) {
         break;
@@ -4530,6 +4648,21 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           break;
         }
         case Add::Program: AddProgram(owner, args.anchor, bucket, idleNote); break;
+        case Add::Import: {
+          // Its rules go where the subscription sent them, whatever bucket this is.
+          std::vector<std::wstring> names;
+          std::vector<std::string> ids;
+          for (const auto& p : view.profiles) {
+            if (std::find(view.rulesFrom.begin(), view.rulesFrom.end(), p.id) != view.rulesFrom.end()) {
+              names.push_back(Widen(p.name));
+              ids.push_back(p.id);
+            }
+          }
+          if (const auto from = names.empty() ? std::nullopt : PickFromMenu(owner, args.anchor, names, -1)) {
+            send(What::ImportFrom, false, 0, 0, ids[*from]);
+          }
+          break;
+        }
         case Add::Site:
           if (g_mainWindow != nullptr) {
             g_mainWindow->EditInPlace(UiCommand::BoardAdd, bucket, UiCommand::BoardSiteText, L"", false);
@@ -4876,6 +5009,8 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::AddWarpSiteText:
     case UiCommand::ChooseRemoteDns:
     case UiCommand::ChooseLocalDns:
+    case UiCommand::RemoteDnsText:
+    case UiCommand::LocalDnsText:
     case UiCommand::AddRule:
     case UiCommand::AddRuleText:
     case UiCommand::RuleMenu:

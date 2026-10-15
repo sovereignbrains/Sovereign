@@ -128,6 +128,8 @@ constexpr float kCubeSpin = 0.12f;
 constexpr const wchar_t* kGlyphSync = L"\xE895";
 constexpr const wchar_t* kGlyphBack = L"\xE72B";
 constexpr const wchar_t* kGlyphChevron = L"\xE76C";
+constexpr const wchar_t* kGlyphChevronDown = L"\xE70D";  // a fold that opens
+constexpr const wchar_t* kGlyphChevronUp = L"\xE70E";    // ...and closes
 constexpr const wchar_t* kGlyphLog = L"\xE8A5";
 constexpr const wchar_t* kGlyphSettings = L"\xE713";
 constexpr const wchar_t* kGlyphPower = L"\xE7E8";
@@ -1870,9 +1872,14 @@ class Painter {
       y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0 + 4, x1, y) + 4;
     }
     y += kGap;
+    // The fine settings, folded: one row opening them in place - God Mode's,
+    // once it's there.
     {
-      Item more = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Ещё", nullptr, UiCommand::ToggleRoutingMore);
-      more.detail = c.routingMore ? L"свернуть" : L"QUIC, Hysteria 2, DNS";
+      Item more = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Тонкая настройка",
+                              c.routingMore ? kGlyphChevronUp : kGlyphChevronDown, UiCommand::ToggleRoutingMore);
+      if (!c.routingMore) {
+        more.detail = r.hysteria ? L"QUIC, Hysteria 2, IPv4, DNS" : L"QUIC, IPv4, DNS";
+      }
       l.items.push_back(Make(Kind::Card, more.rect));
       more.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
       l.items.push_back(std::move(more));
@@ -1882,58 +1889,38 @@ class Painter {
       return c.appsInclude ? Apps(l, c, x0, x1, y) : y;
     }
 
-    y = Heading(l, L"Тонкая настройка", x0, x1, y, L"То, что обычно трогать не нужно.");
+    // QUIC, Hysteria 2's speed (with a Hysteria 2 server only), IPv4: one card, a row each.
     {
-      Item quic = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"QUIC", nullptr, UiCommand::ChooseQuic);
-      quic.detail = r.quic == 1 ? L"блокируется"
-                    : r.quic == 2 ? L"пропускается"
-                    : r.quicBlocked ? L"авто: блокируется"
-                                    : L"авто: пропускается";
-      l.items.push_back(Make(Kind::Card, quic.rect));
-      quic.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
-      l.items.push_back(std::move(quic));
-      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
-                L"QUIC — HTTP/3 по UDP. Через серверы на TCP (VLESS, Trojan, AnyTLS) он идёт хуже обычного TCP: "
-                L"тогда Sovereign его блокирует, и браузеры сразу переходят на TCP. Через Hysteria2 и TUIC он "
-                L"идёт хорошо — тогда пропускается.\n\n«Авто» решает по твоим серверам сам.");
-      y += kRow + kGap + 4;
-    }
-    {
-      Item speed =
-          CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Hysteria 2", nullptr, UiCommand::ChooseHysteriaSpeed);
-      speed.detail = r.hysteriaMbps > 0 ? std::format(L"{} Мбит/с, Brutal", r.hysteriaMbps) : std::wstring(L"авто (BBR)");
-      speed.logo = "hysteria";
-      l.items.push_back(Make(Kind::Card, speed.rect));
-      speed.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
-      l.items.push_back(std::move(speed));
-      HintAfter(l, L"Hysteria 2", body_.get(), x0 + 20 + 22, x1 - 160, y + kRow / 2,
-                L"Скорость твоего канала, как в договоре. Сервер шлёт ровно с ней и не сбавляет при потерях "
-                L"(Brutal): по Wi-Fi с потерями скорость держится. Больше, чем тянет канал, не ставь — забьёт "
-                L"его, и всё начнёт тормозить.\n\nАвто — сервер подбирает скорость сам (BBR).");
-      y += kRow + kGap + 4;
-    }
-
-    // DNS: the client's own - its two resolvers and IPv4 in one card.
-    {
-      y = Heading(l, L"DNS", x0, x1, y,
-                  L"Через VPN — все имена, кроме прямых. Напрямую — российские и твои прямые адреса и адреса "
-                  L"самих серверов.\n\nЗашифрованный DNS (DoH) прячет их от провайдера; если перестанет "
-                  L"подключаться — выбери системный.");
-      const float h = 2 * kRow + kSwitchRow;
+      const float h = (r.hysteria ? 2.0f : 1.0f) * kRow + kSwitchRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Через VPN", nullptr,
-                                UiCommand::ChooseRemoteDns);
-      remote.detail = r.remoteDns;
-      remote.detailLogo = r.remoteDnsLogo;
-      l.items.push_back(std::move(remote));
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
-      Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Напрямую", nullptr,
-                               UiCommand::ChooseLocalDns);
-      local.detail = r.localDns;
-      local.detailLogo = r.localDnsLogo;
-      l.items.push_back(std::move(local));
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + 2 * kRow, x1 - 16, y + 2 * kRow + 1}));
-      const float top = y + 2 * kRow;
+      float top = y;
+      Item quic = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, L"QUIC", nullptr,
+                              UiCommand::ChooseQuic);
+      quic.detail = r.quic == 1     ? L"выкл."
+                    : r.quic == 2   ? L"вкл."
+                    : r.quicBlocked ? L"авто (сейчас выкл.)"
+                                    : L"авто (сейчас вкл.)";
+      l.items.push_back(std::move(quic));
+      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
+                L"QUIC — HTTP/3 по UDP. Через серверы на TCP (VLESS, Trojan, AnyTLS) он идёт хуже обычного TCP: "
+                L"тогда Sovereign его выключает, и браузеры сразу переходят на TCP. Через Hysteria2 и TUIC он "
+                L"идёт хорошо — тогда включён.\n\n«Авто» решает по твоим серверам сам.");
+      top += kRow;
+      if (r.hysteria) {
+        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        Item speed = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, L"Hysteria 2", nullptr,
+                                 UiCommand::ChooseHysteriaSpeed);
+        speed.detail =
+            r.hysteriaMbps > 0 ? std::format(L"{} Мбит/с, Brutal", r.hysteriaMbps) : std::wstring(L"авто (BBR)");
+        speed.logo = "hysteria";
+        l.items.push_back(std::move(speed));
+        HintAfter(l, L"Hysteria 2", body_.get(), x0 + 20 + 22, x1 - 160, top + kRow / 2,
+                  L"Скорость твоего канала, как в договоре. Сервер шлёт ровно с ней и не сбавляет при потерях "
+                  L"(Brutal): по Wi-Fi с потерями скорость держится. Больше, чем тянет канал, не ставь — забьёт "
+                  L"его, и всё начнёт тормозить.\n\nАвто — сервер подбирает скорость сам (BBR).");
+        top += kRow;
+      }
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
       Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSwitchRow - 2}, L"Только IPv4", nullptr,
                             UiCommand::ToggleIpv4Only);
       v4.checked = r.ipv4Only;
@@ -1943,11 +1930,30 @@ class Painter {
       y += h + kGap + 4;
     }
 
-
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Правила из подписки…", kGlyphDownload,
-                                  UiCommand::ImportRules));
-    y += kButton + kGap + 4;
-    // Only the listed programs through the proxy: a mode of its own (the
+    // DNS: who answers for the names of each kind - auto, a pick, or a
+    // server of the user's own (typed over its row).
+    {
+      y = Heading(l, L"DNS", x0, x1, y,
+                  L"Для сайтов через VPN — имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его "
+                  L"не видит. Для прямых сайтов — российские, твои прямые и адреса самих серверов.\n\n«Авто» "
+                  L"подходит почти всем: не ответит один — возьмётся следующий. Свой адрес понимается так: "
+                  L"77.88.8.8, tls://dns.example, https://dns.example/dns-query, quic://dns.example.");
+      const float h = 2 * kRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Для сайтов через VPN",
+                                nullptr, UiCommand::ChooseRemoteDns);
+      remote.detail = r.remoteDns;
+      remote.detailLogo = r.remoteDnsLogo;
+      l.items.push_back(std::move(remote));
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
+      Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Для прямых сайтов",
+                               nullptr, UiCommand::ChooseLocalDns);
+      local.detail = r.localDns;
+      local.detailLogo = r.localDnsLogo;
+      l.items.push_back(std::move(local));
+      y += h + kGap + 4;
+    }
+    // Only the listed programs through the VPN: a mode of its own (the
     // others are on the board).
     return c.appsInclude ? Apps(l, c, x0, x1, y) : y;
   }
@@ -2352,7 +2358,9 @@ class Painter {
           const float valueStart = std::max(valueLeft + 22, r.right - 30 - TextWidth(it.detail, trailing_.get()));
           k.t->DrawBitmap(logo, {valueStart - 22, cy - 8, valueStart - 6, cy + 8});
         }
-        k.Text(kGlyphChevron, glyph_.get(), {r.right - 28, r.top, r.right - 8, r.bottom}, secondary);
+        // Its own glyph if it has one (a fold's), else "goes on to a choice".
+        k.Text(it.glyph.empty() ? std::wstring(kGlyphChevron) : it.glyph, glyph_.get(), {r.right - 28, r.top, r.right - 8, r.bottom},
+               secondary);
         break;
       }
       case Kind::Banner: {

@@ -133,6 +133,7 @@ struct UiRouting {
   bool blockAds = true;
   int quic = 0;             // RoutingSettings::Quic's number: 0 auto, 1 blocked, 2 let through
   bool quicBlocked = true;  // what it comes to - auto: by the servers
+  bool hysteria = false;    // a Hysteria 2 server there: its speed row shown
   int hysteriaMbps = 0;     // RoutingSettings::hysteriaMbps
   bool finalDirect = false;
   bool ipv4Only = true;
@@ -274,6 +275,8 @@ enum class UiCommand : std::uint8_t {
   AddWarpSiteText,    // text: sites (or subnets, programs) to send through WARP
   ChooseRemoteDns,    // anchor: where to open the menu
   ChooseLocalDns,     // anchor
+  RemoteDnsText,      // text: a DNS server of the user's own, typed over the row (routing.h ParseCustomDns)
+  LocalDnsText,       // text: the same, for direct names
   AddRule,            // starts typing over the button
   AddRuleText,        // text: what was typed
   RuleMenu,           // index into the rules; anchor
