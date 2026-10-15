@@ -1,15 +1,11 @@
 // The app icon (assets/sovereign.ico, built by tools/icon/make_ico.ps1):
 // Explorer shows it for the exe; icons.cpp puts the state dot on it for the
 // tray. The flags sprite: the window draws the exit IP's country with it.
-// The night: the main screen's backdrop (generated with Qwen for this app,
-// monochrome: a night valley, a path of light from the foot of the picture
-// to a glow on the horizon - from the switch, which stands at the foot).
 // SVC_<ID>: a service's logo (assets/services, icons.h ServiceLogo).
 #include "resource.h"
 
 IDI_SOVEREIGN ICON "../../assets/sovereign.ico"
 IDR_FLAGS RCDATA "../../assets/flags/flags.png"
-IDR_NIGHT RCDATA "../../assets/backdrop/night.jpg"
 
 SVC_NETFLIX RCDATA "../../assets/services/netflix.svg"
 SVC_YOUTUBE RCDATA "../../assets/services/youtube.svg"

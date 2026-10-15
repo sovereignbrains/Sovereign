@@ -69,11 +69,6 @@ constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
-constexpr float kNav = 62;         // the overview's foot the switch stands in
-// The switch (the cube) at the overview's foot: its size, how far it stands
-// up over the foot. Its size grows with a tall window (88 at the usual 660, up to 124).
-float SwitchSize(float height) { return std::clamp(88 + (height - 660) * 0.12f, 88.0f, 124.0f); }
-float SwitchRise(float height) { return SwitchSize(height) + 6 - kNav; }
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
 constexpr float kTag = 30;         // a thing on the routing board
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
@@ -240,7 +235,7 @@ struct Layout {
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
   std::optional<D2D1_RECT_F> logBox;
-  bool night = false;  // the main screen's backdrop picture under it all (DrawBackdrop)
+  std::optional<D2D1_RECT_F> glow;  // the main screen's switch: a light behind it, under it all (DrawBackdrop)
 };
 
 // The log's level groups, as its filter shows them.
@@ -416,6 +411,26 @@ UiPage BackOf(UiPage page) {
     case UiPage::Logs: return UiPage::Settings;
     default: return UiPage::Overview;
   }
+}
+
+// Under the main screen's switch: the state in words - connected how long
+// and how fast; nothing for an error (said at the top).
+std::wstring PowerLine(const UiContent& c) {
+  switch (c.display) {
+    case Display::On: {
+      std::wstring line = L"Подключено";
+      if (c.onSince > 0) {
+        const std::int64_t s = std::max<std::int64_t>(0, static_cast<std::int64_t>(std::time(nullptr)) - c.onSince);
+        line += std::format(L" · {}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60);
+      }
+      return line + L" · ↓ " + FormatRate(c.down);
+    }
+    case Display::Starting: return L"Подключаюсь…";
+    case Display::Off: return L"Отключено";
+    case Display::Error:
+    case Display::ServiceDown: return {};
+  }
+  return {};
 }
 
 // The checks' line in the settings.
@@ -604,10 +619,6 @@ class Painter {
     const float x1 = x0 + pageWidth;
     l.viewTop = 0;
     l.viewBottom = height;
-    if (page == UiPage::Overview) {
-      l.viewBottom = height - kNav;  // the switch's room at the foot
-      l.night = true;
-    }
     const std::size_t first = l.items.size();
 
     float y = kPad;
@@ -633,15 +644,9 @@ class Painter {
       l.logBox->top -= scroll;
       l.logBox->bottom -= scroll;
     }
-    // The switch: the navigation's middle, bigger than its neighbours and
-    // standing up over the bar - last, so nothing scrolled is drawn over it.
-    if (page == UiPage::Overview) {
-      const float size = SwitchSize(height);
-      Item power = CommandItem(Kind::Power, {width / 2 - size / 2, height - 6 - size, width / 2 + size / 2, height - 6},
-                               {}, kGlyphPower, UiCommand::Toggle);
-      power.checked = c.on;
-      power.scrolls = false;
-      l.items.push_back(std::move(power));
+    if (l.glow) {
+      l.glow->top -= scroll;
+      l.glow->bottom -= scroll;
     }
     return l;
   }
@@ -655,8 +660,8 @@ class Painter {
     Canvas k{t, brush.get(), dwrite_.get(), Flags(t), in.cube ? &*in.cube : nullptr};
     const D2D1_SIZE_F size = t->GetSize();
     t->Clear(FromColorRef(ui::kWindowColor));
-    if (l.night) {
-      DrawBackdrop(t, size);
+    if (l.glow) {
+      DrawBackdrop(t, size, *l.glow, c.display == Display::On);
     }
 
     bool clipped = false;
@@ -797,8 +802,6 @@ class Painter {
     logos_.clear();
     flags_.reset();
     flagsLoaded_ = false;
-    night_.reset();  // the old target's bitmap
-    nightLoaded_ = false;
   }
 
  private:
@@ -925,16 +928,6 @@ class Painter {
       flags_ = ResourceBitmap(target, IDR_FLAGS);
     }
     return flags_.get();
-  }
-
-  // The main screen's backdrop picture (IDR_NIGHT), as a bitmap of `target`;
-  // null if it can't be had. Tried once per target.
-  ID2D1Bitmap* Night(ID2D1RenderTarget* target) const {
-    if (!nightLoaded_) {
-      nightLoaded_ = true;
-      night_ = ResourceBitmap(target, IDR_NIGHT);
-    }
-    return night_.get();
   }
 
   // A picture in the exe's resources (RCDATA: PNG or JPEG) as a bitmap of
@@ -1210,7 +1203,8 @@ class Painter {
   // where it comes out. The rest of the window - routing, the checks, the
   // log, the kill switch - is in the settings, a key in the top corner.
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
-    {
+    // The settings: a key in the subscription's card (SubscriptionCard); without one, alone at the top.
+    if (std::none_of(c.profiles.begin(), c.profiles.end(), [](const UiProfile& p) { return p.enabled; })) {
       Item settings = Make(Kind::IconButton, {x1 - 38, y, x1, y + 38}, L"Настройки", kGlyphSettings);
       settings.action = ItemAction::Page;
       settings.index = static_cast<int>(UiPage::Settings);
@@ -1311,10 +1305,24 @@ class Painter {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
-    // The server it runs on at the page's foot, over the switch standing up
-    // out of the navigation.
+    // The server at the foot; the switch in the middle of what's between,
+    // big, its state in words under it, a light behind it (DrawBackdrop).
     constexpr float kServerCard = 60;
-    const float serverTop = std::max(y + 140, bottom + kPad - SwitchRise(bottom + kPad + kNav) - 10 - kServerCard);
+    constexpr float kLine = 20;
+    const float serverTop = std::max(y + 180, bottom - kServerCard);
+    const float room = serverTop - y;
+    const float size = std::clamp(std::min(room - kLine - 40, (x1 - x0) * 0.6f), 88.0f, 220.0f);
+    const float top = y + std::max(0.0f, (room - size - kLine - 8) / 2);
+    const float mid = (x0 + x1) / 2;
+    const D2D1_RECT_F cube{mid - size / 2, top, mid + size / 2, top + size};
+    Item power = CommandItem(Kind::Power, cube, {}, kGlyphPower, UiCommand::Toggle);
+    power.checked = c.on;
+    l.items.push_back(std::move(power));
+    l.glow = cube;
+    if (const std::wstring line = PowerLine(c); !line.empty()) {
+      const float w = TextWidth(line, caption_.get()) + 6;
+      l.items.push_back(Make(Kind::Muted, {mid - w / 2, cube.bottom + 8, mid + w / 2, cube.bottom + 8 + kLine}, line));
+    }
     return ServerCard(l, c, x0, x1, serverTop);
   }
 
@@ -1356,6 +1364,13 @@ class Painter {
       item.key = true;
       l.items.push_back(std::move(item));
     };
+    {
+      Item settings = Make(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Настройки", kGlyphSettings);
+      settings.action = ItemAction::Page;
+      settings.index = static_cast<int>(UiPage::Settings);
+      key(std::move(settings));
+      buttons -= 42;
+    }
     if (p.subscription) {
       key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Обновить подписку", kGlyphRefresh,
                       UiCommand::RefreshProfile, static_cast<int>(shown - c.profiles.begin())));
@@ -2734,36 +2749,22 @@ class Painter {
     k.Text(it.text, body_.get(), textBox, ink);
   }
 
-  // The main screen's backdrop: the night picture (Night) filling the window
-  // - cropped, never stretched - its light on the horizon kept at the middle
-  // and a little under the upper half; darkened at the top and the foot so
-  // the cards and the navigation read on it.
-  void DrawBackdrop(ID2D1RenderTarget* t, D2D1_SIZE_F size) const {
-    ID2D1Bitmap* night = Night(t);
-    if (night == nullptr) {
-      return;
+  // The main screen's backdrop: the dark, and a light from behind the switch
+  // (`at`, its rect) - the accent's while connected, a faint grey otherwise.
+  // A stage for the live traffic to come.
+  void DrawBackdrop(ID2D1RenderTarget* t, D2D1_SIZE_F size, D2D1_RECT_F at, bool on) const {
+    const D2D1_POINT_2F center{(at.left + at.right) / 2, (at.top + at.bottom) / 2};
+    const float radius = std::max(size.width, at.bottom - at.top) * 0.75f;
+    const D2D1_COLOR_F light = on ? FromColorRef(ui::kAccent, 0.22f) : Rgb(255, 255, 255, 0.05f);
+    const std::array<D2D1_GRADIENT_STOP, 3> stops{
+        {{0, light}, {0.45f, D2D1_COLOR_F{light.r, light.g, light.b, light.a * 0.35f}}, {1, D2D1_COLOR_F{light.r, light.g, light.b, 0}}}};
+    wil::com_ptr<ID2D1GradientStopCollection> collection;
+    wil::com_ptr<ID2D1RadialGradientBrush> brush;
+    if (SUCCEEDED(t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
+        SUCCEEDED(t->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(center, {0, 0}, radius, radius),
+                                               collection.get(), brush.put()))) {
+      t->FillRectangle(D2D1::RectF(0, 0, size.width, size.height), brush.get());
     }
-    const D2D1_SIZE_F picture = night->GetSize();
-    constexpr D2D1_POINT_2F kLight{0.5f, 0.5f};  // where the light is in the picture: the path's far end
-    const float scale = std::max(size.width / picture.width, size.height / picture.height);
-    const float w = picture.width * scale;
-    const float h = picture.height * scale;
-    const float left = std::clamp(size.width / 2 - kLight.x * w, size.width - w, 0.0f);
-    const float top = std::clamp(size.height * 0.45f - kLight.y * h, size.height - h, 0.0f);
-    // A little dimmed: a backdrop, not the subject - the light mustn't outshine the cards.
-    t->DrawBitmap(night, D2D1::RectF(left, top, left + w, top + h), 0.82f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-    const auto shade = [&](float from, float to, float fromAlpha, float toAlpha) {
-      const std::array<D2D1_GRADIENT_STOP, 2> stops{{{0, Rgb(0, 0, 0, fromAlpha)}, {1, Rgb(0, 0, 0, toAlpha)}}};
-      wil::com_ptr<ID2D1GradientStopCollection> collection;
-      wil::com_ptr<ID2D1LinearGradientBrush> brush;
-      if (SUCCEEDED(t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
-          SUCCEEDED(t->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties({0, from}, {0, to}),
-                                                 collection.get(), brush.put()))) {
-        t->FillRectangle(D2D1::RectF(0, std::min(from, to), size.width, std::max(from, to)), brush.get());
-      }
-    };
-    shade(0, size.height * 0.30f, 0.45f, 0.0f);                          // under the subscription's card
-    shade(size.height * 0.62f, size.height, 0.0f, 0.78f);                 // under the server's card and the navigation
   }
   // An icon button as a key: its face lit from above, a bright edge along
   // its top, on a dark base that gives it height - up a little under the
@@ -2829,8 +2830,6 @@ class Painter {
   mutable std::map<std::string, wil::com_ptr<ID2D1Bitmap>> logos_;  // Logo's, by service; ForgetIcons too
   mutable wil::com_ptr<ID2D1Bitmap> flags_;  // Flags'
   mutable bool flagsLoaded_ = false;
-  mutable wil::com_ptr<ID2D1Bitmap> night_;  // Night's
-  mutable bool nightLoaded_ = false;
 };
 
 int Scale(float dip, UINT dpi) { return static_cast<int>(std::lround(dip * static_cast<float>(dpi) / 96.0f)); }

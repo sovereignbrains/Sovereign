@@ -251,6 +251,7 @@ struct View {
   // service isn't running" (TrayModel says that only after kServiceGrace).
   Display display = Display::Starting;
   bool wantOn = false;
+  std::int64_t onSince = 0;  // unix seconds connected since; 0: not connected
   double down = 0;
   double up = 0;
   std::int64_t connections = 0;
@@ -2501,6 +2502,13 @@ class Worker {
       const std::scoped_lock lock(shared.mutex);
       View& v = shared.view;
       v.display = model_.GetDisplay();
+      // Connected since: from the first poll that saw it on.
+      if (v.display != Display::On) {
+        onSince_ = 0;
+      } else if (onSince_ == 0) {
+        onSince_ = static_cast<std::int64_t>(std::time(nullptr));
+      }
+      v.onSince = onSince_;
       v.wantOn = model_.WantOn();
       v.down = model_.DownRate();
       v.up = model_.UpRate();
@@ -2706,6 +2714,7 @@ class Worker {
   std::string killSwitchError_;
   std::optional<TrayModel::Clock::time_point> lockedSince_;  // UpdateLockout's
   bool lockoutNoticed_ = false;
+  std::int64_t onSince_ = 0;  // unix seconds the box was first seen on, this time; 0: it isn't
   std::map<std::string, int> paidNoticed_;  // per configuration: 1 - "in a few days" said, 2 - "today" said
   std::string lockoutReason_;
   std::string directTag_;               // the config's way around the proxy, measured with the servers
@@ -3922,6 +3931,9 @@ UiContent ContentFrom(const View& v) {
   }
   c.display = v.display;
   c.on = v.wantOn;
+  c.onSince = v.onSince;
+  c.down = v.down;
+  c.up = v.up;
   c.error = v.display == Display::Error ? Widen(v.error) : std::wstring();
   c.hasConfig = v.hasConfig;
   c.combineError = Widen(v.combineError);

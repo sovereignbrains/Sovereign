@@ -172,6 +172,9 @@ struct UiCheck {
 struct UiContent {
   Display display = Display::ServiceDown;
   bool on = false;               // the toggle's position (the user's intent)
+  std::int64_t onSince = 0;      // unix seconds it's been connected since; 0: not connected
+  double down = 0;               // bytes per second, now
+  double up = 0;
   std::wstring error;            // why the box doesn't run; empty if it does or is off
   // A subscription in trouble (support_report.h SubscriptionTrouble), said on
   // the main screen with its report a click away: "«name»: не отвечает ни один
