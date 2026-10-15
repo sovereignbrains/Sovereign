@@ -132,107 +132,22 @@ wil::com_ptr<ID2D1PathGeometry> Polygon(ID2D1RenderTarget* t, const std::array<D
   return SUCCEEDED(sink->Close()) ? path : nullptr;
 }
 
-bool Near(D2D1_POINT_2F a, D2D1_POINT_2F b) { return std::abs(a.x - b.x) < 0.01f && std::abs(a.y - b.y) < 0.01f; }
-
-// A drafting line: short dashes, round nothing.
-wil::com_ptr<ID2D1StrokeStyle> Dashed(ID2D1RenderTarget* t) {
-  wil::com_ptr<ID2D1Factory> factory;
-  t->GetFactory(factory.put());
-  static constexpr std::array<float, 2> kDashes = {3, 4};
-  wil::com_ptr<ID2D1StrokeStyle> style;
-  if (factory) {
-    factory->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_FLAT, D2D1_CAP_STYLE_FLAT,
-                                                           D2D1_CAP_STYLE_FLAT, D2D1_LINE_JOIN_MITER, 10,
-                                                           D2D1_DASH_STYLE_CUSTOM, 0),
-                               kDashes.data(), static_cast<UINT32>(kDashes.size()), style.put());
-  }
-  return style;
-}
-
-// From `a` through `b` and `length` on.
-D2D1_POINT_2F Beyond(D2D1_POINT_2F a, D2D1_POINT_2F b, float length) {
-  const float dx = b.x - a.x;
-  const float dy = b.y - a.y;
-  const float n = std::hypot(dx, dy);
-  return n < 0.001f ? b : D2D1_POINT_2F{b.x + dx / n * length, b.y + dy / n * length};
-}
-
-// The knife switch on the cube's top face: a round mount (a circle seen at
-// the tilt - an ellipse) with the groove the lever runs in, the hinge, the
-// lever - turning in the plane that faces the viewer - and its knob, the
-// one thing in the state's colour.
-void DrawLever(ID2D1RenderTarget* t, const CubePose& p, const std::vector<CubeFace>& faces, float half) {
-  const auto top = std::find_if(faces.begin(), faces.end(), [](const CubeFace& f) { return f.top; });
-  const auto ink = Solid(t, p.rim);
-  if (top == faces.end() || !ink) {
-    return;
-  }
-  D2D1_POINT_2F base{0, 0};
-  for (const auto& c : top->corners) {
-    base.x += c.x / 4;
-    base.y += c.y / 4;
-  }
-  const float sp = std::sin(p.pitch * kDegrees);
-  const float cp = std::cos(p.pitch * kDegrees);
-
-  // The mount, and the groove across it.
-  const float r = half * 0.46f;
-  if (const auto mount = Solid(t, Scale(p.body, 0.6f))) {
-    t->FillEllipse(D2D1::Ellipse(base, r, r * sp), mount.get());
-  }
-  ink->SetOpacity(0.7f);
-  t->DrawEllipse(D2D1::Ellipse(base, r, r * sp), ink.get(), 1);
-  if (const auto groove = Solid(t, Color(0.02f, 0.02f, 0.025f, 1))) {
-    t->DrawLine({base.x - r * 0.75f, base.y}, {base.x + r * 0.75f, base.y}, groove.get(), 3.2f);
-  }
-
-  // The lever, out of the hinge just above the face.
-  const D2D1_POINT_2F hinge{base.x, base.y - half * 0.05f * cp};
-  const float angle = LeverAngle(p.press) * kDegrees;
-  const float length = half * 0.95f;
-  const D2D1_POINT_2F tip{hinge.x + length * std::sin(angle), hinge.y - length * std::cos(angle) * cp};
-  if (const auto dark = Solid(t, Color(0.02f, 0.02f, 0.025f, 0.9f))) {
-    t->DrawLine(hinge, tip, dark.get(), 5.5f);
-  }
-  ink->SetOpacity(0.9f);
-  t->DrawLine(hinge, tip, ink.get(), 2.6f);
-
-  // The hinge pin.
-  if (const auto pin = Solid(t, Scale(p.body, 1.6f))) {
-    t->FillEllipse(D2D1::Ellipse(hinge, 3.4f, 3.4f), pin.get());
-  }
-  ink->SetOpacity(0.9f);
-  t->DrawEllipse(D2D1::Ellipse(hinge, 3.4f, 3.4f), ink.get(), 1);
-
-  // The knob: the state's colour, glowing a little round it.
-  const float kr = half * 0.17f;
-  Spot(t, tip, kr * 3.2f, kr * 3.2f, WithAlpha(p.signal, 0.30f * p.signal.a));
-  if (const auto knob = Linear(t, {tip.x - kr, tip.y - kr}, {tip.x + kr, tip.y + kr}, Scale(p.signal, 1.15f),
-                               Scale(p.signal, 0.7f))) {
-    t->FillEllipse(D2D1::Ellipse(tip, kr, kr), knob.get());
-  }
-  ink->SetOpacity(0.85f);
-  t->DrawEllipse(D2D1::Ellipse(tip, kr, kr), ink.get(), 1);
-  if (const auto shine = Solid(t, Color(1, 1, 1, 0.45f))) {
-    t->FillEllipse(D2D1::Ellipse({tip.x - kr * 0.35f, tip.y - kr * 0.38f}, kr * 0.28f, kr * 0.28f), shine.get());
-  }
-}
 
 }  // namespace
 
 CubePose CubePoseFor(Display display) {
   CubePose p;
-  // A drawing's palette: dark glass, light thin edges - the same in every
-  // state; the one colour is the lever's knob. On, the edges brighten and a
-  // faint white light stands round it.
-  p.body = Color(0.12f, 0.12f, 0.13f, 0.96f);
+  // Dark see-through glass, light thin edges - the same in every state; the
+  // one colour is the core's, the state's. On, it shines through the glass
+  // and round it; off, a grey ember.
+  p.body = Color(0.12f, 0.13f, 0.15f, 0.62f);
   p.rim = Color(0.92f, 0.93f, 0.96f, 0.80f);
-  p.signal = Color(0.80f, 0.81f, 0.85f, 0.90f);
+  p.signal = Color(0.62f, 0.64f, 0.70f, 0.55f);
   switch (display) {
     case Display::On:
       p.pitch = 32;
       p.lift = 6;
-      p.glow = 0.35f;
+      p.glow = 1;
       p.press = 1;
       p.rim = Color(0.96f, 0.97f, 1.0f, 1.0f);
       p.signal = Mix(FromRef(ui::kAccent), Color(1, 1, 1), 0.15f);
@@ -240,7 +155,7 @@ CubePose CubePoseFor(Display display) {
     case Display::Starting:
       p.pitch = 29;
       p.lift = 3;
-      p.glow = 0.15f;
+      p.glow = 0.5f;
       p.press = 0.55f;
       p.rim = Color(0.94f, 0.95f, 0.98f, 0.90f);
       p.signal = FromRef(ui::kWarning);
@@ -252,7 +167,7 @@ CubePose CubePoseFor(Display display) {
       p.signal = FromRef(ui::kDanger);
       break;
     case Display::ServiceDown:
-      p.body = Color(0.10f, 0.10f, 0.11f, 0.95f);
+      p.body = Color(0.10f, 0.10f, 0.11f, 0.62f);
       p.rim = Color(0.85f, 0.87f, 0.92f, 0.35f);
       p.signal = Color(0.6f, 0.62f, 0.66f, 0.5f);
       break;
@@ -273,8 +188,6 @@ CubePose BlendPose(const CubePose& a, const CubePose& b, float t) {
           .rim = Mix(a.rim, b.rim, t),
           .signal = Mix(a.signal, b.signal, t)};
 }
-
-float LeverAngle(float press) { return -38 + 76 * std::clamp(press, 0.0f, 1.0f); }
 
 float EaseOut(float t) {
   t = std::clamp(t, 0.0f, 1.0f);
@@ -316,93 +229,110 @@ std::vector<CubeFace> CubeFaces(const CubePose& pose, D2D1_POINT_2F center, floa
 }
 
 void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool hovered, bool pressed) {
-  CubePose p = pose;
-  // The lever answers the pointer: under it, it leans toward the other side;
-  // pushed, it goes most of the way.
-  const float toward = p.press > 0.5f ? -1.0f : 1.0f;
-  p.press = std::clamp(p.press + toward * (pressed ? 0.45f : hovered ? 0.15f : 0.0f), 0.0f, 1.0f);
-  if (hovered && !pressed) {
-    p.body = Scale(p.body, 1.08f);
-  }
+  const CubePose& p = pose;
   const float size = box.right - box.left;
   const float half = size * 0.25f;
   const D2D1_POINT_2F center{(box.left + box.right) / 2, box.top + size * 0.48f};
+  const D2D1_POINT_2F middle{center.x, center.y - p.lift};
+  // How lit the core is: the state's, a little more under the pointer, less pressed.
+  const float lit = std::clamp(p.press + (hovered ? 0.15f : 0.0f) - (pressed ? 0.25f : 0.0f), 0.0f, 1.0f);
 
-  // The shadow on the floor: smaller and fainter the higher it floats.
+  // The floor: a shadow, smaller and fainter the higher it floats, and the
+  // core's light pooled on it.
   const float floor = center.y + ReachBelow(p, half) + 3;
   const float high = std::clamp(p.lift / 12, 0.0f, 1.0f);
   Spot(t, {center.x, floor}, half * 1.55f * (1 - 0.2f * high), half * 0.30f * (1 - 0.2f * high),
        Color(0, 0, 0, 0.55f * (1 - 0.35f * high)));
-  // The light inside, spilling round it.
-  Spot(t, {center.x, center.y - p.lift}, half * 2.4f, half * 2.4f, WithAlpha(p.rim, 0.26f * p.glow));
+  Spot(t, {center.x, floor}, half * 1.3f, half * 0.24f, WithAlpha(p.signal, 0.30f * p.glow));
+  // The light round it.
+  Spot(t, middle, half * 2.6f, half * 2.6f, WithAlpha(p.signal, 0.20f * p.glow));
 
+  // Its twelve edges: each between two faces; near if either faces the viewer.
+  const auto at = [&](Vec v) {
+    const Vec r = Rotate({v.x * half, v.y * half, v.z * half}, p.yaw, p.pitch);
+    return D2D1_POINT_2F{center.x + r.x, center.y - r.y - p.lift};
+  };
+  const auto facing = [&](Vec n) { return Rotate(n, p.yaw, p.pitch).z > 0.001f; };
+  struct Edge {
+    D2D1_POINT_2F a;
+    D2D1_POINT_2F b;
+    int toward;  // how many of its two faces face the viewer: 0 behind the glass, 1 the outline, 2 inside it
+  };
+  std::vector<Edge> edges;
+  for (int axis = 0; axis < 3; ++axis) {
+    for (const float s : {-1.0f, 1.0f}) {
+      for (const float u : {-1.0f, 1.0f}) {
+        // The other two coordinates at s and u; the edge runs along `axis`.
+        const Vec from = axis == 0 ? Vec{-1, s, u} : axis == 1 ? Vec{s, -1, u} : Vec{s, u, -1};
+        const Vec to = axis == 0 ? Vec{1, s, u} : axis == 1 ? Vec{s, 1, u} : Vec{s, u, 1};
+        const Vec n1 = axis == 0 ? Vec{0, s, 0} : Vec{s, 0, 0};
+        const Vec n2 = axis == 2 ? Vec{0, u, 0} : Vec{0, 0, u};
+        edges.push_back({at(from), at(to), (facing(n1) ? 1 : 0) + (facing(n2) ? 1 : 0)});
+      }
+    }
+  }
+  const D2D1_COLOR_F rim = Mix(p.rim, WithAlpha(p.signal, p.rim.a), 0.35f * p.glow);
+  const auto ink = Solid(t, rim);
+
+  // Behind the glass: the far edges, faint.
+  if (ink) {
+    ink->SetOpacity(0.16f);
+    for (const Edge& e : edges) {
+      if (e.toward == 0) {
+        t->DrawLine(e.a, e.b, ink.get(), 1);
+      }
+    }
+  }
+
+  // The core: an orb of the state's colour, white at its heart while on.
+  const float r = half * (0.26f + 0.24f * lit);
+  Spot(t, middle, r * 2.4f, r * 2.4f, WithAlpha(p.signal, 0.40f * (0.35f + 0.65f * lit)));
+  {
+    const std::array<D2D1_GRADIENT_STOP, 3> stops{{{0, Mix(p.signal, Color(1, 1, 1), 0.75f * lit)},
+                                                    {0.45f, WithAlpha(p.signal, 0.85f)},
+                                                    {1, WithAlpha(p.signal, 0)}}};
+    wil::com_ptr<ID2D1GradientStopCollection> collection;
+    wil::com_ptr<ID2D1RadialGradientBrush> orb;
+    if (SUCCEEDED(t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
+        SUCCEEDED(t->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(middle, {0, 0}, r, r),
+                                               collection.get(), orb.put()))) {
+      t->FillEllipse(D2D1::Ellipse(middle, r, r), orb.get());
+    }
+  }
+
+  // The near faces: dark glass the core shows through - lit from above, the
+  // core's colour on them, a gloss down from each one's top corner.
   const std::vector<CubeFace> faces = CubeFaces(p, center, half);
   for (const CubeFace& face : faces) {
     const auto path = Polygon(t, face.corners);
     if (!path) {
       continue;
     }
-    // Lit from above: lighter at the face's top, darker at its foot; the
-    // light inside warms the faces toward the rim's colour.
     const auto [topIt, bottomIt] = std::minmax_element(
         face.corners.begin(), face.corners.end(), [](const auto& a, const auto& b) { return a.y < b.y; });
-    D2D1_COLOR_F lit = Scale(p.body, 0.45f + 0.85f * face.shade);
-    lit = Mix(lit, WithAlpha(p.rim, lit.a), 0.18f * p.glow * face.shade);
-    if (const auto fill = Linear(t, *topIt, *bottomIt, Scale(lit, 1.12f), Scale(lit, 0.86f))) {
+    D2D1_COLOR_F glass = Scale(p.body, 0.55f + 0.75f * face.shade);
+    glass = Mix(glass, WithAlpha(p.signal, glass.a), 0.16f * p.glow);
+    if (const auto fill = Linear(t, *topIt, *bottomIt, Scale(glass, 1.15f), Scale(glass, 0.85f))) {
       t->FillGeometry(path.get(), fill.get());
     }
-    if (face.top) {  // matte sheen across the top, from its far corner
-      if (const auto sheen = Linear(t, *topIt, *bottomIt, Color(1, 1, 1, 0.10f), Color(1, 1, 1, 0))) {
-        t->FillGeometry(path.get(), sheen.get());
+    const D2D1_POINT_2F mid{(topIt->x + bottomIt->x) / 2, (topIt->y + bottomIt->y) / 2};
+    if (const auto gloss =
+            Linear(t, *topIt, mid, Color(1, 1, 1, face.top ? 0.14f : 0.08f), Color(1, 1, 1, 0))) {
+      t->FillGeometry(path.get(), gloss.get());
+    }
+  }
+  // The core's light through the glass.
+  Spot(t, middle, r * 1.6f, r * 1.6f, WithAlpha(Mix(p.signal, Color(1, 1, 1), 0.3f), 0.22f * lit));
+
+  // The near edges catch the light: the outline bright, the ones inside it softer.
+  if (ink) {
+    for (const Edge& e : edges) {
+      if (e.toward > 0) {
+        ink->SetOpacity(e.toward == 1 ? 0.95f : 0.55f);
+        t->DrawLine(e.a, e.b, ink.get(), e.toward == 1 ? 1.3f : 1.0f);
       }
     }
   }
-
-  // The edges catch the light: where two lit faces meet, bright; the outline,
-  // softer - and running on past the corners in dashes, a drawing's
-  // construction lines; a point at each corner.
-  const auto edges = Solid(t, p.rim);
-  std::vector<std::pair<D2D1_POINT_2F, D2D1_POINT_2F>> outline;
-  if (edges) {
-    for (std::size_t i = 0; i < faces.size(); ++i) {
-      for (std::size_t c = 0; c < 4; ++c) {
-        const D2D1_POINT_2F a = faces[i].corners[c];
-        const D2D1_POINT_2F b = faces[i].corners[(c + 1) % 4];
-        bool shared = false;
-        bool drawn = false;
-        for (std::size_t j = 0; j < faces.size(); ++j) {
-          for (std::size_t d = 0; j != i && d < 4; ++d) {
-            const D2D1_POINT_2F x = faces[j].corners[d];
-            const D2D1_POINT_2F y = faces[j].corners[(d + 1) % 4];
-            if ((Near(a, x) && Near(b, y)) || (Near(a, y) && Near(b, x))) {
-              shared = true;
-              drawn = drawn || j < i;  // the other face drew it
-            }
-          }
-        }
-        if (drawn) {
-          continue;
-        }
-        if (!shared) {
-          outline.emplace_back(a, b);
-        }
-        edges->SetOpacity(shared ? 0.75f : 1.0f);
-        t->DrawLine(a, b, edges.get(), shared ? 1.0f : 1.2f);
-      }
-    }
-    const auto dashed = Dashed(t);
-    edges->SetOpacity(0.22f);
-    for (const auto& [a, b] : outline) {
-      t->DrawLine(b, Beyond(a, b, half * 0.9f), edges.get(), 1, dashed.get());
-      t->DrawLine(a, Beyond(b, a, half * 0.9f), edges.get(), 1, dashed.get());
-    }
-    edges->SetOpacity(0.95f);
-    for (const auto& [a, b] : outline) {
-      t->FillEllipse(D2D1::Ellipse(a, 1.7f, 1.7f), edges.get());
-    }
-  }
-
-  DrawLever(t, p, faces, half);
 }
 
 }  // namespace sovereign::tray

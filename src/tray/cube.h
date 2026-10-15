@@ -7,18 +7,18 @@
 
 #include "tray_model.h"
 
-// The connect button as a cube of matte glass (main screen, the plan of
-// 04.10): its pose says the state - resting grey while off, turning while
-// it connects, lifted and lit from inside while on, knocked askew on an
-// error. A change of state is a quarter turn into the new pose; nothing
-// moves otherwise (no timer, no CPU), and with Windows' animations off it
-// takes the pose at once.
+// The connect button as a cube of dark see-through glass with a core of
+// light inside (main screen; the plan of 04.10, the glass and core of
+// 15.10): its pose says the state - a grey ember while off, turning while it
+// connects, lifted and lit from inside while on, knocked askew on an error.
+// A change of state is a quarter turn into the new pose; nothing moves
+// otherwise (no timer, no CPU), and with Windows' animations off it takes
+// the pose at once.
 //
 // Drawn with Direct2D, no 3D engine: an orthographic view keeps a cube's
-// faces parallelograms, so each is a filled path, and a circle on the top
-// face an ellipse. The lever turns in the plane facing the viewer, so it
-// reads the same whichever way the cube has turned. The pose math is pure,
-// tested in tests/unit/cube_test.cpp.
+// faces parallelograms, so each is a filled path; the far edges show faint
+// through the near faces. The pose math is pure, tested in
+// tests/unit/cube_test.cpp.
 
 namespace sovereign::tray {
 
@@ -26,11 +26,11 @@ struct CubePose {
   float yaw = 45;    // degrees round the vertical; 45 + 90k shows it square-on to a corner
   float pitch = 26;  // degrees the top tips toward the viewer
   float lift = 0;    // DIPs above where it rests
-  float glow = 0;    // 0..1: the light inside, and around it
-  float press = 0;   // 0..1: the lever on top, thrown left (off) to right (on)
+  float glow = 0;    // 0..1: the core's light round the cube and on the floor
+  float press = 0;   // 0..1: how far it's switched on - the core, an ember (off) to full (on)
   D2D1_COLOR_F body{};    // the glass
   D2D1_COLOR_F rim{};     // the edges' light
-  D2D1_COLOR_F signal{};  // the lever's knob: the one colour, the state's
+  D2D1_COLOR_F signal{};  // the core: the one colour, the state's
 };
 
 // The pose a state rests in.
@@ -58,13 +58,8 @@ struct CubeFace {
 // (lift moves it up), that face the viewer.
 std::vector<CubeFace> CubeFaces(const CubePose& pose, D2D1_POINT_2F center, float half);
 
-// The cube in `box` (square), with its shadow and glow, and a knife switch on
-// its top face: a lever in a slotted mount, thrown left while off, right
-// while on, upright while it connects. Hovered nudges the lever toward the
-// other side, pressed throws it further.
+// The cube in `box` (square), with its shadow and the core's light. Hovered,
+// the core brightens; pressed, it dims for the moment.
 void DrawCube(ID2D1RenderTarget* target, const CubePose& pose, D2D1_RECT_F box, bool hovered, bool pressed);
-
-// The lever's angle off upright, degrees (negative: to the left) for a press.
-float LeverAngle(float press);
 
 }  // namespace sovereign::tray
