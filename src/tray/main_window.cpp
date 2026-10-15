@@ -2375,128 +2375,122 @@ class Painter {
                   L"закрывает трей; подключение остаётся — им управляет служба, и следующий запуск продолжит с того "
                   L"же места.");
 
-    // The pages the overview no longer has a way to - it keeps the switch, the
-    // server and the subscription: a row each, its state on the right.
-    {
-      struct Link {
-        const wchar_t* title;
-        UiPage page;
-        std::wstring state;
-      };
-      const std::array<Link, 3> links = {{
-          {L"Маршруты и DNS", UiPage::Routing, RoutingLine(c)},
-          {L"Проверка", UiPage::Checks, ChecksLine(c)},
-          {L"Журнал", UiPage::Logs, c.display == Display::Error ? std::wstring(L"есть ошибка") : std::wstring()},
-      }};
-      const float h = static_cast<float>(links.size()) * kRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      float top = y;
-      for (std::size_t i = 0; i < links.size(); ++i) {
-        if (i > 0) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-        }
-        Item link = Make(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, links[i].title);
-        link.detail = links[i].state;
-        link.action = ItemAction::Page;
-        link.index = static_cast<int>(links[i].page);
-        l.items.push_back(std::move(link));
-        top += kRow;
-      }
-      y += h + kGap;
-    }
+    // Groups, a heading and a card each, rows in a card a line apart: the
+    // card goes in first (drawn under its rows), its foot set once they're in.
+    const auto open = [&](float top) {
+      l.items.push_back(Make(Kind::Card, {x0, top, x1, top}));
+      return l.items.size() - 1;
+    };
+    const auto close = [&](std::size_t card, float bottom) {
+      l.items[card].rect.bottom = bottom;
+      return bottom + kGap;
+    };
+    const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1})); };
+    const auto row = [&](float top) { return D2D1_RECT_F{x0 + 4, top + 2, x1 - 4, top + kRow - 2}; };
+    const auto page = [&](float top, const wchar_t* title, UiPage to, std::wstring state) {
+      Item link = Make(Kind::ValueRow, row(top), title);
+      link.detail = std::move(state);
+      link.action = ItemAction::Page;
+      link.index = static_cast<int>(to);
+      l.items.push_back(std::move(link));
+      return top + kRow;
+    };
 
+    // The connection: where traffic goes, what holds it when the VPN drops, how it starts.
+    y = Heading(l, L"Подключение", x0, x1, y);
     {
-      Item startup = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Автозапуск", nullptr, UiCommand::ChooseStartup);
+      const std::size_t card = open(y);
+      float top = page(y, L"Маршруты и DNS", UiPage::Routing, RoutingLine(c));
+      line(top);
+      Item kill = CommandItem(Kind::Switch, row(top), L"Kill switch", nullptr, UiCommand::ToggleKillSwitch);
+      kill.checked = c.killSwitch;
+      l.items.push_back(std::move(kill));
+      HintAfter(l, L"Kill switch", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+                L"Если подключение оборвётся, трафик не пойдёт мимо VPN: интернет закрыт, пока оно не "
+                L"восстановится.");
+      top += kRow;
+      line(top);
+      Item startup = CommandItem(Kind::ValueRow, row(top), L"Автозапуск", nullptr, UiCommand::ChooseStartup);
       startup.detail = !c.autostart ? L"выключен" : c.connectAtStartup ? L"с подключением" : L"без подключения";
-      l.items.push_back(Make(Kind::Card, startup.rect));
-      startup.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
       l.items.push_back(std::move(startup));
-      HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
+      HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
                 L"При входе в Windows клиент запускается в области уведомлений, без окна. «С подключением» — "
                 L"подключается сам, если был включён; «без подключения» — ждёт, пока включишь.");
-      y += kRow + kGap;
+      y = close(card, top + kRow);
     }
-
-    y = Switches(l,
-                 {Row(L"Kill switch",
-                      L"Если подключение оборвётся, трафик не пойдёт мимо VPN: интернет закрыт, пока оно не "
-                      L"восстановится.",
-                      c.killSwitch, UiCommand::ToggleKillSwitch)},
-                 x0, x1, y) +
-        kGap;
     if (!c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
     y = LocalNetwork(l, c, x0, x1, y);
 
-    // Version and updates: a line - the button for an update only when there is one.
+    // When something's wrong: what to look at.
+    y = Heading(l, L"Диагностика", x0, x1, y);
     {
-      const bool available = c.update == UiUpdate::Available;
-      const float h = available ? 60 + kButton + 10 : 60.0f;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      l.items.push_back(Make(Kind::Text, {x0 + 16, y + 9, x1 - 56, y + 31}, L"Sovereign " + c.version));
-      l.items.push_back(Make(Kind::Muted, {x0 + 16, y + 31, x1 - 56, y + 51},
+      const std::size_t card = open(y);
+      float top = page(y, L"Проверка", UiPage::Checks, ChecksLine(c));
+      line(top);
+      top = page(top, L"Журнал", UiPage::Logs,
+                 c.display == Display::Error ? std::wstring(L"есть ошибка") : std::wstring());
+      y = close(card, top);
+    }
+
+    // The app itself: its version and updates, its files, what few need
+    // (folded), and out.
+    y = Heading(l, L"Приложение", x0, x1, y);
+    {
+      const std::size_t card = open(y);
+      // The version: a line, the update's button only when there is one.
+      l.items.push_back(Make(Kind::Text, {x0 + 20, y + 9, x1 - 56, y + 31}, L"Sovereign " + c.version));
+      l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 31, x1 - 56, y + 51},
                              c.update == UiUpdate::Downloading ? std::wstring(L"скачиваю обновление…") : UpdateStatus(c)));
       Item check = CommandItem(Kind::IconButton, {x1 - 48, y + 12, x1 - 12, y + 48}, L"Проверить обновления",
                                kGlyphRefresh, UiCommand::CheckUpdate);
       check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
       l.items.push_back(std::move(check));
-      if (available) {
-        l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, y + 60, x1 - 16, y + 60 + kButton},
+      float top = y + 60;
+      if (c.update == UiUpdate::Available) {
+        l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, top, x1 - 16, top + kButton},
                                       L"Обновить до " + c.updateVersion, kGlyphDownload, UiCommand::InstallUpdate));
+        top += kButton + 10;
       }
-      y += h + kGap;
-    }
-
-    // What few need, folded: one row opening it in place (not kept - it opens rarely).
-    {
-      Item more = Make(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Дополнительно",
-                       c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
-      more.action = ItemAction::ToggleMore;
-      if (!c.settingsMore) {
-        more.detail = L"подписки без подключения";
-      }
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kRow}));
-      l.items.push_back(std::move(more));
-      y += kRow + kGap;
-    }
-    if (c.settingsMore) {
-      y = Relay(l, c, x0, x1, y);
-    }
-
-    const float mid = (x0 + x1) / 2;
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Папка данных", kGlyphFolder,
-                                  UiCommand::OpenFolder));
-    l.items.push_back(CommandItem(Kind::DangerButton, {mid + 4, y, x1, y + kButton}, L"Выйти", kGlyphExit,
-                                  UiCommand::Exit));
-    return y + kButton;
-  }
-
-  // The subscription relay (relay.h): the address and the key, each typed
-  // over its row; the key is never shown.
-  float Relay(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = Heading(l, L"Подписки без подключения", x0, x1, y,
+      line(top);
+      l.items.push_back(CommandItem(Kind::ValueRow, row(top), L"Папка данных", nullptr, UiCommand::OpenFolder));
+      top += kRow;
+      line(top);
+      // The subscription relay (relay.h), folded: the address and the key, each
+      // typed over its row; the key is never shown.
+      Item relay = Make(Kind::ValueRow, row(top), L"Подписки без подключения",
+                        c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
+      relay.action = ItemAction::ToggleMore;
+      relay.detail = c.relayHost.empty() ? std::wstring(L"выключено") : c.relayHost;
+      l.items.push_back(std::move(relay));
+      HintAfter(l, L"Подписки без подключения", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
                 L"Пока подключение работает, подписки скачиваются через него. Когда его нет, напрямую их сервер "
                 L"увидел бы твой настоящий IP — поэтому они скачиваются через пересыльщик: твой Cloudflare Worker "
                 L"(tools/relay в репозитории). Сервер подписки видит адрес Cloudflare.\n\nБез пересыльщика подписка "
                 L"ждёт подключения; скачать напрямую можно из её меню.\n\nПустой адрес — пересыльщик выключен.");
-    {
-      const float h = 2 * kRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      Item url = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Адрес", nullptr,
-                             UiCommand::EditRelayUrl);
-      url.detail = c.relayHost.empty() ? std::wstring(L"не задан") : c.relayHost;
-      l.items.push_back(std::move(url));
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
-      Item key = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Ключ", nullptr,
-                             UiCommand::EditRelayKey);
-      key.detail = c.relaySet ? L"задан" : L"не задан";
-      key.enabled = !c.relayHost.empty();
-      l.items.push_back(std::move(key));
-      y += h + kGap;
+      top += kRow;
+      if (c.settingsMore) {
+        line(top);
+        Item url = CommandItem(Kind::ValueRow, row(top), L"Адрес", nullptr, UiCommand::EditRelayUrl);
+        url.detail = c.relayHost.empty() ? std::wstring(L"не задан") : c.relayHost;
+        l.items.push_back(std::move(url));
+        top += kRow;
+        line(top);
+        Item key = CommandItem(Kind::ValueRow, row(top), L"Ключ", nullptr, UiCommand::EditRelayKey);
+        key.detail = c.relaySet ? L"задан" : L"не задан";
+        key.enabled = !c.relayHost.empty();
+        l.items.push_back(std::move(key));
+        top += kRow;
+      }
+      line(top);
+      Item exit = CommandItem(Kind::ValueRow, row(top), L"Выйти", kGlyphExit, UiCommand::Exit);
+      exit.warn = true;
+      l.items.push_back(std::move(exit));
+      y = close(card, top + kRow);
     }
-    return y;
+    return y - kGap;
   }
 
   /* ---- drawing ---- */
@@ -2572,7 +2566,9 @@ class Painter {
           textLeft += 22;
         }
         const float valueLeft = textLeft + TextWidth(it.text, body_.get()) + 12;
-        k.Text(it.text, body_.get(), {textLeft, r.top, valueLeft, r.bottom}, primary);
+        // `warn`: a row that ends something (quit) - in red, its glyph too.
+        const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kDanger) : primary;
+        k.Text(it.text, body_.get(), {textLeft, r.top, valueLeft, r.bottom}, ink);
         k.Text(it.detail, trailing_.get(), {valueLeft, r.top, r.right - 30, r.bottom}, secondary);
         // The value's logo right before it (the value is set against the right edge).
         if (ID2D1Bitmap* logo = it.detailLogo.empty() ? nullptr : Logo(k.t, it.detailLogo); logo != nullptr) {
@@ -2581,7 +2577,7 @@ class Painter {
         }
         // Its own glyph if it has one (a fold's), else "goes on to a choice".
         k.Text(it.glyph.empty() ? std::wstring(kGlyphChevron) : it.glyph, glyph_.get(), {r.right - 28, r.top, r.right - 8, r.bottom},
-               secondary);
+               it.warn ? ink : secondary);
         break;
       }
       case Kind::Banner: {
