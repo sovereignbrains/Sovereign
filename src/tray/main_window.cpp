@@ -2455,7 +2455,7 @@ class Painter {
         top += kButton + 10;
       }
       line(top);
-      l.items.push_back(CommandItem(Kind::ValueRow, row(top), L"Папка данных", nullptr, UiCommand::OpenFolder));
+      l.items.push_back(CommandItem(Kind::ValueRow, row(top), L"Папка данных", kGlyphFolder, UiCommand::OpenFolder));
       top += kRow;
       line(top);
       // The subscription relay (relay.h), folded: the address and the key, each
