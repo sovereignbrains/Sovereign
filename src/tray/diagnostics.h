@@ -56,10 +56,46 @@ std::vector<DnsResolverSeen> ParseDnsLeak(std::string_view json);
 // likely the provider's DNS.
 CheckResult JudgeDnsLeak(const std::vector<DnsResolverSeen>& resolvers);
 
-// Where a connection went, from the core's log (info level): the outbound
-// of the newest line about `targets` (the name, or one of its addresses).
-std::optional<std::string> OutboundInLogs(const std::vector<std::string>& lines,
-                                          const std::vector<std::string>& targets);
+// Where the newest connection to an address went, as the core's traffic
+// manager keeps it (the service's box_route) - the core's log said it too,
+// but only at info level: the outbound it left by (a server, "direct",
+// WARP's endpoint), that outbound's type, the outbounds from it back to the
+// rule's one, and the core's rule (empty: none - the route's final).
+struct RouteWay {
+  std::string outbound;
+  std::string type;
+  std::vector<std::string> chain;
+  std::string rule;
+};
+// The service's box_route answer; nullopt - no way in it (none kept, an error).
+std::optional<RouteWay> ParseRouteAnswer(std::string_view json);
+// As the user reads it: "напрямую", "через WARP", "через VPN".
+std::string WayText(const RouteWay& way);
+
+// The sites "Проверить всё" sends a request to: a Russian one should go
+// directly (with «Российское напрямую»), the foreign ones through the VPN.
+struct RouteProbe {
+  std::string_view host;
+  bool russian = false;
+};
+inline constexpr std::array<RouteProbe, 3> kRouteProbes = {
+    {{.host = "ya.ru", .russian = true}, {.host = "spiegel.de", .russian = false}, {.host = "chatgpt.com", .russian = false}}};
+
+// One site's request: whether its name resolved, and where it went.
+struct SiteWay {
+  std::string host;
+  bool russian = false;
+  bool resolved = false;
+  std::optional<RouteWay> way;  // nullopt: the core kept no connection to it
+};
+// A site's line for the detail: "chatgpt.com — через VPN (AnyTLS), правило
+// ядра: …" - the user's own rule, if one names it, before the core's.
+std::string SiteLine(const SiteWay& site, const RoutingSettings& routing);
+// Judged: a foreign site going directly with none of the user's rules
+// saying so fails (blocked sites won't open, the user's own address shows);
+// a Russian one through the VPN with «Российское напрямую» on, or a site
+// not seen, warns.
+CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing);
 
 // Which of the client's rules - the user's, or Russia's zones - names `host`
 // (lists aren't read: they're the core's), as a line for the user; empty if

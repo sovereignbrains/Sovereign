@@ -243,37 +243,106 @@ CheckResult JudgeDnsLeak(const std::vector<DnsResolverSeen>& resolvers) {
   return result;
 }
 
-std::optional<std::string> OutboundInLogs(const std::vector<std::string>& lines,
-                                          const std::vector<std::string>& targets) {
-  constexpr std::string_view kMarker = "outbound connection to ";
-  for (auto line = lines.rbegin(); line != lines.rend(); ++line) {
-    const std::size_t at = line->find(kMarker);
-    if (at == std::string::npos) {
-      continue;
-    }
-    const std::string_view destination = std::string_view(*line).substr(at + kMarker.size());
-    const bool ours = std::any_of(targets.begin(), targets.end(), [&](const std::string& t) {
-      return !t.empty() && (destination.starts_with(t + ":") || destination.starts_with("[" + t + "]:"));
-    });
-    if (!ours) {
-      continue;
-    }
-    const std::size_t out = line->rfind("outbound/", at);
-    if (out == std::string::npos) {
-      continue;
-    }
-    const std::string_view head = std::string_view(*line).substr(out + 9, at - out - 9);
-    const std::size_t open = head.find('[');
-    const std::size_t close = head.rfind(']');
-    if (open == std::string_view::npos || close == std::string_view::npos || close < open) {
-      continue;
-    }
-    if (head.substr(0, open) == "direct") {
-      return std::string("direct");
-    }
-    return std::string(head.substr(open + 1, close - open - 1));
+std::optional<RouteWay> ParseRouteAnswer(std::string_view json) {
+  const auto answer = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+  if (!answer.is_object() || answer.value("cmd", nlohmann::json()) != "box_route") {
+    return std::nullopt;
   }
-  return std::nullopt;
+  const auto text = [&](const char* key) {
+    const auto it = answer.find(key);
+    return it != answer.end() && it->is_string() ? it->get<std::string>() : std::string();
+  };
+  RouteWay way{.outbound = text("outbound"), .type = text("type"), .chain = {}, .rule = text("rule")};
+  if (way.outbound.empty()) {
+    return std::nullopt;
+  }
+  if (const auto chain = answer.find("chain"); chain != answer.end() && chain->is_array()) {
+    for (const auto& tag : *chain) {
+      if (tag.is_string()) {
+        way.chain.push_back(tag.get<std::string>());
+      }
+    }
+  }
+  return way;
+}
+
+std::string WayText(const RouteWay& way) {
+  if (way.type == "direct") {
+    return "напрямую";
+  }
+  if (way.type == "block") {
+    return "заблокировано";
+  }
+  // The WARP endpoint: kWarpTag, or "warp 2" when a config had its own "warp".
+  if (way.type == "wireguard" && way.outbound.starts_with(kWarpTag)) {
+    return "через WARP";
+  }
+  return "через VPN";
+}
+
+std::string SiteLine(const SiteWay& site, const RoutingSettings& routing) {
+  std::string line = site.host + " — ";
+  if (!site.resolved) {
+    line += "имя не находится: заблокировано DNS-правилом (реклама) или сайта нет";
+  } else if (!site.way) {
+    line += "соединения не видно: заблокировано правилом или сайт не ответил";
+  } else {
+    line += WayText(*site.way);
+    if (site.way->type != "direct" && site.way->type != "block") {
+      line += " (" + site.way->outbound + ")";
+    }
+  }
+  if (const std::string rule = ClientRuleFor(site.host, routing); !rule.empty()) {
+    line += "; " + rule;
+  } else if (site.way) {
+    line += site.way->rule.empty() ? std::string("; ни одно правило не подошло — «остальное»")
+                                   : "; правило ядра: " + site.way->rule;
+  }
+  return line;
+}
+
+CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing) {
+  CheckResult result;
+  result.status = CheckResult::Status::Ok;
+  // The summary by outcome, in the sites' order: "напрямую: ya.ru · через VPN: spiegel.de, chatgpt.com".
+  std::vector<std::pair<std::string, std::string>> groups;
+  std::string lines;
+  std::string why;
+  for (const SiteWay& site : sites) {
+    const std::string outcome = !site.resolved ? std::string("не находится")
+                                : !site.way    ? std::string("не видно")
+                                               : WayText(*site.way);
+    const auto group = std::find_if(groups.begin(), groups.end(), [&](const auto& g) { return g.first == outcome; });
+    if (group == groups.end()) {
+      groups.emplace_back(outcome, site.host);
+    } else {
+      group->second += ", " + site.host;
+    }
+    lines += std::format("{}{}", lines.empty() ? "" : "\n", SiteLine(site, routing));
+
+    const bool direct = site.way && site.way->type == "direct";
+    if (direct && !site.russian && ClientRuleFor(site.host, routing).empty()) {
+      result.status = CheckResult::Status::Fail;
+      why = std::format("{} идёт мимо VPN: заблокированные сайты не откроются, а сайт видит твой адрес.", site.host);
+    } else if (result.status == CheckResult::Status::Ok) {
+      if (!site.way) {
+        result.status = CheckResult::Status::Warn;
+        why = std::format("{}: не удалось проверить.", site.host);
+      } else if (site.russian && routing.russiaDirect && !direct) {
+        result.status = CheckResult::Status::Warn;
+        why = std::format("{} идёт не напрямую, хотя «Российское напрямую» включено.", site.host);
+      }
+    }
+  }
+  for (const auto& [outcome, hosts] : groups) {
+    result.summary += std::format("{}{}: {}", result.summary.empty() ? "" : " · ", outcome, hosts);
+  }
+  if (result.status == CheckResult::Status::Ok) {
+    why = routing.russiaDirect ? "Российские сайты идут напрямую, зарубежные — через VPN."
+                               : "Сайты идут через VPN.";
+  }
+  result.detail = why + "\n" + lines;
+  return result;
 }
 
 std::string ClientRuleFor(std::string_view host, const RoutingSettings& routing) {

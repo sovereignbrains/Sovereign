@@ -80,7 +80,14 @@ class FakeCore final : public ICore {
 
   void SetLogSink(LogSink sink) override { installedSink = std::move(sink); }
 
+  std::optional<sovereign::service::RouteSeen> RouteOf(const std::vector<std::string>& targets) override {
+    routeAsked = targets;
+    return route;
+  }
+
   bool running = false;
+  std::optional<std::vector<std::string>> routeAsked;
+  std::optional<sovereign::service::RouteSeen> route;
   std::optional<std::pair<std::string, std::string>> selected;
   std::string selectError;
   std::optional<sovereign::service::UrlTestRequest> urlTest;
@@ -246,6 +253,36 @@ void TestExitIp() {
   core.exitIp = {.tag = {}, .pending = false, .ip = {}, .country = {}, .isp = {}, .error = "i/o timeout"};
   answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl"})");
   CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","error":"i/o timeout"})"));
+}
+
+void TestRoute() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  ControlHandler handler(&core, log, lastConfig);
+  const auto rejected = [&](const std::string& request) {
+    return Send(handler, request).value("cmd", "") == "error" && !core.routeAsked;
+  };
+  CHECK(rejected(R"({"cmd":"box_route"})"));
+  CHECK(rejected(R"({"cmd":"box_route","targets":[]})"));
+  CHECK(rejected(R"({"cmd":"box_route","targets":"ya.ru"})"));
+  CHECK(rejected(R"({"cmd":"box_route","targets":["ya.ru",""]})"));
+  CHECK(rejected(R"({"cmd":"box_route","targets":["ya.ru",5]})"));
+  CHECK(rejected(json{{"cmd", "box_route"}, {"targets", {std::string(300, 'x')}}}.dump()));
+  CHECK(rejected(json{{"cmd", "box_route"}, {"targets", std::vector<std::string>(33, "ya.ru")}}.dump()));
+
+  // None kept: the answer says nothing of a way.
+  json answer = Send(handler, R"({"cmd":"box_route","targets":["ya.ru","77.88.55.242"]})");
+  CHECK((core.routeAsked == std::vector<std::string>{"ya.ru", "77.88.55.242"}));
+  CHECK(answer == json::parse(R"({"cmd":"box_route"})"));
+
+  core.route = {.outbound = "AnyTLS", .type = "anytls", .chain = {"AnyTLS", "auto", "proxy"}, .rule = {}};
+  answer = Send(handler, R"({"cmd":"box_route","targets":["chatgpt.com"]})");
+  CHECK(answer == json::parse(
+                      R"({"cmd":"box_route","outbound":"AnyTLS","type":"anytls","chain":["AnyTLS","auto","proxy"]})"));
+  core.route->rule = "rule_set=geosite-ru => route(direct)";
+  CHECK(Send(handler, R"({"cmd":"box_route","targets":["ya.ru"]})").value("rule", "") ==
+        "rule_set=geosite-ru => route(direct)");
 }
 
 class FakeKillSwitch final : public sovereign::service::IKillSwitch {
@@ -583,6 +620,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestUrlTest();
     TestSelect();
     TestExitIp();
+    TestRoute();
     TestKillSwitch();
     TestResumeAfterSleep();
   } catch (const std::exception& e) {

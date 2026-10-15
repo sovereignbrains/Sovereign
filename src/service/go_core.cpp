@@ -61,6 +61,7 @@ GoCore::GoCore(const std::wstring& dllPath) {
   boxStop_ = ResolveExport<BoxStopFn>(module_.get(), "box_stop");
   boxStats_ = ResolveExport<BoxStatsFn>(module_.get(), "box_stats");
   boxFlows_ = ResolveExport<BoxFlowsFn>(module_.get(), "box_flows");
+  boxRoute_ = ResolveExport<BoxRouteFn>(module_.get(), "box_route");
   boxUrlTest_ = ResolveExport<BoxUrlTestFn>(module_.get(), "box_urltest");
   boxDelays_ = ResolveExport<BoxDelaysFn>(module_.get(), "box_delays");
   boxExitIp_ = ResolveExport<BoxExitIpFn>(module_.get(), "box_exitip");
@@ -141,6 +142,34 @@ std::vector<FlowTotal> GoCore::Flows() {
     }
   }
   return flows;
+}
+
+std::optional<RouteSeen> GoCore::RouteOf(const std::vector<std::string>& targets) {
+  // gocore/route.go writes it: {"route":{"outbound","type","chain","rule"}},
+  // or {} - none kept; a field of the wrong type is left empty.
+  const auto json =
+      nlohmann::json::parse(TakeOwnedString(boxRoute_(nlohmann::json(targets).dump().c_str())), nullptr,
+                            /*allow_exceptions=*/false);
+  if (!json.is_object() || !json.contains("route") || !json["route"].is_object()) {
+    return std::nullopt;
+  }
+  const auto& route = json["route"];
+  const auto text = [&](const char* key) {
+    const auto it = route.find(key);
+    return it != route.end() && it->is_string() ? it->get<std::string>() : std::string();
+  };
+  RouteSeen seen{.outbound = text("outbound"), .type = text("type"), .chain = {}, .rule = text("rule")};
+  if (seen.outbound.empty()) {
+    return std::nullopt;
+  }
+  if (const auto chain = route.find("chain"); chain != route.end() && chain->is_array()) {
+    for (const auto& tag : *chain) {
+      if (tag.is_string()) {
+        seen.chain.push_back(tag.get<std::string>());
+      }
+    }
+  }
+  return seen;
 }
 
 std::vector<DelayResult> GoCore::Delays() {

@@ -107,12 +107,15 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     }
   }
   // What the checks read off the wire: a trace, an address, a STUN answer,
-  // a leak report, the core's log.
+  // a leak report, the service's box_route answer.
   (void)ParseTrace(text);
   (void)ParseQuotedIp(text);
   (void)ParseStunResponse(text, StunId{});
   (void)JudgeDnsLeak(ParseDnsLeak(text));
-  (void)OutboundInLogs({std::string(text)}, {"vk.com", std::string(text.substr(0, 16))});
+  if (const auto way = ParseRouteAnswer(text)) {
+    (void)JudgeRoutes({SiteWay{.host = std::string(text.substr(0, 16)), .russian = false, .resolved = true, .way = way}},
+                      RoutingSettings{});
+  }
   (void)ClientRuleFor(text, RoutingSettings{});
 
   // The routing over a config from a subscription, its rules taken, a rule

@@ -394,52 +394,58 @@ struct Run {
     const std::string ping = pings.empty() ? std::string("—") : std::format("{} мс", pings[pings.size() / 2]);
     const std::string downText = down ? std::format("{:.0f}", Mbps(down->size(), downSeconds)) : std::string("—");
     const std::string upText = up ? std::format("{:.0f}", Mbps(upBody.size(), upSeconds)) : std::string("—");
-    // Which server it went through: the core's log says.
+    // Which server it went through: the core keeps the connections.
     std::vector<std::string> targets = Addresses("speed.cloudflare.com");
     targets.emplace_back("speed.cloudflare.com");
-    const auto via = OutboundInLogs(input.logs ? input.logs() : std::vector<std::string>{}, targets);
+    const auto via = input.routeOf ? input.routeOf(targets) : std::nullopt;
     r.status = Status::Ok;
     r.summary = std::format("↓ {} · ↑ {} Мбит/с · {}", downText, upText, ping);
-    r.detail = (via ? (*via == "direct" ? std::string("Напрямую") : "Через " + *via) : std::string("Через VPN")) +
-               " до ближайшего узла Cloudflare. Зависит от сервера и времени — сравни на странице «Серверы».";
+    const std::string way = !via                     ? std::string("Через VPN")
+                            : via->type == "direct" ? std::string("Напрямую")
+                                                    : "Через " + via->outbound;
+    r.detail = way + " до ближайшего узла Cloudflare. Зависит от сервера и времени — сравни на странице «Серверы».";
     return r;
   }
 
+  // A real request to `host` - the core sees the name (TLS SNI) and routes
+  // it as any program's - and where the core says it went.
+  SiteWay Visit(std::string host, bool russian) const {
+    SiteWay site{.host = std::move(host), .russian = russian, .resolved = false, .way = std::nullopt};
+    std::vector<std::string> targets = Addresses(site.host);
+    if (targets.empty()) {
+      return site;
+    }
+    site.resolved = true;
+    targets.push_back(site.host);
+    [[maybe_unused]] const auto answer =
+        Download(Widen("https://" + site.host + "/"), input.userAgent, std::size_t{64} * 1024);
+    site.way = input.routeOf ? input.routeOf(targets) : std::nullopt;
+    return site;
+  }
+
+  // The address typed - or, with none, a Russian, a European and an American
+  // site at once (kRouteProbes), judged against where each should go.
   CheckResult Route() const {
-    CheckResult r;
+    if (input.host.empty()) {
+      std::vector<SiteWay> sites;
+      sites.reserve(kRouteProbes.size());
+      for (const RouteProbe& probe : kRouteProbes) {
+        sites.push_back(Visit(std::string(probe.host), probe.russian));
+      }
+      return JudgeRoutes(sites, input.routing);
+    }
     std::string host = input.host;
     if (const std::size_t scheme = host.find("://"); scheme != std::string::npos) {
       host = host.substr(scheme + 3);
     }
     host = host.substr(0, host.find_first_of("/:?#"));
-    const std::string rule = ClientRuleFor(host, input.routing);
-    std::vector<std::string> targets = Addresses(host);
-    if (targets.empty()) {
-      r.status = Status::Warn;
-      r.summary = host + ": имя не находится";
-      r.detail = rule.empty() ? "Заблокировано DNS-правилом (реклама) или такого сайта нет."
-                              : "Подходит: " + rule + ". Имя не находится — заблокировано или сайта нет.";
-      return r;
-    }
-    targets.push_back(host);
-    // A real request: the core sees the name (TLS SNI) and routes as for any program.
-    [[maybe_unused]] const auto answer = Download(Widen("https://" + host + "/"), input.userAgent, std::size_t{64} * 1024);
-    std::optional<std::string> outbound;
-    for (int i = 0; i < 4 && !outbound; ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(700));  // the worker collects the core's log every second
-      outbound = OutboundInLogs(input.logs ? input.logs() : std::vector<std::string>{}, targets);
-    }
-    if (!outbound) {
-      r.status = Status::Warn;
-      r.summary = host + ": в журнале не видно";
-      r.detail = "Соединение не попало в журнал ядра: уровень записи ниже info или сайт заблокирован." +
-                 (rule.empty() ? std::string() : " Подходит: " + rule + ".");
-      return r;
-    }
-    r.status = Status::Ok;
-    r.summary = *outbound == "direct" ? host + " → напрямую" : host + " → через " + *outbound;
-    r.detail = rule.empty() ? "Ни одно из твоих правил не подошло — решили списки или «остальное»."
-                            : "Сработало: " + rule + ".";
+    const SiteWay site = Visit(host, false);
+    CheckResult r;
+    r.status = site.way ? Status::Ok : Status::Warn;
+    r.summary = host + ": " + (!site.resolved ? std::string("имя не находится")
+                               : !site.way    ? std::string("не видно")
+                                              : WayText(*site.way));
+    r.detail = SiteLine(site, input.routing);
     return r;
   }
 };

@@ -3,6 +3,7 @@
 
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -84,20 +85,51 @@ void TestDnsLeak() {
   CHECK(ParseDnsLeak("not json").empty());
 }
 
-void TestLogs() {
-  // As the tray keeps them (FormatLogLine): time, level, the core's message.
-  const std::vector<std::string> lines = {
-      "13:42:02  INFO   outbound/anytls[AnyTLS-REALITY]: outbound connection to www.gstatic.com:443",
-      "13:42:38  INFO   [2642219761 3ms] outbound/direct[direct]: outbound connection to vk.com:443",
-      "13:43:08  INFO   [4168576375 3ms] outbound/anytls[AnyTLS-REALITY · aeza]: outbound connection to 140.82.121.4:443",
-      "13:43:09  INFO   [1 2ms] outbound/vless[REALITY]: outbound connection to [2606:4700::6810:84e5]:443",
+void TestRoutes() {
+  // The service's answer: a way, or none (no "outbound"), or not box_route's.
+  const auto vpn = ParseRouteAnswer(
+      R"({"cmd":"box_route","outbound":"AnyTLS · aeza","type":"anytls","chain":["AnyTLS · aeza",5,"proxy"]})");
+  CHECK(vpn && vpn->outbound == "AnyTLS · aeza" && vpn->rule.empty());
+  CHECK(vpn && vpn->chain == std::vector<std::string>({"AnyTLS · aeza", "proxy"}));
+  CHECK(vpn && WayText(*vpn) == "через VPN");
+  CHECK(!ParseRouteAnswer(R"({"cmd":"box_route"})"));
+  CHECK(!ParseRouteAnswer(R"({"cmd":"error","message":"gocore not loaded"})"));
+  CHECK(!ParseRouteAnswer("not json"));
+  const RouteWay direct{.outbound = "direct", .type = "direct", .chain = {"direct"}, .rule = "rule_set=geosite-ru"};
+  CHECK(WayText(direct) == "напрямую");
+  CHECK(WayText(RouteWay{.outbound = "warp 2", .type = "wireguard", .chain = {}, .rule = {}}) == "через WARP");
+  CHECK(WayText(RouteWay{.outbound = "Home WG", .type = "wireguard", .chain = {}, .rule = {}}) == "через VPN");
+
+  RoutingSettings routing;  // «Российское напрямую» on
+  const auto site = [](const char* host, bool russian, std::optional<RouteWay> way) {
+    return SiteWay{.host = host, .russian = russian, .resolved = true, .way = std::move(way)};
   };
-  CHECK(OutboundInLogs(lines, {"vk.com", "87.240.132.72"}) == std::optional<std::string>("direct"));
-  // In TUN the destination is the address the program connected to.
-  CHECK(OutboundInLogs(lines, {"github.com", "140.82.121.4"}) == std::optional<std::string>("AnyTLS-REALITY · aeza"));
-  CHECK(OutboundInLogs(lines, {"x.com", "2606:4700::6810:84e5"}) == std::optional<std::string>("REALITY"));
-  CHECK(!OutboundInLogs(lines, {"example.com"}));
-  CHECK(!OutboundInLogs(lines, {"vk.co"}));  // not a prefix of another name
+  // As it should be: one line by outcome, in the sites' order.
+  CheckResult r = JudgeRoutes({site("ya.ru", true, direct), site("spiegel.de", false, vpn), site("chatgpt.com", false, vpn)},
+                              routing);
+  CHECK(r.status == CheckResult::Status::Ok);
+  CHECK(r.summary == "напрямую: ya.ru · через VPN: spiegel.de, chatgpt.com");
+  CHECK(r.detail.find("chatgpt.com — через VPN (AnyTLS · aeza)") != std::string::npos);
+  CHECK(r.detail.find("ya.ru — напрямую; российская зона .ru → напрямую") != std::string::npos);
+
+  // A foreign site directly: a failure - unless the user's own rule says so.
+  r = JudgeRoutes({site("ya.ru", true, direct), site("spiegel.de", false, direct)}, routing);
+  CHECK(r.status == CheckResult::Status::Fail);
+  CHECK(r.detail.starts_with("spiegel.de идёт мимо VPN"));
+  routing.rules.push_back(*ParseRule("spiegel.de", RouteRule::Action::Direct));
+  CHECK(JudgeRoutes({site("spiegel.de", false, direct)}, routing).status == CheckResult::Status::Ok);
+  routing.rules.clear();
+
+  // The Russian one through the VPN: a warning with «Российское напрямую» on,
+  // as it should be with it off; a site not seen, a warning either way.
+  CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Warn);
+  routing.russiaDirect = false;
+  CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Ok);
+  r = JudgeRoutes({site("ya.ru", true, vpn), site("chatgpt.com", false, std::nullopt),
+                   SiteWay{.host = "nx.example", .russian = false, .resolved = false, .way = std::nullopt}},
+                  routing);
+  CHECK(r.status == CheckResult::Status::Warn);
+  CHECK(r.summary == "через VPN: ya.ru · не видно: chatgpt.com · не находится: nx.example");
 }
 
 void TestRules() {
@@ -121,7 +153,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestTraceAndIp();
     TestStun();
     TestDnsLeak();
-    TestLogs();
+    TestRoutes();
     TestRules();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

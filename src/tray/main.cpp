@@ -3277,17 +3277,21 @@ void WriteSupportReport(HWND owner, const View::ProfileView& profile, const View
 // seconds, the speed test half a minute. One at a time.
 std::optional<std::jthread> g_checks;
 
-// The newest log lines (the core's and the tray's), UTF-8: where "where does
-// this go" reads the outbound.
-std::vector<std::string> RecentLogLines(std::size_t count) {
-  auto& shared = State();
-  const std::scoped_lock lock(shared.mutex);
-  std::vector<std::string> lines;
-  const std::size_t from = shared.logs.size() > count ? shared.logs.size() - count : 0;
-  for (std::size_t i = from; i < shared.logs.size(); ++i) {
-    lines.push_back(Narrow(shared.logs[i]));
+// Where the newest connection to one of `targets` went: the service asks the
+// core's traffic manager (box_route) - whatever the log's level.
+std::optional<sovereign::tray::RouteWay> RouteOf(const std::vector<std::string>& targets) {
+  std::vector<std::string> list;
+  for (const std::string& t : targets) {
+    if (!t.empty() && t.size() <= 253 && list.size() < 32) {  // the service's limits (control.h)
+      list.push_back(t);
+    }
   }
-  return lines;
+  if (list.empty()) {
+    return std::nullopt;
+  }
+  const auto response =
+      sovereign::tray::RequestService(nlohmann::json{{"cmd", "box_route"}, {"targets", list}}.dump());
+  return response ? sovereign::tray::ParseRouteAnswer(*response) : std::nullopt;
 }
 
 void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) {
@@ -3325,7 +3329,7 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) 
     const sovereign::tray::DiagnoseInput input{.routing = routing,
                                                .host = host,
                                                .userAgent = kUserAgent,
-                                               .logs = [] { return RecentLogLines(400); },
+                                               .routeOf = RouteOf,
                                                .lanClosed = lanClosed,
                                                .lanAllowed = lanAllowed};
     sovereign::tray::RunChecks(stop, which, input,
@@ -4151,8 +4155,9 @@ UiContent ContentFrom(const View& v) {
       L"Сколько занимает узнать адрес сайта: зарубежного (через VPN) и российского (напрямую).",
       L"Скорость скачивания и отдачи через текущий маршрут (speed.cloudflare.com). Гоняет десятки мегабайт — "
       L"поэтому своей кнопкой.",
-      L"Введи сайт — трей откроет его и по журналу ядра покажет, через какой выход он пошёл и по какому "
-      L"правилу."};
+      L"Открывает российский, европейский и американский сайт (ya.ru, spiegel.de, chatgpt.com) и спрашивает ядро, "
+      L"куда пошло каждое соединение и по какому правилу. Российский должен идти напрямую, зарубежные — через "
+      L"VPN. Свой адрес — кнопкой справа."};
   for (std::size_t i = 0; i < sovereign::tray::kCheckCount; ++i) {
     const auto& result = v.checks[i];
     c.checks.push_back({.title = kCheckTitles[i],
@@ -5213,8 +5218,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::RunChecks: {
       using sovereign::tray::CheckId;
+      // Route without an address: the Russian, European and American sites (kRouteProbes).
       StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6, CheckId::Lan,
-                   CheckId::DnsLatency},
+                   CheckId::DnsLatency, CheckId::Route},
                   {});
       break;
     }

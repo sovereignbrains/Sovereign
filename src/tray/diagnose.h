@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -23,10 +24,11 @@ inline constexpr std::size_t kCheckCount = 9;
 
 struct DiagnoseInput {
   RoutingSettings routing;
-  std::string host;  // Route: the address to look up (UTF-8)
+  std::string host;  // Route: the address to look up (UTF-8); empty - kRouteProbes
   std::wstring userAgent;
-  // The core's newest log lines (UTF-8): where Route reads the outbound.
-  std::function<std::vector<std::string>()> logs;
+  // Where the newest connection to one of the addresses went (the service's
+  // box_route): Route and Speed ask it after their requests.
+  std::function<std::optional<RouteWay>(const std::vector<std::string>&)> routeOf;
   // The local network closed by the user (settings.h lanClosed, in force:
   // the connection on), and the addresses let in: Lan says the router not
   // answering is what was asked for - and answering, that the closing leaks.

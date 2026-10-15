@@ -39,6 +39,7 @@ class GoCore final : public ICore {
   std::string Stop() override;
   CoreStats Stats() override;
   std::vector<FlowTotal> Flows() override;
+  std::optional<RouteSeen> RouteOf(const std::vector<std::string>& targets) override;
   std::string StartUrlTest(const UrlTestRequest& request) override;
   std::vector<DelayResult> Delays() override;
   ExitIp LookupExitIp(const std::string& tag, bool refresh) override;
@@ -51,6 +52,7 @@ class GoCore final : public ICore {
   using BoxStopFn = char*(__cdecl*)();
   using BoxStatsFn = int(__cdecl*)(std::int64_t*, std::int64_t*, std::int64_t*, std::int64_t*);
   using BoxFlowsFn = char*(__cdecl*)();
+  using BoxRouteFn = char*(__cdecl*)(const char*);
   using BoxUrlTestFn = char*(__cdecl*)(const char*);
   using BoxDelaysFn = char*(__cdecl*)();
   using BoxExitIpFn = char*(__cdecl*)(const char*);
@@ -75,6 +77,7 @@ class GoCore final : public ICore {
   BoxStopFn boxStop_ = nullptr;
   BoxStatsFn boxStats_ = nullptr;
   BoxFlowsFn boxFlows_ = nullptr;
+  BoxRouteFn boxRoute_ = nullptr;
   BoxUrlTestFn boxUrlTest_ = nullptr;
   BoxDelaysFn boxDelays_ = nullptr;
   BoxExitIpFn boxExitIp_ = nullptr;

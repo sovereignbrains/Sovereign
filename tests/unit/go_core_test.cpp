@@ -154,6 +154,14 @@ void TestBridge(const std::wstring& stubPath) {
     CHECK(flow("direct") == "1/5");
     CHECK(stub.outstanding() == 0);
 
+    // Where an address went: the chain's strings kept, the rest skipped.
+    const auto route = core->RouteOf({"ya.ru", "77.88.55.242"});
+    CHECK(route && route->outbound == "direct" && route->type == "direct" &&
+          route->rule == "rule_set=geosite-ru => route(direct)");
+    CHECK(route && route->chain == std::vector<std::string>{"direct"});
+    CHECK(!core->RouteOf({"example.com"}));
+    CHECK(stub.outstanding() == 0);
+
     CHECK(core->Select("proxy", "nl").empty());
     CHECK(core->Select("proxy", "xx") == "no such option in the selector");
     CHECK(core->Select("other", "nl") == "no such selector");

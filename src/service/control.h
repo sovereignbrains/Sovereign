@@ -39,7 +39,7 @@ using CommandObserver = std::function<void(const CommandRecord&)>;
 //
 // Commands: ping (echo), box_ping, box_start {config}, box_stop,
 // box_stats, box_logs {since}, box_urltest {tags, url?, timeout_ms?},
-// box_delays, box_exitip {tag, refresh?},
+// box_delays, box_exitip {tag, refresh?}, box_route {targets},
 // kill_switch {enabled, allow_lan?, lan_closed?, lan_allowed?}.
 class ControlHandler {
  public:
@@ -52,6 +52,11 @@ class ControlHandler {
   static constexpr std::int64_t kDefaultUrlTestTimeoutMs = 5000;
   // sing-box's own default (common/urltest).
   static constexpr std::string_view kDefaultUrlTestUrl = "https://www.gstatic.com/generate_204";
+
+  // box_route's limits: a name and its addresses (gocore/route.go keeps the
+  // answer within one read of the tray's pipe buffer).
+  static constexpr std::size_t kMaxRouteTargets = 32;
+  static constexpr std::size_t kMaxRouteTargetBytes = 253;
 
   // A box_logs response is capped so it always fits one read of the tray's
   // pipe buffer; the rest is fetched with the returned `next`.

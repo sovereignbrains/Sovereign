@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,6 +47,16 @@ struct FlowTotal {
   std::string tag;
   std::int64_t upBytes = 0;
   std::int64_t downBytes = 0;
+};
+
+// Where the newest connection to an address went: the outbound it left by
+// (a server, "direct"), that outbound's type, the outbounds from it back to
+// the rule's one, and the rule (empty: none matched - the route's final).
+struct RouteSeen {
+  std::string outbound;
+  std::string type;
+  std::vector<std::string> chain;
+  std::string rule;
 };
 
 // A latency test of outbounds through each of `tags` (the config's outbound
@@ -117,6 +128,11 @@ class ICore {
   // The traffic by where it went (FlowTotal), for the tray's live streams;
   // empty while nothing runs, or from an engine that can't tell.
   virtual std::vector<FlowTotal> Flows() { return {}; }
+
+  // The way of the newest connection the engine keeps to one of `targets` (a
+  // name and its addresses): the checks page's "where an address goes".
+  // nullopt - none kept, nothing runs, or an engine that can't tell.
+  virtual std::optional<RouteSeen> RouteOf(const std::vector<std::string>& /*targets*/) { return std::nullopt; }
 
   // Starts a latency test in the background and returns at once: empty
   // string once it runs, otherwise why not (e.g. the engine isn't running).

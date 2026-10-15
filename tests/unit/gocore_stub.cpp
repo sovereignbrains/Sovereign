@@ -139,6 +139,16 @@ __declspec(dllexport) char* __cdecl box_flows() {
   return Allocate(R"({"flows":{"proxy":[10,200],"direct":[1,5],"bad":[1],"worse":"x","neg":[1.5,2]}})");
 }
 
+// Knows where ya.ru went (by its name or address); anything else: none kept.
+__declspec(dllexport) char* __cdecl box_route(const char* targets) {
+  const std::string list = targets == nullptr ? std::string() : std::string(targets);
+  if (list.find("\"ya.ru\"") == std::string::npos && list.find("\"77.88.55.242\"") == std::string::npos) {
+    return Allocate("{}");
+  }
+  return Allocate(
+      R"json({"route":{"outbound":"direct","type":"direct","chain":["direct",7],"rule":"rule_set=geosite-ru => route(direct)"}})json");
+}
+
 // Knows one selector with one option.
 __declspec(dllexport) char* __cdecl box_select(const char* selector, const char* outbound) {
   if (std::string(selector) != "proxy") {
