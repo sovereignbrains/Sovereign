@@ -2876,8 +2876,11 @@ struct MainWindow::Impl {
     wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     wc.lpszClassName = kClassName;
     RegisterClassW(&wc);  // already registered is fine
-    window.reset(CreateWindowExW(0, kClassName, L"Sovereign", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                                 CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, this));
+    // WS_CLIPCHILDREN: a repaint (a hover anywhere repaints it all) leaves an
+    // edit box in place over its row alone - drawn over, it flickered as the
+    // mouse moved (15.10.2026).
+    window.reset(CreateWindowExW(0, kClassName, L"Sovereign", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
+                                 CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, this));
     THROW_LAST_ERROR_IF(!window);
     const BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof dark);
@@ -3526,7 +3529,10 @@ struct MainWindow::Impl {
     edit.index = index;
     SendMessageW(edit.box.get(), WM_SETFONT, reinterpret_cast<WPARAM>(editFont.get()), TRUE);
     SendMessageW(edit.box.get(), EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(Scale(8, dpi), Scale(8, dpi)));
-    SendMessageW(edit.box.get(), EM_LIMITTEXT, 64, 0);
+    // A name is short; a rule's sites, a DNS server's URL may be long (64 cut
+    // them silently before 0.4.85).
+    const bool name = onEnter == UiCommand::RenameProfile || onEnter == UiCommand::ChipRuleName;
+    SendMessageW(edit.box.get(), EM_LIMITTEXT, digitsOnly || name ? 64 : 300, 0);
     SendMessageW(edit.box.get(), EM_SETSEL, 0, -1);
     SetWindowSubclass(edit.box.get(), EditProc, 1, reinterpret_cast<DWORD_PTR>(this));
     SetFocus(edit.box.get());
