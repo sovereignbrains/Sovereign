@@ -4721,6 +4721,16 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         // everything else goes (the user's sites come first).
         const bool cookies = chip.kind == UiChip::Kind::Cookies;
         std::vector<std::wstring> items;
+        std::vector<std::size_t> labels;
+        // What the cookie list can't do, said first: a site's own window isn't
+        // a script from elsewhere - TikTok's, DeepSeek's stay (15.10.2026).
+        if (cookies) {
+          labels.push_back(items.size());
+          items.emplace_back(L"Убирает окна OneTrust, Cookiebot и т. п. Своё окно сайта (TikTok) — нет");
+          items.emplace_back();
+        }
+        const std::size_t first = items.size();  // where the blocked names' part starts
+        labels.push_back(first);
         if (view.blockedAds.empty()) {
           items.emplace_back(L"Пока ничего не заблокировано");
         } else {
@@ -4731,15 +4741,15 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         items.emplace_back();
         items.emplace_back(cookies ? L"Не убирать баннеры cookie" : L"Не блокировать рекламу");
-        const auto picked = PickFromMenu(owner, cursor, items, -1, {}, {0});
+        const auto picked = PickFromMenu(owner, cursor, items, -1, {}, labels);
         if (!picked) {
           break;
         }
         if (*picked == items.size() - 1) {
           send(cookies ? What::CookieWindows : What::BlockAds, false);
-        } else if (*picked >= 1 && *picked - 1 < view.blockedAds.size()) {
+        } else if (*picked > first && *picked - first - 1 < view.blockedAds.size()) {
           send(What::AddRule, false, r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
-               0, view.blockedAds[*picked - 1]);
+               0, view.blockedAds[*picked - first - 1]);
         }
         break;
       }

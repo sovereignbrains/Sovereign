@@ -320,6 +320,33 @@ void TestOrder() {
   }
   CHECK(order == std::vector<std::string>({"Bad.exe", "bank", "ads", "quic", "msedge.exe"}));
 
+  // A service among them: after the ads (its ad names blocked too), before
+  // the Russian sites (its own .ru names go its way) - in routing and DNS.
+  {
+    RoutingSettings v = s;
+    v.services.push_back({.id = "youtube", .way = ServiceRoute::Way::Direct, .country = {}});
+    const std::string vc = CombineConfigs({{"Ключи", keys, {}}}, OwnFrame(v)).config.value_or("{}");
+    const json applied = json::parse(
+        ApplyRouting(vc, v, {{"sov-ads", "C:/lists/sov-ads.srs"}, {"sov-svc-youtube", "C:/lists/yt.srs"}}));
+    const auto seen = [](const json& rules) {
+      std::vector<std::string> out;
+      for (const json& r : rules) {
+        if (r.value("rule_set", json()) == "sov-ads" || r.value("rule_set", json()) == json::array({"sov-ads"})) {
+          out.emplace_back("ads");
+        } else if (r.value("rule_set", json()) == "sov-svc-youtube") {
+          out.emplace_back("youtube");
+        } else if (r.contains("domain_suffix") && r["domain_suffix"].dump().find("xn--p1ai") != std::string::npos) {
+          out.emplace_back("russia");
+        }
+      }
+      // DNS's rules come in pairs (evaluate, respond: AnswerTyposAtOnce) - each once.
+      out.erase(std::unique(out.begin(), out.end()), out.end());
+      return out;
+    };
+    CHECK(seen(applied["route"]["rules"]) == std::vector<std::string>({"ads", "youtube", "russia"}));
+    CHECK(seen(applied["dns"]["rules"]) == std::vector<std::string>({"ads", "youtube", "russia"}));
+  }
+
   // A site and a program in one rule: either matches - each its own sing-box
   // rule in its place, neither asking for both at once.
   s.rules.push_back(*ParseRule("qwen.ai, Qwen.exe", RouteRule::Action::Direct));

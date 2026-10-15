@@ -1278,11 +1278,17 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   const auto any = [](const RouteRule&) { return true; };
   // A blocked program first of all: no network, whatever it asks for.
   add([](const RouteRule& r) { return r.action == RouteRule::Action::Block; }, programs);
-  // Then the sites, and the lists - services, ads, Russia, QUIC - before the
+  // Then the sites, and the lists - ads, services, Russia, QUIC - before the
   // other programs: a site goes where it was sent from every program (the
   // bank directly even from a browser sent through WARP), and a browser sent
   // through the proxy has its ads cut too (before 0.4.58 it went past them).
   add(any, sites);
+  // The ads (and the cookie windows) before the services: blocked is blocked
+  // through any of them - YouTube's or Google's ad names, in their lists too,
+  // went where the service went before 0.4.86. A site of the user's still wins.
+  if (!adsLists.empty()) {
+    rules.push_back(Json{{"rule_set", adsLists}, {"action", "reject"}});
+  }
   // A service's app the user sent its own way (Telegram.exe while Telegram
   // goes elsewhere - "the app apart"): before the services, or the service's
   // names and addresses would take the app's traffic first.
@@ -1373,9 +1379,8 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       games.push_back(std::move(rule));
     }
   }
-  if (!adsLists.empty()) {
-    rules.push_back(Json{{"rule_set", adsLists}, {"action", "reject"}});
-  }
+  // Russia after the services: one sent its own way takes its Russian names
+  // too (google.ru with Google) - the user's pick over the general list.
   if (settings.russiaDirect) {
     rules.push_back(Json{{"domain_suffix", zones}, {"outbound", direct}});
     if (!russianNames.empty()) {
@@ -1436,6 +1441,12 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
     }
     dnsRules.push_back(std::move(rule));
   }
+  // The ads before the services, as in the routing.
+  if (!adsLists.empty()) {
+    Json ads{{"rule_set", adsLists}};
+    SetNoAddress(ads);
+    dnsRules.push_back(std::move(ads));
+  }
   // A service sent directly: its names here too (through the proxy's DNS
   // they'd get the proxy country's addresses); blocked: no addresses.
   for (const ServiceRoute& s : settings.services) {
@@ -1450,11 +1461,6 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       SetNoAddress(blocked);
       dnsRules.push_back(std::move(blocked));
     }
-  }
-  if (!adsLists.empty()) {
-    Json ads{{"rule_set", adsLists}};
-    SetNoAddress(ads);
-    dnsRules.push_back(std::move(ads));
   }
   if (settings.russiaDirect) {
     dnsRules.push_back(Json{{"domain_suffix", zones}, {"server", kLocalDns}});
