@@ -285,8 +285,8 @@ void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool 
   }
 
   // The core: an orb of the state's colour, white at its heart while on.
-  const float r = half * (0.26f + 0.24f * lit);
-  Spot(t, middle, r * 2.4f, r * 2.4f, WithAlpha(p.signal, 0.40f * (0.35f + 0.65f * lit)));
+  const float r = half * (0.26f + 0.32f * lit);
+  Spot(t, middle, r * 2.6f, r * 2.6f, WithAlpha(p.signal, 0.55f * (0.35f + 0.65f * lit)));
   {
     const std::array<D2D1_GRADIENT_STOP, 3> stops{{{0, Mix(p.signal, Color(1, 1, 1), 0.75f * lit)},
                                                     {0.45f, WithAlpha(p.signal, 0.85f)},
@@ -322,7 +322,8 @@ void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool 
     }
   }
   // The core's light through the glass.
-  Spot(t, middle, r * 1.6f, r * 1.6f, WithAlpha(Mix(p.signal, Color(1, 1, 1), 0.3f), 0.22f * lit));
+  Spot(t, middle, r * 1.8f, r * 1.8f, WithAlpha(Mix(p.signal, Color(1, 1, 1), 0.3f), 0.38f * lit));
+  Spot(t, middle, r * 0.55f, r * 0.55f, Color(1, 1, 1, 0.55f * lit * lit));  // its white-hot heart
 
   // The near edges catch the light: the outline bright, the ones inside it softer.
   if (ink) {
