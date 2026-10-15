@@ -331,8 +331,8 @@ struct LogState {
 // along paths - up through the cube for the VPN (WARP's in its own colour),
 // round its side for what goes directly - as many and as fast as the rates
 // say; a blocked ad flies at the cube and breaks on it in red sparks. Moved
-// by a timer while the overview shows (kLiveTimer), never with Windows'
-// animations off.
+// a frame a screen refresh while the overview shows (Impl::liveAt), never
+// with Windows' animations off.
 enum class Stream : std::uint8_t { Vpn, Warp, Direct, Blocked, Spark };
 
 struct Particle {
@@ -360,8 +360,6 @@ struct LiveTraffic {
 
 constexpr std::size_t kMaxParticles = 600;
 constexpr float kSparkLife = 0.6f;
-constexpr UINT_PTR kLiveTimer = 4;
-constexpr UINT kLiveFrameMs = 15;  // ~60 a second: the system's timer rounds to its 15.6 ms tick
 
 // Dots a second for `rate` bytes a second: a few for a trickle, a river for
 // a video or two (about 130 at 1 MB/s, 160 at most); none for nothing.
@@ -555,26 +553,6 @@ UiPage BackOf(UiPage page) {
     case UiPage::Logs: return UiPage::Settings;
     default: return UiPage::Overview;
   }
-}
-
-// The main screen's switch's tip: the state in words - connected how long
-// and how fast; nothing for an error (said at the top).
-std::wstring PowerLine(const UiContent& c) {
-  switch (c.display) {
-    case Display::On: {
-      std::wstring line = L"Подключено";
-      if (c.onSince > 0) {
-        const std::int64_t s = std::max<std::int64_t>(0, static_cast<std::int64_t>(std::time(nullptr)) - c.onSince);
-        line += std::format(L" · {}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60);
-      }
-      return line + L" · ↓ " + FormatRate(c.down);
-    }
-    case Display::Starting: return L"Подключаюсь…";
-    case Display::Off: return L"Отключено";
-    case Display::Error:
-    case Display::ServiceDown: return {};
-  }
-  return {};
 }
 
 // The checks' line in the settings.
@@ -1485,7 +1463,7 @@ class Painter {
 
     // The server at the foot; the switch in the middle of what's between,
     // big, a light behind it (DrawBackdrop) and the live traffic round it -
-    // its state in words only in its tip (PowerLine), the streams say the rest.
+    // no words: its light and the streams say the state.
     constexpr float kServerCard = 60;
     const float serverTop = std::max(y + 180, bottom - kServerCard);
     const float room = serverTop - y;
@@ -1493,7 +1471,7 @@ class Painter {
     const float top = y + std::max(0.0f, (room - size) / 2);
     const float mid = (x0 + x1) / 2;
     const D2D1_RECT_F cube{mid - size / 2, top, mid + size / 2, top + size};
-    Item power = CommandItem(Kind::Power, cube, PowerLine(c), kGlyphPower, UiCommand::Toggle);
+    Item power = CommandItem(Kind::Power, cube, {}, kGlyphPower, UiCommand::Toggle);
     power.checked = c.on;
     l.items.push_back(std::move(power));
     l.glow = cube;
@@ -3139,34 +3117,43 @@ struct MainWindow::Impl {
   // The live traffic (LiveTraffic): its timer runs while the overview shows
   // and there's traffic to draw or dots still on their way; it stops itself.
   LiveTraffic live;
-  // The last step, by the precise clock: the timer's ticks come every 15.6 ms
-  // or 31 - steps by them made the dots jerk. Empty: the timer isn't running.
+  // Frames as often as the screen shows them - 60, 144, whatever it runs at:
+  // each paint ends waiting for the screen's refresh (the render target's
+  // EndDraw) and asks for the next one, so no timer (Windows' can't go past
+  // 64 a second, and its 15.6 ms ticks made the dots jerk). The last step,
+  // by the precise clock; empty: not running.
   std::optional<std::chrono::steady_clock::time_point> liveAt;
 
   void KickLive() {
     if (!liveAt && hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && page == UiPage::Overview && Motion() &&
         (content.display == Display::On || !live.particles.empty())) {
       liveAt = std::chrono::steady_clock::now();
-      SetTimer(hwnd, kLiveTimer, kLiveFrameMs, nullptr);
+      InvalidateRect(hwnd, nullptr, FALSE);
     }
   }
 
-  void StepLiveTraffic() {
-    const auto now = std::chrono::steady_clock::now();
+  // A step before a paint: whether to go on (the next frame asked for after it).
+  bool StepLiveTraffic() {
+    auto now = std::chrono::steady_clock::now();
+    if (liveAt && now - *liveAt < std::chrono::milliseconds(2)) {
+      // Faster than any screen: nothing waited for its refresh (a remote
+      // session, say) - wait for the compositor's, not spin.
+      DwmFlush();
+      now = std::chrono::steady_clock::now();
+    }
     const float dt = liveAt ? std::min(0.1f, std::chrono::duration<float>(now - *liveAt).count()) : 0.0f;
     liveAt = now;
     const bool on = content.display == Display::On;
     if (!layout.glow || page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE || !Motion() ||
         (!on && live.particles.empty())) {
-      KillTimer(hwnd, kLiveTimer);
       liveAt.reset();
       if (page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE) {
         live.particles.clear();  // shown again, it starts afresh
       }
-      return;
+      return false;
     }
     StepLive(live, content, on, dt, *layout.glow);
-    InvalidateRect(hwnd, nullptr, FALSE);
+    return true;
   }
 
   Impl(HINSTANCE inst, CommandHandler handler) : instance(inst), onCommand(std::move(handler)) {
@@ -3258,8 +3245,8 @@ struct MainWindow::Impl {
            layout.items[static_cast<std::size_t>(index)].kind == kind;
   }
 
-  // Shows its words after a while: an icon button its name, the switch its state.
-  bool HasTip(int index) const { return IsKind(index, Kind::IconButton) || IsKind(index, Kind::Power); }
+  // Shows its words after a while: an icon button its name.
+  bool HasTip(int index) const { return IsKind(index, Kind::IconButton); }
 
   // The pointer is over `h` now: a "?" shows its tip, an icon button starts
   // the wait for its name.
@@ -3973,10 +3960,14 @@ struct MainWindow::Impl {
   LRESULT Handle(HWND w, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
       case WM_PAINT: {
+        const bool going = liveAt && StepLiveTraffic();
         PAINTSTRUCT ps;
         BeginPaint(w, &ps);
         Paint();
         EndPaint(w, &ps);
+        if (going) {
+          InvalidateRect(w, nullptr, FALSE);  // the next frame: this one waited for the screen's refresh
+        }
         return 0;
       }
       case WM_ERASEBKGND: return 1;  // Direct2D paints everything
@@ -4081,10 +4072,6 @@ struct MainWindow::Impl {
             KillTimer(w, kCubeTimer);
           }
           InvalidateRect(w, nullptr, FALSE);
-          return 0;
-        }
-        if (wParam == kLiveTimer) {
-          StepLiveTraffic();
           return 0;
         }
         if (wParam == kPanTimer) {

@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <array>
+#include <span>
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
@@ -3366,6 +3367,54 @@ wil::unique_hbitmap MenuBitmap(HICON icon, int size) {
   return bitmap;
 }
 
+// A glyph of the icon font the window draws with (Segoe Fluent Icons; MDL2
+// on Windows 10 - the same codes) as a menu's bitmap, light: the menus are
+// dark (ForceDark, below). Drawn white on black, its coverage made the alpha.
+wil::unique_hbitmap GlyphMenuIcon(const wchar_t* glyph) {
+  const int size = GetSystemMetrics(SM_CXSMICON);
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = size;
+  info.bmiHeader.biHeight = -size;  // top-down
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  const wil::unique_hdc dc(CreateCompatibleDC(nullptr));
+  wil::unique_hbitmap bitmap(CreateDIBSection(dc.get(), &info, DIB_RGB_COLORS, &bits, nullptr, 0));
+  if (!dc || !bitmap || bits == nullptr) {
+    return {};
+  }
+  const auto oldBitmap = wil::SelectObject(dc.get(), bitmap.get());
+  const auto font = [&](const wchar_t* face) {
+    return wil::unique_hfont(CreateFontW(-size, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH,
+                                         face));
+  };
+  wil::unique_hfont glyphs = font(L"Segoe Fluent Icons");
+  {
+    const auto probe = wil::SelectObject(dc.get(), glyphs.get());
+    std::array<wchar_t, LF_FACESIZE> face{};
+    GetTextFaceW(dc.get(), static_cast<int>(face.size()), face.data());
+    if (std::wstring_view(face.data()) != L"Segoe Fluent Icons") {
+      glyphs = font(L"Segoe MDL2 Assets");
+    }
+  }
+  const auto oldFont = wil::SelectObject(dc.get(), glyphs.get());
+  SetTextColor(dc.get(), RGB(255, 255, 255));
+  SetBkMode(dc.get(), TRANSPARENT);
+  RECT rc{0, 0, size, size};
+  DrawTextW(dc.get(), glyph, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  GdiFlush();
+  constexpr std::uint32_t kInk = 235;  // the dark menus' text: near white
+  for (std::uint32_t& pixel : std::span(static_cast<std::uint32_t*>(bits), static_cast<std::size_t>(size) * size)) {
+    const std::uint32_t alpha = std::max({pixel & 0xFFU, (pixel >> 8) & 0xFFU, (pixel >> 16) & 0xFFU});
+    const std::uint32_t ink = kInk * alpha / 255;  // premultiplied
+    pixel = (alpha << 24) | (ink << 16) | (ink << 8) | ink;
+  }
+  return bitmap;
+}
+
 // One of Windows' own icons (a program, a folder) as a menu's bitmap.
 wil::unique_hbitmap StockMenuIcon(SHSTOCKICONID id) {
   SHSTOCKICONINFO info{};
@@ -5139,8 +5188,13 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ScanScreen:
       ScanScreen();
       break;
-    case UiCommand::AddMenu:  // the main screen's "+": what the configurations page offers, in one menu
-      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Вставить из буфера", L"QR-код с экрана", L"Из файла…"}, -1)) {
+    case UiCommand::AddMenu: {  // the title bar's "+": a configuration from the clipboard, a QR code, a file
+      std::vector<wil::unique_hbitmap> icons;
+      for (const wchar_t* glyph : {L"\xE77F", L"\xED14", L"\xE8E5"}) {  // paste, a QR code, a file
+        icons.push_back(GlyphMenuIcon(glyph));
+      }
+      if (const auto picked =
+              PickFromMenu(owner, args.anchor, {L"Вставить из буфера", L"QR-код с экрана", L"Из файла…"}, -1, icons)) {
         switch (*picked) {
           case 0: RequestImport(owner); break;
           case 1: ScanScreen(); break;
@@ -5148,6 +5202,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         }
       }
       break;
+    }
     case UiCommand::RunChecks: {
       using sovereign::tray::CheckId;
       StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6, CheckId::Lan,
@@ -5468,6 +5523,18 @@ void ShowTrayMenu(HWND window) {
   AppendMenuW(menu.get(), MF_STRING, kMenuLogs, L"Журнал");
   AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu.get(), MF_STRING, kMenuExit, L"Выход");
+  // A glyph before each, the window's: on/off, a window, the log, out. Alive while the menu is.
+  const std::array<std::pair<UINT, const wchar_t*>, 4> glyphs = {
+      {{kMenuToggle, L"\xE7E8"}, {kMenuOpen, L"\xE8A7"}, {kMenuLogs, L"\xE8A5"}, {kMenuExit, L"\xE8BB"}}};
+  std::vector<wil::unique_hbitmap> icons;
+  for (const auto& [id, glyph] : glyphs) {
+    icons.push_back(GlyphMenuIcon(glyph));
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof item;
+    item.fMask = MIIM_BITMAP;
+    item.hbmpItem = icons.back().get();
+    SetMenuItemInfoW(menu.get(), id, FALSE, &item);
+  }
   SetMenuDefaultItem(menu.get(), kMenuOpen, FALSE);
   POINT at{};
   GetCursorPos(&at);
