@@ -194,6 +194,7 @@ enum class Kind : std::uint8_t {
   ValueRow,      // a setting with its value on the right and a chevron: a click picks another
   Meter,         // a thin bar: how much is used (index: per mille)
   Tag,           // a thing on the routing board: a program's icon (text2: its exe), its name, a detail after it
+  AppTitle,      // our title bar's name, after the app's icon (text2: the exe it's taken from)
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
@@ -234,7 +235,7 @@ struct Item {
 
 struct Layout {
   std::vector<Item> items;
-  float contentHeight = 0;  // the page's full height, for scrolling
+  float contentHeight = 0;  // the page's full height from viewTop, for scrolling
   float scroll = 0;         // how far the page is scrolled
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
@@ -774,7 +775,7 @@ class Painter {
       case UiPage::Routing: y = Routing(l, c, x0, x1, y); break;
       case UiPage::Checks: y = Checks(l, c, x0, x1, y); break;
     }
-    l.contentHeight = y + kPad;
+    l.contentHeight = y + kPad - l.viewTop;  // from under our title bar, as the viewport
 
     scroll = std::clamp(scroll, 0.0f, std::max(0.0f, l.contentHeight - (l.viewBottom - l.viewTop)));
     l.scroll = scroll;
@@ -875,13 +876,14 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 30> kNames = {
+    static constexpr std::array<const wchar_t*, 31> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Server",   L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
-        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter",  L"Tag"};
+        L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter",  L"Tag",
+        L"AppTitle"};
     // One per Kind, in its order: a kind added or gone shifts every name after it.
-    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Tag) + 1);
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::AppTitle) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -1011,6 +1013,17 @@ class Painter {
       }
     }
     return f;
+  }
+
+  // This exe's path: the app's icon is taken from it (Kind::AppTitle).
+  static const std::wstring& SelfPath() {
+    static const std::wstring path = [] {
+      std::wstring buffer(MAX_PATH, L'\0');
+      const DWORD n = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+      buffer.resize(n > 0 && n < buffer.size() ? n : 0);
+      return buffer;
+    }();
+    return path;
   }
 
   // A program's icon from its exe, at the target's DPI; null if the path is
@@ -1349,7 +1362,8 @@ class Painter {
   // tray, on the right - on every page. The rest of it drags the window
   // (WM_NCHITTEST).
   void Caption(Layout& l, float width) const {
-    Item name = Make(Kind::Muted, {14, 9, width - 100, kCaption - 9}, L"Sovereign");
+    Item name = Make(Kind::AppTitle, {12, 0, width - 100, kCaption}, L"Sovereign");
+    name.text2 = SelfPath();
     name.scrolls = false;
     l.items.push_back(std::move(name));
     Item settings = Make(Kind::IconButton, {width - 86, 0, width - 46, kCaption}, L"Настройки", kGlyphSettings);
@@ -1522,6 +1536,9 @@ class Painter {
     }
     key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Добавить: из буфера, QR-код, файл",
                     kGlyphAdd, UiCommand::AddMenu));
+    buttons -= 42;
+    key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"QR-код с экрана", kGlyphQrCode,
+                    UiCommand::ScanScreen));
     buttons -= 38;
     const float textRight = buttons - 4;
 
@@ -2721,6 +2738,16 @@ class Painter {
         }
         k.Text(it.text, chip_.get(), r, it.checked ? accent : secondary);
         break;
+      case Kind::AppTitle: {
+        const float cy = (r.top + r.bottom) / 2;
+        float left = r.left;
+        if (ID2D1Bitmap* icon = ProgramIcon(k.t, it.text2); icon != nullptr) {
+          k.t->DrawBitmap(icon, {left, cy - 8, left + 16, cy + 8});
+          left += 24;
+        }
+        k.Text(it.text, caption_.get(), {left, r.top, r.right, r.bottom}, secondary);
+        break;
+      }
       case Kind::AppRow: {
         const float cy = (r.top + r.bottom) / 2;
         if (ID2D1Bitmap* icon = ProgramIcon(k.t, it.detail); icon != nullptr) {
