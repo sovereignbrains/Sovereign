@@ -318,6 +318,7 @@ enum class UiCommand : std::uint8_t {
   LanChipMenu,        // index into lanHosts (-1: everyone else); anchor: the other bucket
   LanAdd,             // anchor: who can go where everyone else isn't - a device around, an address typed
   AddLanHostText,     // text: the address
+  RefreshAll,         // every subscription on fetched again
   PaidMenu,           // index: a configuration; what the user paid its server till - typed, a month more, none
   PaidDateText,       // index: a configuration; text: the date, "15.11" or "15.11.2026"
   EditRelayUrl,       // starts typing the relay's address over its row

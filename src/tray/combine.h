@@ -62,7 +62,18 @@ struct ServerInfo {
 };
 
 // The servers in a config's outbounds and endpoints (not groups, direct,
-// block, dns), in its order. Empty if it isn't a JSON object.
+// block, dns), in its order - less the provider's balancers
+// (ProviderBalancers). Empty if it isn't a JSON object.
 std::vector<ServerInfo> ListServers(std::string_view config);
+
+// A server the provider balances on its side ("🇫🇲 Локация АВТО", "Auto |
+// Best", "Балансировщик"): a word of its name is "авто"/"auto" or starts
+// with "балансир"/"balanc". The client picks the server itself ("auto" of
+// its own), so these are neither shown nor run.
+bool IsProviderBalancer(std::string_view tag);
+
+// The tags of a config's servers that are the provider's balancers - none
+// when every server is one (nothing else would be left to run).
+std::vector<std::string> ProviderBalancers(std::string_view config);
 
 }  // namespace sovereign::tray

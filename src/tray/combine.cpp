@@ -553,7 +553,10 @@ CombinedConfig CombineConfigs(const std::vector<ProfileConfig>& parts, const std
   return result;
 }
 
-std::vector<ServerInfo> ListServers(std::string_view config) {
+namespace {
+
+// Every server of a config, the provider's balancers too.
+std::vector<ServerInfo> AllServers(std::string_view config) {
   std::vector<ServerInfo> servers;
   if (NestingDepth(config) > kMaxConfigDepth) {
     return servers;
@@ -568,6 +571,86 @@ std::vector<ServerInfo> ListServers(std::string_view config) {
       }
     }
   }
+  return servers;
+}
+
+// `text` in lower case: ASCII and the Russian letters (UTF-8); the rest as it is.
+std::string LowerRu(std::string_view text) {
+  std::string out;
+  out.reserve(text.size());
+  const auto put = [&](unsigned a, unsigned b) {
+    out.push_back(static_cast<char>(a));
+    out.push_back(static_cast<char>(b));
+  };
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const auto c = static_cast<unsigned char>(text[i]);
+    const unsigned next = i + 1 < text.size() ? static_cast<unsigned char>(text[i + 1]) : 0U;
+    if (c >= 'A' && c <= 'Z') {
+      out.push_back(static_cast<char>(c - 'A' + 'a'));
+    } else if (c == 0xD0 && next >= 0x90 && next <= 0x9F) {  // А..П -> а..п
+      put(0xD0, next + 0x20);
+      ++i;
+    } else if (c == 0xD0 && next >= 0xA0 && next <= 0xAF) {  // Р..Я -> р..я
+      put(0xD1, next - 0x20);
+      ++i;
+    } else if (c == 0xD0 && next == 0x81) {  // Ё -> ё
+      put(0xD1, 0x91);
+      ++i;
+    } else {
+      out.push_back(text[i]);
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+bool IsProviderBalancer(std::string_view tag) {
+  const std::string lower = LowerRu(tag);
+  // Words: runs of letters and digits (the bytes of non-ASCII letters among them).
+  std::size_t at = 0;
+  while (at < lower.size()) {
+    const auto letter = [&](std::size_t i) {
+      const auto c = static_cast<unsigned char>(lower[i]);
+      return c >= 0x80 || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    };
+    while (at < lower.size() && !letter(at)) {
+      ++at;
+    }
+    std::size_t end = at;
+    while (end < lower.size() && letter(end)) {
+      ++end;
+    }
+    const std::string_view word(lower.data() + at, end - at);
+    if (word == "авто" || word == "auto" || word == "автовыбор" || word.starts_with("балансир") ||
+        word.starts_with("balanc") || word.starts_with("loadbalanc")) {
+      return true;
+    }
+    at = end;
+  }
+  return false;
+}
+
+std::vector<std::string> ProviderBalancers(std::string_view config) {
+  std::vector<std::string> balancers;
+  const std::vector<ServerInfo> servers = AllServers(config);
+  for (const ServerInfo& s : servers) {
+    if (IsProviderBalancer(s.tag)) {
+      balancers.push_back(s.tag);
+    }
+  }
+  if (balancers.size() == servers.size()) {
+    balancers.clear();  // only balancers: they're all there is to run
+  }
+  return balancers;
+}
+
+std::vector<ServerInfo> ListServers(std::string_view config) {
+  std::vector<ServerInfo> servers = AllServers(config);
+  const std::vector<std::string> balancers = ProviderBalancers(config);
+  std::erase_if(servers, [&](const ServerInfo& s) {
+    return std::find(balancers.begin(), balancers.end(), s.tag) != balancers.end();
+  });
   return servers;
 }
 

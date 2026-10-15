@@ -651,6 +651,9 @@ std::string CacheFilePath() {
 }
 
 // The worker's state besides the model: the settings it owns and saves.
+// RequestRefresh's id for every subscription on (an id is [a-z0-9-]: never this).
+constexpr std::string_view kEverySubscription = "*";
+
 class Worker {
  public:
   explicit Worker(TraySettings settings)
@@ -740,7 +743,17 @@ class Worker {
         }
         Save();
       }
-      if (refresh) {
+      if (refresh && *refresh == kEverySubscription) {
+        std::vector<std::string> ids;
+        for (const Profile& p : settings_.profiles) {
+          if (p.enabled && !p.url.empty()) {
+            ids.push_back(p.id);
+          }
+        }
+        for (const std::string& id : ids) {
+          Refresh(id, RefreshReason::Asked);
+        }
+      } else if (refresh) {
         Refresh(*refresh, refreshDirect ? RefreshReason::Direct : RefreshReason::Asked);
       }
       RefreshDue();
@@ -908,8 +921,15 @@ class Worker {
       if (taken.size() > before) {
         rulesFrom.push_back(profile.id);
       }
-      parts.push_back(
-          {.name = profile.name, .config = *config, .disabled = profile.disabled, .id = profile.id, .via = profile.via});
+      // Off: what the user switched off, and the provider's balancers - the
+      // client picks the server itself (combine.h IsProviderBalancer).
+      std::vector<std::string> off = profile.disabled;
+      for (std::string& tag : sovereign::tray::ProviderBalancers(*config)) {
+        if (std::find(off.begin(), off.end(), tag) == off.end()) {
+          off.push_back(std::move(tag));
+        }
+      }
+      parts.push_back({.name = profile.name, .config = *config, .disabled = std::move(off), .id = profile.id, .via = profile.via});
     }
     // The frame is always the client's own: from the configurations only their
     // servers - their routing and DNS never (one client's routing for everyone,
@@ -5131,6 +5151,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ScanScreen:
       ScanScreen();
+      break;
+    case UiCommand::RefreshAll:
+      RequestRefresh(std::string(kEverySubscription));
       break;
     case UiCommand::AddMenu:  // the main screen's "+": what the configurations page offers, in one menu
       if (const auto picked = PickFromMenu(owner, args.anchor, {L"Вставить из буфера", L"QR-код с экрана", L"Из файла…"}, -1)) {

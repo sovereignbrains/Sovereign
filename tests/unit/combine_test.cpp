@@ -245,6 +245,24 @@ void TestNamedAfterServer() {
   CHECK(!IsRenamedTag("NL 2a", "NL", "NL"));
 }
 
+void TestProviderBalancers() {
+  // By a word of the name, in either case and language; not inside another word.
+  CHECK(IsProviderBalancer("🇫🇲  Локация АВТО") && IsProviderBalancer("🇫🇲  Белые списки АВТО"));
+  CHECK(IsProviderBalancer("Auto | Best") && IsProviderBalancer("Балансировщик") && IsProviderBalancer("load-balancer"));
+  CHECK(!IsProviderBalancer("🇩🇪 Германия | Germany") && !IsProviderBalancer("Автомобильный") &&
+        !IsProviderBalancer("Autobahn") && !IsProviderBalancer(""));
+  // Not listed, and given to be switched off - unless they're all there is.
+  const std::string config =
+      R"({"outbounds":[{"type":"shadowsocks","tag":"🇫🇲 Локация АВТО","server":"a","server_port":1,"method":"none","password":""},)"
+      R"({"type":"vless","tag":"🇩🇪 Германия","server":"b","server_port":443,"uuid":"00000000-0000-0000-0000-000000000000"}]})";
+  const auto servers = ListServers(config);
+  CHECK(servers.size() == 1 && servers[0].tag == "🇩🇪 Германия");
+  CHECK(ProviderBalancers(config) == std::vector<std::string>{"🇫🇲 Локация АВТО"});
+  const std::string only =
+      R"({"outbounds":[{"type":"shadowsocks","tag":"AUTO","server":"a","server_port":1,"method":"none","password":""}]})";
+  CHECK(ProviderBalancers(only).empty() && ListServers(only).size() == 1);
+}
+
 void TestNoSelector() {
   // A hand-written config: one server and the route straight to it.
   const std::string single = R"({"dns":{"servers":[{"type":"local","tag":"own-dns"}]},)"
@@ -346,6 +364,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestThrough();
     TestNoSelector();
     TestNamedAfterServer();
+    TestProviderBalancers();
     if (argc == 3 && std::string_view(argv[1]) == "--check" && CheckWithSingBox(argv[2]) != 0) {
       return 1;
     }

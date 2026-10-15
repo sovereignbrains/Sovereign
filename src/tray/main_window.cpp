@@ -924,8 +924,10 @@ class Painter {
           const Item& o = l.items[j];
           const bool over = Interactive(o) && o.rect.left < r.right && o.rect.right > r.left && o.rect.top < r.bottom &&
                             o.rect.bottom > r.top;
+          // A card that is a link holds buttons and lines that are links of their own: they take the click.
           const bool allowed = o.kind == Kind::Hint ||
-                               (o.kind == Kind::IconButton && (it.kind == Kind::Title || it.kind == Kind::Card));
+                               (o.kind == Kind::IconButton && (it.kind == Kind::Title || it.kind == Kind::Card)) ||
+                               (o.kind == Kind::Muted && it.kind == Kind::Card);
           overlaps = overlaps || (over && !allowed);
         }
       }
@@ -1492,27 +1494,35 @@ class Painter {
     return ServerCard(l, c, x0, x1, serverTop);
   }
 
-  // What it connects with, over the switch: the subscription (the first one
-  // on; else the first configuration on). A card that is a link to the
-  // configurations, read top-down: what it is and how fresh, its name - the
-  // refresh button level with them on the right - then till when it's paid,
-  // the days left. Nothing before there's one.
+  // What it connects with, over the switch: every configuration on - the
+  // subscriptions first - a line each: its name, till when it's paid (the
+  // panel's word, or the user's for their own server: a click - paid again,
+  // another date), and only what's wrong besides (a failed refresh, the
+  // traffic running out). A card of glass that is a link to the
+  // configurations; its buttons on the right: a QR code on the screen,
+  // another one added, the subscriptions fetched again. Nothing before
+  // there's one on.
   float SubscriptionCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    const auto on = [](const UiProfile& p) { return p.enabled; };
-    auto shown = std::find_if(c.profiles.begin(), c.profiles.end(),
-                              [](const UiProfile& p) { return p.enabled && p.subscription; });
-    if (shown == c.profiles.end()) {
-      shown = std::find_if(c.profiles.begin(), c.profiles.end(), on);
+    std::vector<std::size_t> shown;
+    for (const bool subscription : {true, false}) {
+      for (std::size_t i = 0; i < c.profiles.size(); ++i) {
+        if (c.profiles[i].enabled && c.profiles[i].subscription == subscription) {
+          shown.push_back(i);
+        }
+      }
     }
-    if (shown == c.profiles.end()) {
+    if (shown.empty()) {
       return y;
     }
-    const UiProfile& p = *shown;
-    // Its name; under it till when it's paid - the panel's word, or the
-    // user's for their own server (a click: paid again, another date) - and
-    // only what's wrong besides: a refresh that failed, the traffic running out.
-    const bool trafficLow = p.trafficShare >= 0.8f;
-    const float h = 12 + 26 + 22 + (p.failed ? 20.0f : 0.0f) + (trafficLow ? 20.0f : 0.0f) + 12;
+    // A line's height: the name and the paid line, and a line more for each thing wrong.
+    const auto rowHeight = [&](const UiProfile& p) {
+      return 26.0f + 22 + (p.failed ? 20.0f : 0.0f) + (p.trafficShare >= 0.8f ? 20.0f : 0.0f);
+    };
+    float h = 12 + 10;
+    for (const std::size_t i : shown) {
+      h += rowHeight(c.profiles[i]);
+    }
+    h += static_cast<float>(shown.size() - 1) * 8;
     const float left = x0 + 16;
 
     Item card = Make(Kind::Card, {x0, y, x1, y + h}, L"Конфигурации");
@@ -1521,18 +1531,22 @@ class Painter {
     card.glass = true;
     l.items.push_back(std::move(card));
 
-    // The buttons, right, in the card's middle: a QR code on the screen,
-    // another one added (the clipboard, a QR code, a file), and - a
-    // subscription - fetched again.
+    // The buttons: in the card's middle for one line, by the first for more.
     float buttons = x1 - 10;
-    const float by = y + (h - 34) / 2;
+    const float by = shown.size() == 1 ? y + (h - 34) / 2 : y + 12;
     const auto key = [&](Item item) {
       item.key = true;
       l.items.push_back(std::move(item));
     };
-    if (p.subscription) {
+    const auto subscriptions = static_cast<int>(
+        std::count_if(shown.begin(), shown.end(), [&](std::size_t i) { return c.profiles[i].subscription; }));
+    if (subscriptions == 1) {
       key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Обновить подписку", kGlyphRefresh,
-                      UiCommand::RefreshProfile, static_cast<int>(shown - c.profiles.begin())));
+                      UiCommand::RefreshProfile, static_cast<int>(shown.front())));
+      buttons -= 40;
+    } else if (subscriptions > 1) {
+      key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Обновить подписки", kGlyphRefresh,
+                      UiCommand::RefreshAll));
       buttons -= 40;
     }
     key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Добавить: из буфера, QR-код, файл",
@@ -1543,41 +1557,49 @@ class Painter {
     buttons -= 34;
     const float textRight = buttons - 6;
 
-    l.items.push_back(Make(Kind::Heading, {left, y + 12, textRight, y + 38}, p.name));
-
-    const int index = static_cast<int>(shown - c.profiles.begin());
-    float top = y + 40;
-    if (p.paidTill.empty()) {
-      // Not said by its panel, not by the user yet: a click to say it.
-      const std::wstring ask = L"Указать, до какого числа оплачено ›";
-      const float w = std::min(TextWidth(ask, caption_.get()) + 4, textRight - left);
-      l.items.push_back(CommandItem(Kind::Muted, {left, top, left + w, top + 20}, ask, nullptr, UiCommand::PaidMenu, index));
-    } else {
-      std::wstring paid = (p.paidByHand ? L"Сервер оплачен до " : L"Оплачено до ") + p.paidTill.substr(0, 5) + L" · " +
-                          (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : std::format(L"ещё {} дн.", p.daysLeft));
-      if (p.paidByHand) {
-        paid += L" ›";
-        const float w = std::min(TextWidth(paid, caption_.get()) + 4, textRight - left);
-        Item line = CommandItem(Kind::Muted, {left, top, left + w, top + 20}, paid, nullptr, UiCommand::PaidMenu, index);
-        line.warn = p.daysLeft <= 3;
-        l.items.push_back(std::move(line));
+    float top = y + 12;
+    for (std::size_t n = 0; n < shown.size(); ++n) {
+      const auto index = static_cast<int>(shown[n]);
+      const UiProfile& p = c.profiles[shown[n]];
+      // Past the first line the buttons are above: the text runs to the card's edge.
+      const float right = n == 0 ? textRight : x1 - 16;
+      l.items.push_back(Make(Kind::Heading, {left, top, right, top + 26}, p.name));
+      float line = top + 28;
+      if (p.paidTill.empty()) {
+        // Not said by its panel, not by the user yet: a click to say it.
+        const std::wstring ask = L"Указать, до какого числа оплачено ›";
+        const float w = std::min(TextWidth(ask, caption_.get()) + 4, right - left);
+        l.items.push_back(
+            CommandItem(Kind::Muted, {left, line, left + w, line + 20}, ask, nullptr, UiCommand::PaidMenu, index));
       } else {
-        Item line = Make(Kind::Muted, {left, top, textRight, top + 20}, paid);
-        line.warn = p.daysLeft <= 3;
-        l.items.push_back(std::move(line));
+        std::wstring paid = (p.paidByHand ? L"Сервер оплачен до " : L"Оплачено до ") + p.paidTill.substr(0, 5) +
+                            L" · " +
+                            (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : std::format(L"ещё {} дн.", p.daysLeft));
+        if (p.paidByHand) {
+          paid += L" ›";
+          const float w = std::min(TextWidth(paid, caption_.get()) + 4, right - left);
+          Item item = CommandItem(Kind::Muted, {left, line, left + w, line + 20}, paid, nullptr, UiCommand::PaidMenu, index);
+          item.warn = p.daysLeft <= 3;
+          l.items.push_back(std::move(item));
+        } else {
+          Item item = Make(Kind::Muted, {left, line, right, line + 20}, paid);
+          item.warn = p.daysLeft <= 3;
+          l.items.push_back(std::move(item));
+        }
       }
-    }
-    top += 22;
-    if (p.failed) {
-      Item failed = Make(Kind::Muted, {left, top, textRight, top + 20}, L"Подписка не обновилась");
-      failed.warn = true;
-      l.items.push_back(std::move(failed));
-      top += 20;
-    }
-    if (trafficLow) {
-      Item traffic = Make(Kind::Muted, {left, top, textRight, top + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
-      traffic.warn = true;
-      l.items.push_back(std::move(traffic));
+      line += 22;
+      if (p.failed) {
+        Item failed = Make(Kind::Muted, {left, line, right, line + 20}, L"Подписка не обновилась");
+        failed.warn = true;
+        l.items.push_back(std::move(failed));
+        line += 20;
+      }
+      if (p.trafficShare >= 0.8f) {
+        Item traffic = Make(Kind::Muted, {left, line, right, line + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
+        traffic.warn = true;
+        l.items.push_back(std::move(traffic));
+      }
+      top += rowHeight(p) + 8;
     }
     return y + h + kGap;
   }
