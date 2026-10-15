@@ -3066,7 +3066,10 @@ struct MainWindow::Impl {
 
   // On the log's scrollbar strip, with something to scroll.
   bool OnLogBar(POINT px) const {
-    return InLog(px) && LogThumb(*layout.logBox, log) && ToDip(px.x) >= layout.logBox->right - kLogBar;
+    if (!layout.logBox || !InLog(px)) {
+      return false;
+    }
+    return LogThumb(*layout.logBox, log) && ToDip(px.x) >= layout.logBox->right - kLogBar;
   }
 
   // The thumb's top dragged to `top` (DIPs): the lines scrolled to match.
@@ -3117,6 +3120,9 @@ struct MainWindow::Impl {
     POINT px{};
     GetCursorPos(&px);
     ScreenToClient(hwnd, &px);
+    if (!log.pan) {
+      return;
+    }
     const float off = ToDip(px.y) - log.pan->y;
     const float beyond = std::abs(off) - kPanStill;
     if (beyond <= 0) {
@@ -3843,13 +3849,14 @@ struct MainWindow::Impl {
         SetFocus(w);
         SetCapture(w);
         in.focusVisible = false;
-        if (page == UiPage::Logs && OnLogBar(at)) {
+        if (const auto thumb = page == UiPage::Logs && OnLogBar(at) && layout.logBox ? LogThumb(*layout.logBox, log)
+                                                                                     : std::nullopt) {
           // The thumb taken where pressed; a press beside it brings it there.
-          const D2D1_RECT_F thumb = *LogThumb(*layout.logBox, log);
           const float y = ToDip(at.y);
-          barGrab = y >= thumb.top && y < thumb.bottom ? y - thumb.top : (thumb.bottom - thumb.top) / 2;
+          const float grab = y >= thumb->top && y < thumb->bottom ? y - thumb->top : (thumb->bottom - thumb->top) / 2;
+          barGrab = grab;
           log.barHot = true;
-          DragLogThumb(y - *barGrab);
+          DragLogThumb(y - grab);
           return 0;
         }
         if (InLog(at)) {
@@ -3899,7 +3906,7 @@ struct MainWindow::Impl {
         const POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         if (log.pan) {
           StopPan();
-        } else if (page == UiPage::Logs && InLog(at) && LogThumb(*layout.logBox, log)) {
+        } else if (page == UiPage::Logs && layout.logBox && InLog(at) && LogThumb(*layout.logBox, log)) {
           StartPan(at);
         }
         return 0;
