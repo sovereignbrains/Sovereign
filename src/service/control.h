@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "boot_store.h"
 #include "core.h"
 #include "kill_switch.h"
 #include "log_ring.h"
@@ -37,7 +38,7 @@ using CommandObserver = std::function<void(const CommandRecord&)>;
 // Kept apart from the pipe transport and from any concrete core so it can be
 // exercised with a fake ICore (tests/unit/control_test.cpp).
 //
-// Commands: ping (echo), box_ping, box_start {config}, box_stop,
+// Commands: ping (echo), box_ping, box_start {config, at_boot?}, box_stop, box_boot {at_boot},
 // box_stats, box_logs {since}, box_urltest {tags, url?, timeout_ms?},
 // box_delays, box_exitip {tag, refresh?}, box_route {targets},
 // kill_switch {enabled, allow_lan?, lan_closed?, lan_allowed?}.
@@ -75,8 +76,14 @@ class ControlHandler {
   // kill switch's settings, the core's start/stop - is under one lock; the
   // long core calls (box_urltest, box_delays, box_exitip) run outside it, so a
   // resume never waits for a latency test.
+  //
+  // boot may be null too: box_start's at_boot is then ignored and box_boot
+  // answers an error. With one, box_start {at_boot: true} keeps the config it
+  // started for the next boot, {at_boot: false} drops it (no at_boot: as it
+  // was); box_boot {at_boot} does the same for the running config - the
+  // user's "connect at startup" switched while connected.
   ControlHandler(ICore* core, const LogRing& coreLog, std::optional<std::string>& lastConfig,
-                 CommandObserver observer = {}, IKillSwitch* killSwitch = nullptr);
+                 CommandObserver observer = {}, IKillSwitch* killSwitch = nullptr, IBootStore* boot = nullptr);
 
   std::string Handle(const std::string& request);
 
@@ -95,6 +102,18 @@ class ControlHandler {
   // race on a std::string.)
   ResumeOutcome ResumeAfterSleep();
 
+  struct BootOutcome {
+    bool tried = false;  // false: nothing to start, or the tray came first
+    std::string error;   // a failed try: worth another once the network is up
+  };
+
+  // At the service's start, from its own thread: the config kept for boot
+  // started, if there is one and the tray hasn't started or stopped the box
+  // since the service came up (its box_start/box_stop wins). The kill
+  // switch's persistent filters stay: they were built over this config's
+  // tunnel before the reboot.
+  BootOutcome StartAtBoot();
+
  private:
   // Set by Dispatch for the observer.
   struct Outcome {
@@ -111,10 +130,13 @@ class ControlHandler {
   std::optional<std::string>& lastConfig_;
   CommandObserver observer_;
   IKillSwitch* killSwitch_;
+  IBootStore* boot_;
   KillSwitchSettings killSettings_;  // as last applied
   bool killActive_ = false;          // filters in place
-  // Guards lastConfig_, killSettings_, killActive_ and the core's start/stop
-  // sequence - between Handle() and ResumeAfterSleep() (see the constructor).
+  bool bootDone_ = false;            // StartAtBoot started it, or the tray took over
+  // Guards lastConfig_, killSettings_, killActive_, bootDone_, the boot store
+  // and the core's start/stop sequence - between Handle(), ResumeAfterSleep()
+  // and StartAtBoot() (see the constructor).
   std::mutex stateMutex_;
 };
 

@@ -11,6 +11,13 @@ target_link_libraries(unit-kill-switch PRIVATE sovereign_service_lib)
 sovereign_copy_asan_runtime(unit-kill-switch)
 add_test(NAME unit-kill-switch COMMAND unit-kill-switch)
 
+# The config the service keeps for boot, on disk (DPAPI, its own ACL): Windows
+# only - the tsan job builds control_test with a fake store instead.
+add_executable(unit-boot-store boot_store_test.cpp check.h)
+target_link_libraries(unit-boot-store PRIVATE sovereign_service_lib)
+sovereign_copy_asan_runtime(unit-boot-store)
+add_test(NAME unit-boot-store COMMAND unit-boot-store)
+
 add_executable(unit-control control_test.cpp check.h)
 target_link_libraries(unit-control PRIVATE sovereign_service_lib)
 sovereign_copy_asan_runtime(unit-control)

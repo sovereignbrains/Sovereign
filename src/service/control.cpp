@@ -109,12 +109,13 @@ bool IsTestUrl(const Json& url) {
 
 ControlHandler::ControlHandler(ICore* core, const LogRing& coreLog,
                                std::optional<std::string>& lastConfig, CommandObserver observer,
-                               IKillSwitch* killSwitch)
+                               IKillSwitch* killSwitch, IBootStore* boot)
     : core_(core),
       coreLog_(coreLog),
       lastConfig_(lastConfig),
       observer_(std::move(observer)),
       killSwitch_(killSwitch),
+      boot_(boot),
       killActive_(killSwitch != nullptr && killSwitch->Active()) {
   killSettings_.enabled = killActive_;
 }
@@ -141,6 +142,26 @@ ControlHandler::ResumeOutcome ControlHandler::ResumeAfterSleep() {
   // an explicit box_stop means "stay off". The kill switch's filters stay as
   // they are: they follow the config's tunnel addresses, and it's the same config.
   outcome.startError = core_->Start(*lastConfig_);
+  return outcome;
+}
+
+ControlHandler::BootOutcome ControlHandler::StartAtBoot() {
+  const std::scoped_lock lock(stateMutex_);
+  BootOutcome outcome;
+  if (bootDone_ || core_ == nullptr || boot_ == nullptr) {
+    return outcome;
+  }
+  const auto config = boot_->Load();
+  if (!config) {
+    bootDone_ = true;
+    return outcome;
+  }
+  outcome.tried = true;
+  outcome.error = core_->Start(*config);
+  if (outcome.error.empty()) {
+    lastConfig_ = *config;  // replayed after sleep, reported by box_stats - as if the tray had started it
+    bootDone_ = true;
+  }
   return outcome;
 }
 
@@ -189,7 +210,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   const std::string cmd = parsed.value("cmd", "");
   for (const std::string_view known :
        {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays", "box_exitip",
-        "box_select", "box_route", "kill_switch"}) {
+        "box_select", "box_route", "box_boot", "kill_switch"}) {
     if (cmd == known) {
       outcome.cmd = known;
     }
@@ -217,6 +238,11 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     if (!parsed.contains("config")) {
       return fail("missing config field");
     }
+    const Json atBoot = parsed.value("at_boot", Json());
+    if (!atBoot.is_null() && !atBoot.is_boolean()) {
+      return fail("at_boot must be a boolean");
+    }
+    bootDone_ = true;  // the tray's call from here on, a start at boot still pending or not
     // "config" carries a full sing-box config document as a nested JSON
     // object (not a pre-serialized string) — natural for a JSON-over-pipe
     // request. It is re-serialized here because the core takes the config as
@@ -229,6 +255,15 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     lastConfig_ = configJson;
     Json response;
     response["cmd"] = "box_started";
+    // Kept for the next boot, or dropped. Failing to keep it doesn't undo the
+    // start - the box runs; it's reported with it.
+    if (boot_ != nullptr && atBoot.is_boolean()) {
+      if (!atBoot.get<bool>()) {
+        boot_->Forget();
+      } else if (const std::string bootError = boot_->Save(configJson); !bootError.empty()) {
+        response["boot_error"] = bootError;
+      }
+    }
     // A new config may bring a tunnel of other addresses: the kill switch
     // follows. Its failure doesn't undo the start - it's reported with it.
     if (killSwitch_ != nullptr && killActive_) {
@@ -241,6 +276,9 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
 
   if (cmd == "box_stop") {
     const std::scoped_lock lock(stateMutex_);
+    // The boot config stays: a stop is the tray's restart as often as the
+    // user's off - box_boot {at_boot: false} says the latter.
+    bootDone_ = true;
     const std::string error = core_->Stop();
     if (!error.empty()) {
       return fail(error);
@@ -431,6 +469,32 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
     if (!exit.error.empty()) {
       response["error"] = exit.error;
     }
+    return Dump(response);
+  }
+
+  if (cmd == "box_boot") {
+    const std::scoped_lock lock(stateMutex_);
+    if (boot_ == nullptr) {
+      return fail("boot store unavailable");
+    }
+    const Json atBoot = parsed.value("at_boot", Json());
+    if (!atBoot.is_boolean()) {
+      return fail("at_boot must be a boolean");
+    }
+    // Kept: the running config, if one runs; else nothing is - the next
+    // box_start with at_boot keeps its own.
+    bool kept = false;
+    if (atBoot.get<bool>() && lastConfig_) {
+      if (const std::string error = boot_->Save(*lastConfig_); !error.empty()) {
+        return fail(error);
+      }
+      kept = true;
+    } else if (!atBoot.get<bool>()) {
+      boot_->Forget();
+    }
+    Json response;
+    response["cmd"] = "box_boot";
+    response["kept"] = kept;
     return Dump(response);
   }
 

@@ -52,6 +52,8 @@ add_custom_target(sovereign_gocore_dll DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/sove
 # machinery — linked by the service and by tests/unit, which drive it with a
 # fake ICore.
 add_library(sovereign_service_lib STATIC
+  boot_store.cpp
+  boot_store.h
   core.h
   control.cpp
   control.h
@@ -61,7 +63,7 @@ add_library(sovereign_service_lib STATIC
   log_ring.h
 )
 target_include_directories(sovereign_service_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(sovereign_service_lib PUBLIC sovereign_common)
+target_link_libraries(sovereign_service_lib PUBLIC sovereign_common crypt32)
 
 # GoCore - the C++ side of the bridge to sovereign-gocore.dll. A library of
 # its own so tests/unit can drive it against gocore-stub.dll under ASan: the

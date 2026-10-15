@@ -5,14 +5,19 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "autologger.h"
+#include "boot_store.h"
 #include "control.h"
 #include "core.h"
 #include "go_core.h"
@@ -64,6 +69,7 @@ class ServiceState {
   // then on the SCM may deliver power events - and published by handlerReady.
   // Declared after what it points into, so it goes first.
   std::optional<sovereign::service::WfpKillSwitch> killSwitch;  // the handler's; holds only a path
+  std::optional<sovereign::service::FileBootStore> bootStore;   // the handler's: the config started at boot
   std::optional<sovereign::service::ControlHandler> handler;
   std::atomic<bool> handlerReady{false};
 };
@@ -152,11 +158,36 @@ std::wstring OwnPath() {
 
 sovereign::service::ControlHandler& CreateHandler(ServiceState& state) {
   auto& killSwitch = state.killSwitch.emplace(OwnPath());
+  auto& bootStore =
+      state.bootStore.emplace(sovereign::service::BootStorePath(), sovereign::service::kBootStoreSddl);
   auto& handler = state.handler.emplace(
       state.core.get(), state.coreLog, state.lastConfig,
-      [](const sovereign::service::CommandRecord& record) { trace::Command(record); }, &killSwitch);
+      [](const sovereign::service::CommandRecord& record) { trace::Command(record); }, &killSwitch, &bootStore);
   state.handlerReady.store(true, std::memory_order_release);
   return handler;
+}
+
+// The config kept for boot (boot_store.h), started without waiting for
+// anyone to sign in. Early in the boot the network may not be there yet: a
+// failed start is tried again every few seconds for two minutes - until the
+// tray, once it runs, takes over (StartAtBoot then does nothing).
+void StartAtBoot(const std::stop_token& stop, sovereign::service::ControlHandler& handler) {
+  constexpr int kTries = 24;
+  constexpr auto kPause = std::chrono::seconds(5);
+  for (int i = 0; i < kTries && !stop.stop_requested(); ++i) {
+    const auto outcome = handler.StartAtBoot();
+    if (!outcome.tried) {
+      return;
+    }
+    trace::Power("boot_start", outcome.error);
+    if (outcome.error.empty()) {
+      return;
+    }
+    std::mutex mutex;
+    std::condition_variable_any wake;
+    std::unique_lock lock(mutex);
+    wake.wait_for(lock, stop, kPause, [] { return false; });
+  }
 }
 
 void RunPipeServer(const std::stop_token& stopToken, sovereign::service::ControlHandler& handler) {
@@ -194,7 +225,13 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
   ReportStatus(state.statusHandle, SERVICE_RUNNING);
   trace::ProcessState("service", "running");
 
-  RunPipeServer(state.stopSource.get_token(), handler);
+  {
+    // Beside the pipe, not before it: a start waits on the network up to
+    // seconds, and the tray must get its answers meanwhile.
+    std::jthread boot([&handler](const std::stop_token& stop) { StartAtBoot(stop, handler); });
+    RunPipeServer(state.stopSource.get_token(), handler);
+    boot.request_stop();
+  }  // joined before the core is stopped
   trace::ProcessState("service", "stopping");
   StopCoreOnShutdown(state);
 
@@ -288,6 +325,7 @@ void UninstallService() {
   if (!service && GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST) {
     std::wcout << L"Службы " << kServiceName << L" нет.\n";
     Unblock();
+    sovereign::service::FileBootStore(sovereign::service::BootStorePath(), sovereign::service::kBootStoreSddl).Forget();
     return;
   }
   THROW_LAST_ERROR_IF(!service);
@@ -295,8 +333,10 @@ void UninstallService() {
   THROW_LAST_ERROR_IF(!DeleteService(service.get()));
   std::wcout << L"Служба " << kServiceName << L" удалена.\n";
 
-  // After the service is gone: nothing can put the filters back then.
+  // After the service is gone: nothing can put the filters back then, nor
+  // the boot config - a machine without Sovereign keeps no servers' keys.
   Unblock();
+  sovereign::service::FileBootStore(sovereign::service::BootStorePath(), sovereign::service::kBootStoreSddl).Forget();
 }
 
 BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {

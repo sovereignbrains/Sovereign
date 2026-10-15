@@ -556,7 +556,9 @@ std::optional<std::wstring> ForeignSingTun() {
 }
 
 // `config` is the effective one: config.json with the per-app rules applied.
-std::string StartBox(const std::optional<std::string>& config) {
+// `atBoot`: the service keeps it and starts it itself at the next boot
+// (boot_store.h), or drops what it kept.
+std::string StartBox(const std::optional<std::string>& config, bool atBoot) {
   if (!config) {
     return "нет конфига: добавь или включи конфигурацию (окно → Конфигурации)";
   }
@@ -573,6 +575,7 @@ std::string StartBox(const std::optional<std::string>& config) {
   nlohmann::json request;
   request["cmd"] = "box_start";
   request["config"] = std::move(parsed);
+  request["at_boot"] = atBoot;
   return ServiceCall(request, "box_started");
 }
 
@@ -632,9 +635,9 @@ std::optional<sovereign::tray::Stats> PollStats() {
   };
 }
 
-void Execute(TrayModel& model, Action action, const std::optional<std::string>& config) {
+void Execute(TrayModel& model, Action action, const std::optional<std::string>& config, bool atBoot) {
   if (action == Action::Start) {
-    model.OnStartResult(StartBox(config), TrayModel::Clock::now());
+    model.OnStartResult(StartBox(config, atBoot), TrayModel::Clock::now());
   } else if (action == Action::Stop) {
     model.OnStopResult(StopBox());
   }
@@ -718,7 +721,7 @@ class Worker {
       if (want) {
         settings_.wantOn = *want;
         Save();
-        Execute(model_, model_.SetWantOn(*want, TrayModel::Clock::now()), EffectiveConfig());
+        Execute(model_, model_.SetWantOn(*want, TrayModel::Clock::now()), EffectiveConfig(), AtBoot());
       }
       if (local) {
         AddLocal(local->text, local->name);
@@ -781,7 +784,7 @@ class Worker {
       if (!config && model_.WantOn()) {
         settings_.wantOn = false;
         Save();
-        Execute(model_, model_.SetWantOn(false, TrayModel::Clock::now()), std::nullopt);
+        Execute(model_, model_.SetWantOn(false, TrayModel::Clock::now()), std::nullopt, false);
         Notify(L"Sovereign: подключение выключено", L"Нечего запускать: " + Widen(combineError_), true,
                UiPage::Subscription);
       }
@@ -789,7 +792,8 @@ class Worker {
       model_.SetExpectedConfig(expected);
       const auto stats = PollStats();
       const Action action = model_.OnPoll(stats, TrayModel::Clock::now());
-      Execute(model_, action, config);
+      Execute(model_, action, config, AtBoot());
+      SyncBoot();
       // The box runs this very config: its subscription hosts go through the proxy.
       if (stats && stats->running && !expected.empty() && stats->configSha256 == expected) {
         runningHosts_ = combinedHosts_;
@@ -1250,6 +1254,27 @@ class Worker {
       current = find(choices.configDefault);
     }
     return {std::move(choices), current};
+  }
+
+  // Whether the service connects by itself at the next boot (boot_store.h),
+  // before anyone signs in: "start and connect" picked, the autostart on.
+  bool AtBoot() const { return settings_.connectAtStartup && sovereign::tray::AutostartEnabled(); }
+
+  // The service told when that changes - the connection turned off, "connect
+  // at startup" switched (a start says it itself, box_start's at_boot). Once
+  // a change: a service from before 0.5.8 doesn't know box_boot, and asking
+  // it every second would be noise.
+  void SyncBoot() {
+    const bool wanted = model_.WantOn() && AtBoot();
+    if (bootTold_ == wanted) {
+      return;
+    }
+    bootTold_ = wanted;
+    const std::string error =
+        ServiceCall(nlohmann::json{{"cmd", "box_boot"}, {"at_boot", wanted}}, "box_boot");
+    if (!error.empty()) {
+      LOG_HR_MSG(E_FAIL, "box_boot: %hs", error.c_str());
+    }
   }
 
   void Save() {
@@ -2665,6 +2690,7 @@ class Worker {
 
   TraySettings settings_;
   TrayModel model_;
+  std::optional<bool> bootTold_;  // what box_boot last said (SyncBoot); none yet this run
   std::string cacheFile_;  // UTF-8; empty: no cache file
   std::map<std::string, ProfileRuntime> runtime_;  // by profile id
   unsigned noticeId_ = 0;

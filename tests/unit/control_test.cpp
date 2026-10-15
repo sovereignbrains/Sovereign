@@ -101,6 +101,22 @@ class FakeCore final : public ICore {
   LogSink installedSink;
 };
 
+class FakeBootStore final : public sovereign::service::IBootStore {
+ public:
+  std::string Save(const std::string& config) override {
+    if (!saveError.empty()) {
+      return saveError;
+    }
+    kept = config;
+    return {};
+  }
+  void Forget() override { kept.reset(); }
+  std::optional<std::string> Load() override { return kept; }
+
+  std::optional<std::string> kept;
+  std::string saveError;
+};
+
 json Send(ControlHandler& handler, const std::string& request) {
   return json::parse(handler.Handle(request));
 }
@@ -253,6 +269,85 @@ void TestExitIp() {
   core.exitIp = {.tag = {}, .pending = false, .ip = {}, .country = {}, .isp = {}, .error = "i/o timeout"};
   answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl"})");
   CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","error":"i/o timeout"})"));
+}
+
+// The config kept for boot: a start with at_boot keeps or drops it, a stop
+// leaves it, box_boot follows "connect at startup"; at the service's start it
+// runs by itself - unless the tray came first.
+void TestBoot() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeCore core;
+  FakeBootStore boot;
+  ControlHandler handler(&core, log, lastConfig, {}, nullptr, &boot);
+
+  CHECK(IsError(Send(handler, R"({"cmd":"box_start","config":{},"at_boot":"yes"})"), "at_boot must be a boolean"));
+  CHECK(!core.running);
+  // No at_boot: the boot config as it was (none).
+  CHECK(Send(handler, R"({"cmd":"box_start","config":{"a":1}})").value("cmd", "") == "box_started");
+  CHECK(!boot.kept);
+  Send(handler, R"({"cmd":"box_stop"})");
+  CHECK(Send(handler, R"({"cmd":"box_start","config":{"a":2},"at_boot":true})").value("cmd", "") == "box_started");
+  CHECK(boot.kept == std::optional<std::string>(R"({"a":2})"));
+  // A stop is a restart as often as an off: the boot config stays.
+  Send(handler, R"({"cmd":"box_stop"})");
+  CHECK(boot.kept.has_value());
+  CHECK(Send(handler, R"({"cmd":"box_start","config":{"a":3},"at_boot":false})").value("cmd", "") == "box_started");
+  CHECK(!boot.kept);
+  // Failing to keep it doesn't undo the start.
+  Send(handler, R"({"cmd":"box_stop"})");
+  boot.saveError = "disk full";
+  json answer = Send(handler, R"({"cmd":"box_start","config":{"a":4},"at_boot":true})");
+  CHECK(answer.value("cmd", "") == "box_started" && answer.value("boot_error", "") == "disk full" && core.running);
+  boot.saveError.clear();
+
+  // box_boot: the running config kept, or dropped; nothing runs - nothing kept.
+  CHECK(IsError(Send(handler, R"({"cmd":"box_boot"})"), "at_boot must be a boolean"));
+  answer = Send(handler, R"({"cmd":"box_boot","at_boot":true})");
+  CHECK(answer == json::parse(R"({"cmd":"box_boot","kept":true})"));
+  CHECK(boot.kept == std::optional<std::string>(R"({"a":4})"));
+  CHECK(Send(handler, R"({"cmd":"box_boot","at_boot":false})") == json::parse(R"({"cmd":"box_boot","kept":false})"));
+  CHECK(!boot.kept);
+  Send(handler, R"({"cmd":"box_stop"})");
+  CHECK(Send(handler, R"({"cmd":"box_boot","at_boot":true})").value("kept", true) == false);
+  CHECK(!boot.kept);
+  ControlHandler without(&core, log, lastConfig);
+  CHECK(IsError(Send(without, R"({"cmd":"box_boot","at_boot":true})"), "boot store unavailable"));
+
+  // At the service's start: the kept config runs, as if the tray had started it.
+  {
+    std::optional<std::string> fresh;
+    FakeCore bootCore;
+    FakeBootStore kept;
+    kept.kept = R"({"b":1})";
+    ControlHandler service(&bootCore, log, fresh, {}, nullptr, &kept);
+    bootCore.startError = "network unreachable";
+    auto outcome = service.StartAtBoot();
+    CHECK(outcome.tried && outcome.error == "network unreachable" && !fresh);
+    bootCore.startError.clear();
+    outcome = service.StartAtBoot();  // tried again: it failed
+    CHECK(outcome.tried && outcome.error.empty() && bootCore.running && bootCore.startedWith == R"({"b":1})");
+    CHECK(fresh == std::optional<std::string>(R"({"b":1})"));
+    CHECK(!service.StartAtBoot().tried);  // once
+  }
+  // The tray came first: its start or stop wins over the kept config.
+  {
+    std::optional<std::string> fresh;
+    FakeCore bootCore;
+    FakeBootStore kept;
+    kept.kept = R"({"b":1})";
+    ControlHandler service(&bootCore, log, fresh, {}, nullptr, &kept);
+    Send(service, R"({"cmd":"box_stop"})");
+    CHECK(!service.StartAtBoot().tried && !bootCore.running);
+  }
+  // Nothing kept, no store: nothing to try.
+  {
+    std::optional<std::string> fresh;
+    FakeCore bootCore;
+    FakeBootStore empty;
+    CHECK(!ControlHandler(&bootCore, log, fresh, {}, nullptr, &empty).StartAtBoot().tried);
+    CHECK(!ControlHandler(&bootCore, log, fresh).StartAtBoot().tried);
+  }
 }
 
 void TestRoute() {
@@ -621,6 +716,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestSelect();
     TestExitIp();
     TestRoute();
+    TestBoot();
     TestKillSwitch();
     TestResumeAfterSleep();
   } catch (const std::exception& e) {
