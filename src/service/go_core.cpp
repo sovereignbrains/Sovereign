@@ -60,6 +60,7 @@ GoCore::GoCore(const std::wstring& dllPath) {
   boxStart_ = ResolveExport<BoxStartFn>(module_.get(), "box_start");
   boxStop_ = ResolveExport<BoxStopFn>(module_.get(), "box_stop");
   boxStats_ = ResolveExport<BoxStatsFn>(module_.get(), "box_stats");
+  boxFlows_ = ResolveExport<BoxFlowsFn>(module_.get(), "box_flows");
   boxUrlTest_ = ResolveExport<BoxUrlTestFn>(module_.get(), "box_urltest");
   boxDelays_ = ResolveExport<BoxDelaysFn>(module_.get(), "box_delays");
   boxExitIp_ = ResolveExport<BoxExitIpFn>(module_.get(), "box_exitip");
@@ -124,6 +125,22 @@ std::string GoCore::StartUrlTest(const UrlTestRequest& request) {
   json["url"] = request.url;
   json["timeout_ms"] = request.timeout.count();
   return TakeOwnedString(boxUrlTest_(json.dump().c_str()));
+}
+
+std::vector<FlowTotal> GoCore::Flows() {
+  // gocore/flows.go writes it: {"flows":{"<tag>":[up,down],...}}; anything
+  // else in it is skipped, never thrown.
+  const auto json = nlohmann::json::parse(TakeOwnedString(boxFlows_()), nullptr, /*allow_exceptions=*/false);
+  std::vector<FlowTotal> flows;
+  if (!json.is_object() || !json.contains("flows") || !json["flows"].is_object()) {
+    return flows;
+  }
+  for (const auto& [tag, pair] : json["flows"].items()) {
+    if (pair.is_array() && pair.size() == 2 && pair[0].is_number_integer() && pair[1].is_number_integer()) {
+      flows.push_back({.tag = tag, .upBytes = pair[0].get<std::int64_t>(), .downBytes = pair[1].get<std::int64_t>()});
+    }
+  }
+  return flows;
 }
 
 std::vector<DelayResult> GoCore::Delays() {

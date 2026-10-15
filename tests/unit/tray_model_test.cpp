@@ -175,6 +175,30 @@ void TestMatchingOrUnknownConfigLeftAlone() {
   CHECK(off.OnPoll(RunningWith("old"), t0) == Action::None);  // off: not ours to manage
 }
 
+void TestFlowStreams() {
+  using sovereign::tray::FlowWay;
+  using sovereign::tray::FlowWayOf;
+  CHECK(FlowWayOf("direct") == FlowWay::Direct && FlowWayOf("direct 2") == FlowWay::Direct);
+  CHECK(FlowWayOf("warp") == FlowWay::Warp && FlowWayOf("warp 3") == FlowWay::Warp);
+  CHECK(FlowWayOf("warp-via") == FlowWay::Vpn && FlowWayOf("directly") == FlowWay::Vpn);
+  CHECK(FlowWayOf("proxy") == FlowWay::Vpn && FlowWayOf("direct x") == FlowWay::Vpn);
+  CHECK(FlowWayOf("") == FlowWay::None);
+
+  // A rate a stream, from two polls of the same box; a total that dropped is nothing.
+  TrayModel m(true);
+  Stats first = Running(0, 0);
+  first.flows = {{"proxy", 1000}, {"direct", 500}, {"warp", 900}};
+  Stats second = Running(0, 0);
+  second.flows = {{"proxy", 3000}, {"direct 2", 100}, {"direct", 1500}, {"warp", 100}};
+  m.OnPoll(first, t0);
+  m.OnPoll(second, t0 + 2s);
+  CHECK(m.FlowRate(FlowWay::Vpn) == 1000);
+  CHECK(m.FlowRate(FlowWay::Direct) == 550);  // (1500 - 500 + 100) / 2
+  CHECK(m.FlowRate(FlowWay::Warp) == 0);
+  m.OnPoll(std::nullopt, t0 + 3s);
+  CHECK(m.FlowRate(FlowWay::Vpn) == 0);
+}
+
 void TestStartsOffAndStaysOff() {
   TrayModel m(false);
   CHECK(m.OnPoll(kStopped, t0) == Action::None);
@@ -194,6 +218,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestOffWhileServiceDownDoesNothing();
     TestAlreadyStartedElsewhereCountsAsOn();
     TestStartsOffAndStaysOff();
+    TestFlowStreams();
     TestRestartsOnConfigMismatchOnce();
     TestMatchingOrUnknownConfigLeftAlone();
   } catch (const std::exception& e) {

@@ -24,6 +24,7 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -319,6 +320,138 @@ struct LogState {
   std::array<bool, kLevelGroups> levels{true, true, true, true};
   std::wstring detail;  // the caret's line in full: the list cuts long ones
 };
+
+// The live traffic round the main screen's switch (UiContent::flow*): dots
+// along paths - up through the cube for the VPN (WARP's in its own colour),
+// round its side for what goes directly - as many and as fast as the rates
+// say; a blocked ad flies at the cube and breaks on it in red sparks. Moved
+// by a timer while the overview shows (kLiveTimer), never with Windows'
+// animations off.
+enum class Stream : std::uint8_t { Vpn, Warp, Direct, Blocked, Spark };
+
+struct Particle {
+  Stream stream = Stream::Vpn;
+  float t = 0;         // 0..1 along its path; a spark: its age, seconds
+  float speed = 0;     // t a second
+  float offset = 0;    // -1..1 across its path
+  float size = 2;      // DIPs
+  D2D1_POINT_2F at{};  // a spark: where it broke off
+  D2D1_POINT_2F v{};   // a spark: DIPs a second
+};
+
+struct LiveTraffic {
+  std::vector<Particle> particles;
+  std::array<float, 3> owed{};  // dots due a stream (Vpn, Warp, Direct), the fraction kept
+  std::uint64_t blockedSeen = 0;
+  bool blockedKnown = false;
+  std::uint32_t seed = 0x2545F491u;
+
+  float Random() {  // 0..1
+    seed = seed * 1664525u + 1013904223u;
+    return static_cast<float>(seed >> 8) / 16777216.0f;
+  }
+};
+
+constexpr std::size_t kMaxParticles = 240;
+constexpr float kSparkLife = 0.6f;
+constexpr UINT_PTR kLiveTimer = 4;
+constexpr UINT kLiveFrameMs = 33;
+
+// Dots a second for `rate` bytes a second: a few for a trickle, about forty
+// for megabytes; none for nothing.
+float DotsPerSecond(double rate) {
+  return rate < 64 ? 0.0f : std::min(40.0f, 3 + 6 * std::log2(1 + static_cast<float>(rate) / 16384));
+}
+
+// How fast: a trip of a little over two seconds, quicker as the rate grows.
+float DotSpeed(double rate) {
+  return 0.42f + 0.3f * std::min(1.0f, std::log2(1 + static_cast<float>(rate) / 65536) / 5);
+}
+
+// Where a dot is, round the switch's square `cube`: from under it up to over it.
+D2D1_POINT_2F DotAt(const Particle& p, D2D1_RECT_F cube) {
+  const float s = cube.right - cube.left;
+  const D2D1_POINT_2F c{(cube.left + cube.right) / 2, (cube.top + cube.bottom) / 2};
+  const float bottom = c.y + s * 1.1f;
+  const float top = c.y - s * 1.1f;
+  switch (p.stream) {
+    case Stream::Vpn:
+    case Stream::Warp: {
+      // Up through the cube, drawn in to its middle on the way.
+      const float squeeze = 1 - 0.75f * std::sin(std::numbers::pi_v<float> * std::clamp(p.t, 0.0f, 1.0f));
+      const float lane = p.stream == Stream::Warp ? s * 0.07f : 0.0f;
+      return {c.x + lane + p.offset * s * 0.22f * squeeze, bottom + (top - bottom) * p.t};
+    }
+    case Stream::Direct: {
+      // Up round the cube's side - its own lane past the glass.
+      const float side = p.offset < 0 ? -1.0f : 1.0f;
+      const D2D1_POINT_2F a{c.x + p.offset * s * 0.18f, bottom};
+      const D2D1_POINT_2F m{c.x + side * s * 1.05f, c.y};
+      const D2D1_POINT_2F b{c.x + p.offset * s * 0.18f, top};
+      const float u = 1 - p.t;
+      return {u * u * a.x + 2 * u * p.t * m.x + p.t * p.t * b.x, u * u * a.y + 2 * u * p.t * m.y + p.t * p.t * b.y};
+    }
+    case Stream::Blocked:
+      // Up at the cube, as far as its lower face.
+      return {c.x + p.offset * s * 0.2f, bottom + (c.y + s * 0.22f - bottom) * p.t};
+    case Stream::Spark:
+      return {p.at.x + p.v.x * p.t, p.at.y + p.v.y * p.t + 90 * p.t * p.t};
+  }
+  return c;
+}
+
+// One step of `dt` seconds round `cube`: the dots move, new ones come by the
+// rates (none unless `on`), a blocked ad that reached the cube breaks up.
+void StepLive(LiveTraffic& live, const UiContent& c, bool on, float dt, D2D1_RECT_F cube) {
+  std::vector<Particle> sparks;
+  for (Particle& p : live.particles) {
+    if (p.stream == Stream::Spark) {
+      p.t += dt;
+      continue;
+    }
+    p.t += p.speed * dt;
+    if (p.stream == Stream::Blocked && p.t >= 1) {
+      Particle hit = p;
+      hit.t = 1;
+      const D2D1_POINT_2F at = DotAt(hit, cube);
+      for (int i = 0; i < 6 && live.particles.size() + sparks.size() < kMaxParticles; ++i) {
+        // Down and out, as from a blow from below.
+        const float angle = std::numbers::pi_v<float> * (0.1f + 0.8f * live.Random());
+        const float speed = 50 + 80 * live.Random();
+        sparks.push_back({.stream = Stream::Spark, .t = 0, .speed = 0, .offset = 0, .size = 1.2f + live.Random(),
+                          .at = at, .v = {std::cos(angle) * speed, std::sin(angle) * speed * 0.6f - 40}});
+      }
+    }
+  }
+  std::erase_if(live.particles,
+                [](const Particle& p) { return p.stream == Stream::Spark ? p.t >= kSparkLife : p.t >= 1; });
+  live.particles.insert(live.particles.end(), sparks.begin(), sparks.end());
+
+  const auto spawn = [&](Stream stream, double rate) {
+    if (live.particles.size() < kMaxParticles) {
+      live.particles.push_back({.stream = stream, .t = 0, .speed = DotSpeed(rate) * (0.85f + 0.3f * live.Random()),
+                                .offset = live.Random() * 2 - 1, .size = 1.3f + 1.4f * live.Random(), .at = {}, .v = {}});
+    }
+  };
+  const std::array<std::pair<Stream, double>, 3> streams = {
+      {{Stream::Vpn, c.flowVpn}, {Stream::Warp, c.flowWarp}, {Stream::Direct, c.flowDirect}}};
+  for (std::size_t i = 0; i < streams.size(); ++i) {
+    live.owed[i] = on ? live.owed[i] + DotsPerSecond(streams[i].second) * dt : 0.0f;
+    for (; live.owed[i] >= 1; live.owed[i] -= 1) {
+      spawn(streams[i].first, streams[i].second);
+    }
+  }
+  // The ads blocked since the last step: a dot each, a few at most at once.
+  if (!live.blockedKnown || c.blockedCount < live.blockedSeen) {
+    live.blockedKnown = true;
+    live.blockedSeen = c.blockedCount;
+  }
+  for (int n = 0; on && c.blockedCount > live.blockedSeen && n < 4; ++n) {
+    spawn(Stream::Blocked, 0);
+    live.particles.back().speed = 0.9f;
+  }
+  live.blockedSeen = c.blockedCount;
+}
 
 // What a paint depends on besides the layout.
 struct Interaction {
@@ -652,7 +785,8 @@ class Painter {
   }
 
   // Draws a layout.
-  void Draw(ID2D1RenderTarget* t, const Layout& l, const UiContent& c, const Interaction& in, const LogView& log) const {
+  void Draw(ID2D1RenderTarget* t, const Layout& l, const UiContent& c, const Interaction& in, const LogView& log,
+            const LiveTraffic* live = nullptr) const {
     wil::com_ptr<ID2D1SolidColorBrush> brush;
     if (FAILED(t->CreateSolidColorBrush(Rgb(0, 0, 0), brush.put()))) {
       return;
@@ -662,6 +796,9 @@ class Painter {
     t->Clear(FromColorRef(ui::kWindowColor));
     if (l.glow) {
       DrawBackdrop(t, size, *l.glow, c.display == Display::On);
+      if (live != nullptr) {
+        DrawLive(k, *live, *l.glow);  // under everything else: behind the glass, under the cards
+      }
     }
 
     bool clipped = false;
@@ -2749,6 +2886,49 @@ class Painter {
     k.Text(it.text, body_.get(), textBox, ink);
   }
 
+  // The live traffic's dots round the switch's square `cube`: each with a
+  // soft halo and a short trail behind it, fading in and out along its path;
+  // sparks fade as they fly.
+  void DrawLive(const Canvas& k, const LiveTraffic& live, D2D1_RECT_F cube) const {
+    for (const Particle& p : live.particles) {
+      D2D1_COLOR_F color = FromColorRef(ui::kAccent);
+      float alpha = std::sin(std::numbers::pi_v<float> * std::clamp(p.t, 0.0f, 1.0f));
+      switch (p.stream) {
+        case Stream::Vpn: break;
+        case Stream::Warp: color = Rgb(244, 129, 32); break;  // Cloudflare's orange
+        case Stream::Direct: color = Rgb(160, 168, 184); alpha *= 0.7f; break;
+        case Stream::Blocked:
+          color = FromColorRef(ui::kDanger);
+          alpha = std::min(1.0f, p.t * 4);
+          break;
+        case Stream::Spark:
+          color = FromColorRef(ui::kDanger);
+          alpha = 1 - p.t / kSparkLife;
+          break;
+      }
+      if (alpha <= 0.01f) {
+        continue;
+      }
+      const D2D1_POINT_2F at = DotAt(p, cube);
+      // The trail: where it was a moment ago, fainter.
+      if (p.stream != Stream::Spark) {
+        for (int i = 1; i <= 3; ++i) {
+          Particle back = p;
+          back.t -= 0.018f * static_cast<float>(i);
+          if (back.t > 0) {
+            const D2D1_POINT_2F was = DotAt(back, cube);
+            color.a = alpha * 0.45f / static_cast<float>(i);
+            k.t->FillEllipse(D2D1::Ellipse(was, p.size * 0.8f, p.size * 0.8f), k.Color(color));
+          }
+        }
+      }
+      color.a = alpha * 0.16f;
+      k.t->FillEllipse(D2D1::Ellipse(at, p.size * 2.8f, p.size * 2.8f), k.Color(color));
+      color.a = alpha * 0.95f;
+      k.t->FillEllipse(D2D1::Ellipse(at, p.size, p.size), k.Color(color));
+    }
+  }
+
   // The main screen's backdrop: the dark, and a light from behind the switch
   // (`at`, its rect) - the accent's while connected, a faint grey otherwise.
   // A stage for the live traffic to come.
@@ -2947,6 +3127,37 @@ struct MainWindow::Impl {
     if (hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && CubeMoving(GetTickCount64())) {
       SetTimer(hwnd, kCubeTimer, kCubeFrameMs, nullptr);
     }
+  }
+
+  // The live traffic (LiveTraffic): its timer runs while the overview shows
+  // and there's traffic to draw or dots still on their way; it stops itself.
+  LiveTraffic live;
+  ULONGLONG liveAt = 0;  // the last step; 0: the timer isn't running
+
+  void KickLive() {
+    if (liveAt == 0 && hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && page == UiPage::Overview && Motion() &&
+        (content.display == Display::On || !live.particles.empty())) {
+      liveAt = GetTickCount64();
+      SetTimer(hwnd, kLiveTimer, kLiveFrameMs, nullptr);
+    }
+  }
+
+  void StepLiveTraffic() {
+    const ULONGLONG now = GetTickCount64();
+    const float dt = std::min(0.1f, static_cast<float>(now - liveAt) / 1000.0f);
+    liveAt = now;
+    const bool on = content.display == Display::On;
+    if (!layout.glow || page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE || !Motion() ||
+        (!on && live.particles.empty())) {
+      KillTimer(hwnd, kLiveTimer);
+      liveAt = 0;
+      if (page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE) {
+        live.particles.clear();  // shown again, it starts afresh
+      }
+      return;
+    }
+    StepLive(live, content, on, dt, *layout.glow);
+    InvalidateRect(hwnd, nullptr, FALSE);
   }
 
   Impl(HINSTANCE inst, CommandHandler handler) : instance(inst), onCommand(std::move(handler)) {
@@ -3407,6 +3618,7 @@ struct MainWindow::Impl {
       in.pressed = -1;
     }
     Relayout();
+    KickLive();
   }
 
   void Activate(const Item& item) {
@@ -3826,6 +4038,10 @@ struct MainWindow::Impl {
           InvalidateRect(w, nullptr, FALSE);
           return 0;
         }
+        if (wParam == kLiveTimer) {
+          StepLiveTraffic();
+          return 0;
+        }
         if (wParam == kPanTimer) {
           if (log.pan) {
             PanStep();
@@ -4063,7 +4279,7 @@ struct MainWindow::Impl {
     }
     in.cube = cubeKnown ? std::optional(CubeAt(GetTickCount64())) : std::nullopt;
     target->BeginDraw();
-    painter.Draw(target.get(), layout, content, in, log);
+    painter.Draw(target.get(), layout, content, in, log, &live);
     if (target->EndDraw() == D2DERR_RECREATE_TARGET) {
       target.reset();
       painter.ForgetIcons();
@@ -4107,6 +4323,7 @@ void MainWindow::Show(UiPage page) {
   ShowWindow(m.hwnd, IsIconic(m.hwnd) ? SW_RESTORE : SW_SHOW);
   SetForegroundWindow(m.hwnd);
   m.KickCube();  // turning while it connects: the timer stopped while hidden
+  m.KickLive();
 }
 
 void MainWindow::Hide() { ShowWindow(impl_->hwnd, SW_HIDE); }
@@ -4130,6 +4347,7 @@ void MainWindow::Update(const UiContent& content) {
   impl_->content = content;
   if (IsVisible()) {
     impl_->Relayout();
+    impl_->KickLive();
   }
 }
 
@@ -4184,8 +4402,17 @@ void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::
   const std::string profile = content.profiles.empty() ? std::string() : content.profiles.front().id;
   const Layout layout = painter.Build(content, page, profile, static_cast<float>(width) * scale,
                                       static_cast<float>(height) * scale, scroll, state);
+  // The live traffic as it would be a few seconds in, an ad broken on the cube among it.
+  LiveTraffic live;
+  if (layout.glow) {
+    for (int i = 0; i < 100; ++i) {
+      UiContent now = content;
+      now.blockedCount = i < 60 ? 0 : content.blockedCount;
+      StepLive(live, now, content.display == Display::On, 1.0f / 30, *layout.glow);
+    }
+  }
   target->BeginDraw();
-  painter.Draw(target.get(), layout, content, Interaction{}, log);
+  painter.Draw(target.get(), layout, content, Interaction{}, log, &live);
   THROW_IF_FAILED(target->EndDraw());
 
   wil::com_ptr<IWICStream> stream;

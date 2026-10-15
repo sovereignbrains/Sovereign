@@ -254,6 +254,14 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   if (cmd == "box_stats") {
     const std::scoped_lock lock(stateMutex_);
     Json response = StatsResponse(core_->Stats());
+    // Where it went, by the outbound a rule picked: the window's live streams.
+    if (response.value("running", false)) {
+      Json flows = Json::object();
+      for (const FlowTotal& flow : core_->Flows()) {
+        flows[flow.tag] = Json::array({flow.upBytes, flow.downBytes});
+      }
+      response["flows"] = std::move(flows);
+    }
     // Which config the box runs, without the config itself (it holds keys):
     // the tray compares it with its own config.json and restarts the box on a
     // mismatch - e.g. config.json changed while the tray wasn't running.

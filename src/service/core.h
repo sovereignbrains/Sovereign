@@ -38,6 +38,16 @@ struct CoreStats {
   std::int64_t generation = 0;
 };
 
+// Bytes up and down that went out through `tag`, the outbound a rule picked
+// ("direct", the WARP endpoint, a proxy selector) - totals of one Start(),
+// the consumer takes rates from differences (a total may drop: the oldest
+// closed connections fall out of the engine's count).
+struct FlowTotal {
+  std::string tag;
+  std::int64_t upBytes = 0;
+  std::int64_t downBytes = 0;
+};
+
 // A latency test of outbounds through each of `tags` (the config's outbound
 // tags): a connection, then requests to `url` over it until the round trips
 // settle; each request abandoned after `timeout`.
@@ -103,6 +113,10 @@ class ICore {
   virtual std::string Stop() = 0;
 
   virtual CoreStats Stats() = 0;
+
+  // The traffic by where it went (FlowTotal), for the tray's live streams;
+  // empty while nothing runs, or from an engine that can't tell.
+  virtual std::vector<FlowTotal> Flows() { return {}; }
 
   // Starts a latency test in the background and returns at once: empty
   // string once it runs, otherwise why not (e.g. the engine isn't running).

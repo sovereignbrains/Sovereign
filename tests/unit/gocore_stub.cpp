@@ -134,6 +134,11 @@ __declspec(dllexport) char* __cdecl box_delays() {
                   R"({"tag":"de","pending":true},{"delay":5},"junk"]})");
 }
 
+// A fixed answer: two good flows and ones of the wrong shapes.
+__declspec(dllexport) char* __cdecl box_flows() {
+  return Allocate(R"({"flows":{"proxy":[10,200],"direct":[1,5],"bad":[1],"worse":"x","neg":[1.5,2]}})");
+}
+
 // Knows one selector with one option.
 __declspec(dllexport) char* __cdecl box_select(const char* selector, const char* outbound) {
   if (std::string(selector) != "proxy") {

@@ -252,6 +252,11 @@ struct View {
   Display display = Display::Starting;
   bool wantOn = false;
   std::int64_t onSince = 0;  // unix seconds connected since; 0: not connected
+  // Bytes per second by stream (tray_model.h FlowWay): the window's live traffic.
+  double flowVpn = 0;
+  double flowDirect = 0;
+  double flowWarp = 0;
+  std::uint64_t blockedCount = 0;  // ads blocked since the tray started: a spark each new one
   double down = 0;
   double up = 0;
   std::int64_t connections = 0;
@@ -602,6 +607,15 @@ std::optional<sovereign::tray::Stats> PollStats() {
       }
     }
   }
+  // "flows": {"<tag>": [up, down]} - up and down together, a stream's.
+  std::map<std::string, std::int64_t> flows;
+  if (const auto it = json.find("flows"); it != json.end() && it->is_object()) {
+    for (const auto& [tag, pair] : it->items()) {
+      if (pair.is_array() && pair.size() == 2 && pair[0].is_number_integer() && pair[1].is_number_integer()) {
+        flows[tag] = pair[0].get<std::int64_t>() + pair[1].get<std::int64_t>();
+      }
+    }
+  }
   return sovereign::tray::Stats{
       .running = sovereign::tray::Field<bool>(json, "running", false),
       .uplinkBytes = sovereign::tray::Field<std::int64_t>(json, "uplink", 0),
@@ -613,6 +627,7 @@ std::optional<sovereign::tray::Stats> PollStats() {
       .killSwitchLan = sovereign::tray::Field<bool>(json, "kill_switch_lan", true),
       .lanClosed = sovereign::tray::Field<bool>(json, "lan_closed", false),
       .lanAllowed = std::move(lanAllowed),
+      .flows = std::move(flows),
   };
 }
 
@@ -2309,6 +2324,7 @@ class Worker {
     if (name.empty()) {
       return;
     }
+    ++blockedCount_;
     std::erase(blocked_, name);
     blocked_.push_front(std::move(name));
     if (blocked_.size() > kBlockedKeep) {
@@ -2512,6 +2528,10 @@ class Worker {
       v.wantOn = model_.WantOn();
       v.down = model_.DownRate();
       v.up = model_.UpRate();
+      v.flowVpn = model_.FlowRate(sovereign::tray::FlowWay::Vpn);
+      v.flowDirect = model_.FlowRate(sovereign::tray::FlowWay::Direct);
+      v.flowWarp = model_.FlowRate(sovereign::tray::FlowWay::Warp);
+      v.blockedCount = blockedCount_;
       v.connections = model_.Connections();
       v.error = model_.LastError();
       v.hasConfig = combined_.has_value();
@@ -2715,6 +2735,7 @@ class Worker {
   std::optional<TrayModel::Clock::time_point> lockedSince_;  // UpdateLockout's
   bool lockoutNoticed_ = false;
   std::int64_t onSince_ = 0;  // unix seconds the box was first seen on, this time; 0: it isn't
+  std::uint64_t blockedCount_ = 0;  // ads blocked (WatchBlocked) since the tray started
   std::map<std::string, int> paidNoticed_;  // per configuration: 1 - "in a few days" said, 2 - "today" said
   std::string lockoutReason_;
   std::string directTag_;               // the config's way around the proxy, measured with the servers
@@ -3934,6 +3955,10 @@ UiContent ContentFrom(const View& v) {
   c.onSince = v.onSince;
   c.down = v.down;
   c.up = v.up;
+  c.flowVpn = v.flowVpn;
+  c.flowDirect = v.flowDirect;
+  c.flowWarp = v.flowWarp;
+  c.blockedCount = v.blockedCount;
   c.error = v.display == Display::Error ? Widen(v.error) : std::wstring();
   c.hasConfig = v.hasConfig;
   c.combineError = Widen(v.combineError);

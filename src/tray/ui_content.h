@@ -175,6 +175,13 @@ struct UiContent {
   std::int64_t onSince = 0;      // unix seconds it's been connected since; 0: not connected
   double down = 0;               // bytes per second, now
   double up = 0;
+  // The live traffic round the switch: bytes per second through the VPN,
+  // directly, through WARP (up and down together), and the ads blocked so far
+  // (a spark a new one).
+  double flowVpn = 0;
+  double flowDirect = 0;
+  double flowWarp = 0;
+  std::uint64_t blockedCount = 0;
   std::wstring error;            // why the box doesn't run; empty if it does or is off
   // A subscription in trouble (support_report.h SubscriptionTrouble), said on
   // the main screen with its report a click away: "«name»: не отвечает ни один

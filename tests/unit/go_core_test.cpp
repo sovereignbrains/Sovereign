@@ -138,6 +138,22 @@ void TestBridge(const std::wstring& stubPath) {
     CHECK(delays.size() == 3 && delays[2].tag == "de" && delays[2].state == State::Pending);
     CHECK(stub.outstanding() == 0);
 
+    // The traffic by outbound: the good pairs kept, the rest skipped.
+    const auto flows = core->Flows();
+    CHECK(flows.size() == 2);
+    // "up/down" of a tag, "" if it isn't there.
+    const auto flow = [&](const char* tag) {
+      for (const auto& f : flows) {
+        if (f.tag == tag) {
+          return std::to_string(f.upBytes) + "/" + std::to_string(f.downBytes);
+        }
+      }
+      return std::string();
+    };
+    CHECK(flow("proxy") == "10/200");
+    CHECK(flow("direct") == "1/5");
+    CHECK(stub.outstanding() == 0);
+
     CHECK(core->Select("proxy", "nl").empty());
     CHECK(core->Select("proxy", "xx") == "no such option in the selector");
     CHECK(core->Select("other", "nl") == "no such selector");

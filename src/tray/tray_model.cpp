@@ -4,6 +4,25 @@
 
 namespace sovereign::tray {
 
+FlowWay FlowWayOf(std::string_view tag) {
+  const auto numbered = [&](std::string_view name) {
+    // The tag itself, or it numbered apart from a server of the same name: "direct 2".
+    return tag == name || (tag.starts_with(name) && tag.size() > name.size() + 1 && tag[name.size()] == ' ' &&
+                           std::all_of(tag.begin() + static_cast<std::ptrdiff_t>(name.size()) + 1, tag.end(),
+                                       [](char c) { return c >= '0' && c <= '9'; }));
+  };
+  if (tag.empty()) {
+    return FlowWay::None;
+  }
+  if (numbered("direct")) {
+    return FlowWay::Direct;
+  }
+  if (numbered("warp")) {
+    return FlowWay::Warp;
+  }
+  return FlowWay::Vpn;
+}
+
 Action TrayModel::SetWantOn(bool on, Clock::time_point now) {
   wantOn_ = on;
   retryAt_.reset();
@@ -25,6 +44,7 @@ Action TrayModel::OnPoll(const std::optional<Stats>& stats, Clock::time_point no
     last_.reset();
     lastAt_.reset();
     downRate_ = upRate_ = 0;
+    flowRates_.fill(0);
     return Action::None;
   }
   serviceUp_ = true;
@@ -38,9 +58,19 @@ Action TrayModel::OnPoll(const std::optional<Stats>& stats, Clock::time_point no
     if (seconds > 0) {
       downRate_ = std::max(0.0, static_cast<double>(stats->downlinkBytes - last_->downlinkBytes) / seconds);
       upRate_ = std::max(0.0, static_cast<double>(stats->uplinkBytes - last_->uplinkBytes) / seconds);
+      // By stream: a total that dropped (the oldest closed connections fall
+      // out of the engine's count) is nothing, not a negative.
+      flowRates_.fill(0);
+      for (const auto& [tag, total] : stats->flows) {
+        const auto was = last_->flows.find(tag);
+        const std::int64_t before = was != last_->flows.end() ? was->second : 0;
+        flowRates_[static_cast<std::size_t>(FlowWayOf(tag))] +=
+            std::max(0.0, static_cast<double>(total - before) / seconds);
+      }
     }
   } else {
     downRate_ = upRate_ = 0;
+    flowRates_.fill(0);
   }
   last_ = stats;
   lastAt_ = now;
@@ -76,6 +106,7 @@ void TrayModel::OnStopResult(const std::string& error) {
     last_->running = false;
   }
   downRate_ = upRate_ = 0;
+  flowRates_.fill(0);
 }
 
 Display TrayModel::GetDisplay() const {

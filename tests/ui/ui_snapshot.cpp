@@ -66,6 +66,13 @@ UiContent SampleContent() {
   UiContent c;
   c.display = sovereign::tray::Display::On;
   c.on = true;
+  // The live traffic round the switch: a film playing through the VPN, a
+  // little directly and through WARP, two ads blocked.
+  c.down = 420000;
+  c.flowVpn = 450000;
+  c.flowDirect = 30000;
+  c.flowWarp = 60000;
+  c.blockedCount = 2;
   c.hasConfig = true;
   c.lanClosed = true;
   c.lanHosts = {

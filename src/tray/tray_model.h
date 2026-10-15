@@ -1,9 +1,13 @@
 #pragma once
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -30,7 +34,17 @@ struct Stats {
   bool killSwitchLan = true;   // and let the local network through
   bool lanClosed = false;      // the local network's filters are in place
   std::vector<std::string> lanAllowed;  // with these addresses let in
+  // Bytes up and down together by the outbound a rule picked ("flows": the
+  // window's live streams); totals of the box's generation.
+  std::map<std::string, std::int64_t> flows;
 };
+
+// Which of the window's streams an outbound a rule picked is: the config's
+// direct ("direct", "direct 2"), WARP's endpoint ("warp", "warp 2" - not
+// "warp-via", WARP's own way out), anything else through the VPN; None for
+// no outbound.
+enum class FlowWay : std::uint8_t { None, Vpn, Direct, Warp };
+FlowWay FlowWayOf(std::string_view tag);
 
 enum class Action : std::uint8_t { None, Start, Stop };
 
@@ -82,6 +96,8 @@ class TrayModel {
   // zero until there are two.
   double DownRate() const { return downRate_; }
   double UpRate() const { return upRate_; }
+  // The same by stream (FlowWayOf), up and down together.
+  double FlowRate(FlowWay way) const { return flowRates_[static_cast<std::size_t>(way)]; }
   std::int64_t Connections() const { return last_ ? last_->connections : 0; }
   // The last start/stop failure, cleared by the next success.
   const std::string& LastError() const { return lastError_; }
@@ -99,6 +115,7 @@ class TrayModel {
   std::optional<Clock::time_point> lastAt_;
   double downRate_ = 0;
   double upRate_ = 0;
+  std::array<double, 4> flowRates_{};  // by FlowWay
   std::string lastError_;
   std::string expectedConfig_;
   std::string restartedFor_;  // the expected config a mismatch restart was made for
