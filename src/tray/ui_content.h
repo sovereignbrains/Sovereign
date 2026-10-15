@@ -116,7 +116,8 @@ struct UiChip {
   // In the bucket everything else goes to, changing nothing - a program there
   // (its rule is the last before that very default), a service there (not
   // through a country of its own), the Russian sites when everything else is
-  // direct: kept for the other mode, not shown.
+  // direct and no program goes through VPN or WARP: kept for the other mode,
+  // not shown.
   bool idle = false;
   // Service: the rule of its own program in the same bucket (Telegram.exe by
   // Telegram), folded into it - one thing on the board, its menu moves and

@@ -3401,6 +3401,31 @@ bool SameName(const std::string& a, const std::string& b) {
   return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
+// The local network's chip, closed: said so, and who's let in anyway - the one
+// by its name (the router as such, else its address), more by their count;
+// "кроме 1" said little.
+std::wstring LanDetail(const View& v) {
+  if (!v.lanClosed) {
+    return {};
+  }
+  const std::size_t n = v.lanAllowed.size();
+  if (n == 0) {
+    return L"закрыта";
+  }
+  if (n > 1) {
+    return std::format(L"кроме {} {}", n, n % 10 == 1 && n % 100 != 11 ? L"устройства" : L"устройств");
+  }
+  const sovereign::tray::LanHost& host = v.lanAllowed.front();
+  const bool router = std::any_of(v.lanDevices.begin(), v.lanDevices.end(), [&](const sovereign::tray::LanDevice& d) {
+    return d.router && d.address == host.address;
+  });
+  std::wstring who = !host.name.empty() ? Widen(host.name) : router ? L"роутер" : Widen(host.address);
+  if (who.size() > 24) {
+    who = who.substr(0, 23) + L"…";
+  }
+  return L"кроме: " + who;
+}
+
 // The routing board's things (ui_content.h UiChip): the two lists, the
 // services, then the sites and programs, last everything else - each in the
 // bucket it goes to.
@@ -3413,7 +3438,7 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   std::vector<UiChip> board = {
       {.kind = UiChip::Kind::Lan, .index = 0,
        .bucket = v.lanClosed ? sovereign::tray::kBucketBlock : sovereign::tray::kBucketDirect, .text = L"Локальная сеть",
-       .detail = v.lanClosed && !v.lanAllowed.empty() ? std::format(L"кроме {}", v.lanAllowed.size()) : std::wstring(),
+       .detail = LanDetail(v),
        .icon = {}, .logo = "lan"}};
   if (r.russiaDirect) {
     board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
@@ -3498,7 +3523,13 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
       continue;
     }
     if (chip.kind == UiChip::Kind::Russia) {
-      chip.idle = true;  // everything else is direct: so are these, nothing to say
+      // Everything else is direct: so are these, nothing to say - but for a
+      // program sent through VPN or WARP (a browser): its Russian sites still
+      // go directly (routing.cpp: Russia before the programs), so it's shown.
+      chip.idle = std::none_of(r.rules.begin(), r.rules.end(), [](const sovereign::tray::RouteRule& rule) {
+        using Action = sovereign::tray::RouteRule::Action;
+        return !rule.processes.empty() && (rule.action == Action::Proxy || rule.action == Action::Warp);
+      });
     } else if (chip.kind == UiChip::Kind::Service) {
       // Through a country is an exception still; otherwise it goes where it would anyway.
       chip.idle = r.services[static_cast<std::size_t>(chip.index)].way != ServiceRoute::Way::Country;
