@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -96,6 +97,16 @@ std::string SubscriptionTrouble(std::size_t servers, std::size_t measured, std::
 std::string BytesText(std::uint64_t bytes);
 std::string DateText(std::int64_t unix, int utcOffsetMinutes);
 std::int64_t DaysLeft(std::int64_t expire, std::int64_t now);
+
+// The date a user's own server is paid till, as typed: "15.11", "15.11.2026",
+// "15.11.26" (or with / and -) - that day's noon in the user's zone, unix
+// seconds; without a year the next such day from `now`. nullopt if it isn't
+// a date.
+std::optional<std::int64_t> PaidDate(std::string_view text, std::int64_t now, int utcOffsetMinutes);
+
+// Paid for one more month: the same day a month on (its last day if the
+// month is shorter - 31.01 to 28.02), noon in the user's zone.
+std::int64_t NextMonth(std::int64_t paid, int utcOffsetMinutes);
 
 // The subscription card's line from what the panel said: "Трафик: 3 ГБ из
 // 100,0 ГБ · оплачено до 01.01.2027" ("истекло" once past); empty if it said

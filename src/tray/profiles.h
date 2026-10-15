@@ -39,6 +39,9 @@ struct Profile {
   std::uint64_t trafficUsed = 0;   // upload + download, bytes
   std::uint64_t trafficTotal = 0;  // 0: no limit, or not sent
   std::int64_t expire = 0;         // unix seconds; 0: no end, or not sent
+  // What the user says they paid their own server till (support_report.h
+  // PaidDate) - for a panel that doesn't say (expire). Unix seconds; 0: not said.
+  std::int64_t paidTill = 0;
 };
 
 // What a subscription server is told the device is (x-hwid, which panels

@@ -1321,9 +1321,8 @@ class Painter {
   // What it connects with, over the switch: the subscription (the first one
   // on; else the first configuration on). A card that is a link to the
   // configurations, read top-down: what it is and how fresh, its name - the
-  // refresh button level with them on the right - then the panel's numbers
-  // side by side: the traffic with a bar of it, the paid period with the
-  // days left. Nothing before there's one.
+  // refresh button level with them on the right - then till when it's paid,
+  // the days left. Nothing before there's one.
   float SubscriptionCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const auto on = [](const UiProfile& p) { return p.enabled; };
     auto shown = std::find_if(c.profiles.begin(), c.profiles.end(),
@@ -1336,9 +1335,11 @@ class Painter {
     }
     const UiProfile& p = *shown;
     const auto others = std::count_if(c.profiles.begin(), c.profiles.end(), on) - 1;
-    const bool numbers = !p.trafficUsed.empty() || !p.paidTill.empty();
-    const bool unsaid = !numbers && p.subscription;
-    const float h = numbers ? 136.0f : unsaid ? 84.0f : 66.0f;
+    // Under its name: till when it's paid - the panel's word, or the user's
+    // for their own server (a click: paid again, another date) - and the
+    // traffic only when it's running out.
+    const bool trafficLow = p.trafficShare >= 0.8f;
+    const float h = 66 + 22 + (trafficLow ? 20.0f : 0.0f) + 6;
     constexpr float kInset = 16;
     const float left = x0 + kInset;
     const float right = x1 - kInset;
@@ -1376,33 +1377,33 @@ class Painter {
     l.items.push_back(Make(Kind::Heading, {left, y + 30, textRight, y + 56},
                            others > 0 ? std::format(L"{}  +{}", p.name, others) : p.name));
 
-    if (unsaid) {
-      l.items.push_back(Make(Kind::Muted, {left, y + 58, right, y + 76}, L"Провайдер не сообщает трафик и срок"));
+    const int index = static_cast<int>(shown - c.profiles.begin());
+    float top = y + 60;
+    if (p.paidTill.empty()) {
+      // Not said by its panel, not by the user yet: a click to say it.
+      const std::wstring ask = L"Указать, до какого числа оплачено ›";
+      const float w = std::min(TextWidth(ask, caption_.get()) + 4, right - left);
+      l.items.push_back(CommandItem(Kind::Muted, {left, top, left + w, top + 20}, ask, nullptr, UiCommand::PaidMenu, index));
+    } else {
+      std::wstring paid = (p.paidByHand ? L"Сервер оплачен до " : L"Оплачено до ") + p.paidTill.substr(0, 5) + L" · " +
+                          (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : std::format(L"ещё {} дн.", p.daysLeft));
+      if (p.paidByHand) {
+        paid += L" ›";
+        const float w = std::min(TextWidth(paid, caption_.get()) + 4, right - left);
+        Item line = CommandItem(Kind::Muted, {left, top, left + w, top + 20}, paid, nullptr, UiCommand::PaidMenu, index);
+        line.warn = p.daysLeft <= 3;
+        l.items.push_back(std::move(line));
+      } else {
+        Item line = Make(Kind::Muted, {left, top, right, top + 20}, paid);
+        line.warn = p.daysLeft <= 3;
+        l.items.push_back(std::move(line));
+      }
     }
-    if (!numbers) {
-      return y + h + kGap;
-    }
-    // The panel's numbers, two columns under a rule.
-    l.items.push_back(Make(Kind::Divider, {left, y + 66, right, y + 67}));
-    const float mid = (x0 + x1) / 2;
-    const float top = y + 76;
-    l.items.push_back(Make(Kind::Muted, {left, top, mid - 8, top + 18}, L"Трафик"));
-    l.items.push_back(Make(Kind::Text, {left, top + 18, mid - 8, top + 40},
-                           p.trafficUsed.empty()    ? std::wstring(L"—")
-                           : p.trafficTotal.empty() ? p.trafficUsed + L" · без лимита"
-                                                    : p.trafficUsed + L" из " + p.trafficTotal));
-    if (p.trafficShare >= 0) {
-      Item meter = Make(Kind::Meter, {left, top + 46, mid - 8, top + 49});
-      meter.index = static_cast<int>(p.trafficShare * 1000);
-      l.items.push_back(std::move(meter));
-    }
-    l.items.push_back(Make(Kind::Muted, {mid + 8, top, right, top + 18}, L"Оплачено до"));
-    l.items.push_back(Make(Kind::Text, {mid + 8, top + 18, right, top + 40}, p.paidTill.empty() ? L"—" : p.paidTill));
-    if (p.daysLeft >= 0) {
-      Item days = Make(Kind::Muted, {mid + 8, top + 40, right, top + 56},
-                       p.daysLeft == 0 ? std::wstring(L"истекло") : std::format(L"ещё {} дн.", p.daysLeft));
-      days.warn = p.daysLeft <= 3;
-      l.items.push_back(std::move(days));
+    top += 22;
+    if (trafficLow) {
+      Item traffic = Make(Kind::Muted, {left, top, right, top + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
+      traffic.warn = true;
+      l.items.push_back(std::move(traffic));
     }
     return y + h + kGap;
   }

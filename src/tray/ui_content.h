@@ -85,6 +85,7 @@ struct UiProfile {
   float trafficShare = -1;    // used of the total, 0..1; -1: no total
   std::wstring paidTill;      // "01.01.2027"; empty: not said
   int daysLeft = -1;          // whole days started till then, 0 once past; -1: not said
+  bool paidByHand = false;    // the user said it (their own server), not the panel: theirs to change
   std::size_t serverCount = 0;
   bool support = false;    // its panel gave a link to its support (Support-Url)
 };
@@ -307,6 +308,8 @@ enum class UiCommand : std::uint8_t {
   LanChipMenu,        // index into lanHosts (-1: everyone else); anchor: the other bucket
   LanAdd,             // anchor: who can go where everyone else isn't - a device around, an address typed
   AddLanHostText,     // text: the address
+  PaidMenu,           // index: a configuration; what the user paid its server till - typed, a month more, none
+  PaidDateText,       // index: a configuration; text: the date, "15.11" or "15.11.2026"
   EditRelayUrl,       // starts typing the relay's address over its row
   EditRelayUrlText,   // text: the address ("" clears the relay)
   EditRelayKey,       // starts typing the relay's key over its row (shown empty)

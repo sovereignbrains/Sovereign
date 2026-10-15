@@ -238,6 +238,25 @@ void TestUsageLine() {
   CHECK(UsageLine(0, 0, 0, 1791300000, 180).empty());
 }
 
+void TestPaidDate() {
+  constexpr std::int64_t kNow = 1792058400;  // 15.10.2026 13:00 in Moscow (UTC+3)
+  const auto paid = PaidDate("15.11", kNow, 180);
+  CHECK(paid.has_value());
+  if (paid) {
+    CHECK(DateText(*paid, 180) == "15.11.2026");
+    CHECK(DaysLeft(*paid, kNow) == 31);
+    CHECK(DateText(NextMonth(*paid, 180), 180) == "15.12.2026");
+  }
+  // A day past this year's: next year's.
+  CHECK(PaidDate("01.02", kNow, 180).has_value() && DateText(*PaidDate("01.02", kNow, 180), 180) == "01.02.2027");
+  CHECK(PaidDate("15/11/2026", kNow, 180) == PaidDate("15.11.26", kNow, 180));
+  CHECK(!PaidDate("31.02.2027", kNow, 180) && !PaidDate("завтра", kNow, 180) && !PaidDate("15", kNow, 180));
+  CHECK(!PaidDate("1.2.3.4", kNow, 180) && !PaidDate("", kNow, 180));
+  // The month's last day when the next is shorter.
+  const auto end = PaidDate("31.01.2027", kNow, 180);
+  CHECK(end.has_value() && DateText(NextMonth(end.value_or(0), 180), 180) == "28.02.2027");
+}
+
 // The user's network bad around the proxy too: said, so support doesn't look
 // for it on their side.
 void TestUserNetwork() {
@@ -262,6 +281,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestProblems();
     TestReport();
     TestUsageLine();
+    TestPaidDate();
     TestTrouble();
     TestUserNetwork();
   } catch (const std::exception& e) {

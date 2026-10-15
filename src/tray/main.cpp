@@ -305,6 +305,7 @@ struct View {
     std::uint64_t trafficUsed = 0;
     std::uint64_t trafficTotal = 0;
     std::int64_t expire = 0;
+    std::int64_t paidTill = 0;     // the user's own say (profiles.h)
   };
   std::vector<ProfileView> profiles;
   // A balloon to show once: the UI shows it when noticeId changes.
@@ -369,6 +370,7 @@ struct ProfileChange {
     Hours,       // hours: the refresh interval; 0 = the server's
     Server,      // text: a server's tag, on
     Via,         // text: the configuration to connect through; "" = directly
+    PaidTill,    // text: unix seconds the user paid their server till; "" = not said
   };
   std::string id;
   What what = What::Enabled;
@@ -816,6 +818,7 @@ class Worker {
         Save();
       }
       ScanLan();
+      RemindPaid();
       UpdateKillSwitch(stats);
       if (logLevel && *logLevel != settings_.logLevel) {
         settings_.logLevel = *logLevel;
@@ -1613,6 +1616,13 @@ class Worker {
           delays_.clear();  // its servers measure through another path now
         }
         break;
+      case ProfileChange::What::PaidTill: {
+        std::int64_t till = 0;
+        std::from_chars(change.text.data(), change.text.data() + change.text.size(), till);
+        profile->paidTill = std::max<std::int64_t>(0, till);
+        paidNoticed_.erase(change.id);  // a new date: its reminders anew
+        break;
+      }
     }
     Save();
   }
@@ -1779,6 +1789,33 @@ class Worker {
   // is retried now and then, not every second).
   // The devices around on the local network (the PC's neighbour table): for
   // the window's list to let them in from. Cheap - a table the system keeps.
+  // Paying for a configuration in use - what its panel said, else what the
+  // user did (their own server): three days before it said once, on the day
+  // or past once more. Once a launch: not kept in the settings.
+  void RemindPaid() {
+    const std::int64_t now = std::time(nullptr);
+    for (const Profile& p : settings_.profiles) {
+      const std::int64_t till = p.expire > 0 ? p.expire : p.paidTill;
+      if (!p.enabled || till == 0) {
+        continue;
+      }
+      const std::int64_t days = sovereign::tray::DaysLeft(till, now);
+      const int stage = days <= 1 ? 2 : days <= 3 ? 1 : 0;
+      int& noticed = paidNoticed_[p.id];
+      if (stage <= noticed) {
+        noticed = stage == 0 ? 0 : noticed;  // paid again: the next time is said anew
+        continue;
+      }
+      noticed = stage;
+      const std::wstring what = (p.expire > 0 ? L"подписку «" : L"сервер «") + Widen(p.name) + L"»";
+      Notify(L"Sovereign: пора платить",
+             days == 0   ? L"Оплата за " + what + L" закончилась."
+             : days == 1 ? L"Оплата за " + what + L" заканчивается сегодня."
+                         : std::format(L"За {} платить через {} дн.", what, days),
+             false, UiPage::Overview);
+    }
+  }
+
   void ScanLan() {
     const auto now = TrayModel::Clock::now();
     if (lastLanScan_ && now - *lastLanScan_ < kLanScan) {
@@ -2507,7 +2544,8 @@ class Worker {
                                 .supportUrl = profile.supportUrl,
                                 .trafficUsed = profile.trafficUsed,
                                 .trafficTotal = profile.trafficTotal,
-                                .expire = profile.expire};
+                                .expire = profile.expire,
+                                .paidTill = profile.paidTill};
         for (const auto& server : state.servers) {
           shown.servers.push_back(
               {.tag = server.tag, .label = server.label, .enabled = sovereign::tray::IsServerEnabled(profile, server.tag)});
@@ -2668,6 +2706,7 @@ class Worker {
   std::string killSwitchError_;
   std::optional<TrayModel::Clock::time_point> lockedSince_;  // UpdateLockout's
   bool lockoutNoticed_ = false;
+  std::map<std::string, int> paidNoticed_;  // per configuration: 1 - "in a few days" said, 2 - "today" said
   std::string lockoutReason_;
   std::string directTag_;               // the config's way around the proxy, measured with the servers
   std::optional<int> directBest_;       // its best seen in a good spell, ms
@@ -3922,9 +3961,11 @@ UiContent ContentFrom(const View& v) {
                                                          static_cast<double>(profile.trafficTotal)),
                                       0.0f, 1.0f);
     }
-    if (profile.expire > 0) {
-      shown.paidTill = Widen(sovereign::tray::DateText(profile.expire, UtcOffsetMinutes()));
-      shown.daysLeft = static_cast<int>(sovereign::tray::DaysLeft(profile.expire, std::time(nullptr)));
+    // Paid till: what the panel said, else what the user did (their own server).
+    if (const std::int64_t till = profile.expire > 0 ? profile.expire : profile.paidTill; till > 0) {
+      shown.paidTill = Widen(sovereign::tray::DateText(till, UtcOffsetMinutes()));
+      shown.daysLeft = static_cast<int>(sovereign::tray::DaysLeft(till, std::time(nullptr)));
+      shown.paidByHand = profile.expire == 0;
     }
     shown.serverCount = profile.servers.size();
     shown.support = !profile.supportUrl.empty();
@@ -4329,6 +4370,49 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::RefreshProfile:
       RequestRefresh(profile.id);
       break;
+    case UiCommand::PaidMenu: {
+      // What the user paid their server till: typed; once said, a month more
+      // in a click (paid again), another date, or none.
+      const auto type = [&] {
+        if (g_mainWindow != nullptr) {
+          g_mainWindow->EditInPlace(UiCommand::PaidMenu, args.index, UiCommand::PaidDateText, L"", false);
+        }
+      };
+      if (profile.paidTill == 0) {
+        type();
+        break;
+      }
+      const std::int64_t next = sovereign::tray::NextMonth(profile.paidTill, UtcOffsetMinutes());
+      const std::vector<std::wstring> items = {
+          L"Оплатил: до " + Widen(sovereign::tray::DateText(next, UtcOffsetMinutes())), L"Другая дата…",
+          L"Не следить за оплатой"};
+      const auto picked = PickFromMenu(owner, args.anchor, items, -1);
+      if (!picked) {
+        break;
+      }
+      if (*picked == 0) {
+        change(ProfileChange::What::PaidTill, false, std::to_string(next));
+      } else if (*picked == 1) {
+        type();
+      } else {
+        change(ProfileChange::What::PaidTill, false, std::string());
+      }
+      break;
+    }
+    case UiCommand::PaidDateText: {
+      if (args.text.empty()) {
+        break;
+      }
+      const auto till = sovereign::tray::PaidDate(Narrow(args.text), std::time(nullptr), UtcOffsetMinutes());
+      if (!till) {
+        if (g_trayIcon != nullptr) {
+          g_trayIcon->Balloon(L"Sovereign", L"«" + args.text + L"» — не дата. Нужна вида 15.11 или 15.11.2026.");
+        }
+        break;
+      }
+      change(ProfileChange::What::PaidTill, false, std::to_string(*till));
+      break;
+    }
     case UiCommand::SupportReport:
       if (g_pendingReport) {
         break;  // one is on its way
@@ -5074,6 +5158,8 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleAutoUpdate:
     case UiCommand::ChooseRefreshPeriod:
     case UiCommand::SetRefreshHours:
+    case UiCommand::PaidMenu:
+    case UiCommand::PaidDateText:
     case UiCommand::CopyProfileLink:
     case UiCommand::RemoveProfile:
     case UiCommand::ToggleServer:

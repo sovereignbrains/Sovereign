@@ -398,6 +398,81 @@ std::int64_t DaysLeft(std::int64_t expire, std::int64_t now) {
   return expire <= now ? 0 : (expire - now + 86399) / 86400;
 }
 
+namespace {
+
+constexpr std::int64_t kHalfDay = std::int64_t{12} * 3600;
+
+// A day's noon in the user's zone, unix seconds.
+std::int64_t LocalNoon(std::chrono::year_month_day day, int utcOffsetMinutes) {
+  return static_cast<std::int64_t>(std::chrono::sys_days(day).time_since_epoch().count()) * 86400 + kHalfDay -
+         static_cast<std::int64_t>(utcOffsetMinutes) * 60;
+}
+
+// The day `unix` falls on in the user's zone.
+std::chrono::year_month_day LocalDay(std::int64_t unix, int utcOffsetMinutes) {
+  const std::int64_t local = unix + static_cast<std::int64_t>(utcOffsetMinutes) * 60;
+  return std::chrono::year_month_day(std::chrono::sys_days(std::chrono::days(local >= 0 ? local / 86400 : (local - 86399) / 86400)));
+}
+
+}  // namespace
+
+std::optional<std::int64_t> PaidDate(std::string_view text, std::int64_t now, int utcOffsetMinutes) {
+  using namespace std::chrono;
+  std::array<int, 3> parts{};  // day, month, year
+  std::size_t count = 0;
+  bool inNumber = false;
+  for (const char ch : text) {
+    if (ch >= '0' && ch <= '9') {
+      if (!inNumber) {
+        if (count == parts.size()) {
+          return std::nullopt;
+        }
+        ++count;
+        inNumber = true;
+      }
+      int& part = parts[count - 1];
+      part = part * 10 + (ch - '0');
+      if (part > 9999) {
+        return std::nullopt;
+      }
+    } else if (ch == '.' || ch == '/' || ch == '-' || ch == ' ') {
+      inNumber = false;
+    } else {
+      return std::nullopt;
+    }
+  }
+  if (count < 2) {
+    return std::nullopt;
+  }
+  const auto at = [&](int y) -> std::optional<std::int64_t> {
+    const year_month_day day{year(y), month(static_cast<unsigned>(parts[1])), std::chrono::day(static_cast<unsigned>(parts[0]))};
+    if (!day.ok()) {
+      return std::nullopt;
+    }
+    return LocalNoon(day, utcOffsetMinutes);
+  };
+  if (count == 3) {
+    return at(parts[2] < 100 ? 2000 + parts[2] : parts[2]);
+  }
+  // No year: this year's, or next year's once this one's is past.
+  const int thisYear = static_cast<int>(LocalDay(now, utcOffsetMinutes).year());
+  const auto first = at(thisYear);
+  if (!first) {
+    return at(thisYear + 1);  // 29.02 in a year without it
+  }
+  return *first + kHalfDay < now ? at(thisYear + 1) : first;
+}
+
+std::int64_t NextMonth(std::int64_t paid, int utcOffsetMinutes) {
+  using namespace std::chrono;
+  const year_month_day was = LocalDay(paid, utcOffsetMinutes);
+  const year_month next = year_month(was.year(), was.month()) + months(1);
+  const year_month_day_last monthEnd(next.year(), month_day_last(next.month()));
+  const year_month_day day =
+      was.day() > monthEnd.day() ? year_month_day(monthEnd) : year_month_day(next.year(), next.month(), was.day());
+  return LocalNoon(day, utcOffsetMinutes);
+}
+
 std::string UsageLine(std::uint64_t used, std::uint64_t total, std::int64_t expire, std::int64_t now,
                       int utcOffsetMinutes) {
   std::string line;

@@ -190,7 +190,8 @@ nlohmann::json ProfilesToJson(const std::vector<Profile>& profiles) {
                     {"webPageUrl", p.webPageUrl},
                     {"trafficUsed", p.trafficUsed},
                     {"trafficTotal", p.trafficTotal},
-                    {"expire", p.expire}});
+                    {"expire", p.expire},
+                    {"paidTill", p.paidTill}});
   }
   return list;
 }
@@ -265,6 +266,7 @@ std::vector<Profile> ProfilesFromJson(const nlohmann::json& json, std::string_vi
       p.trafficTotal = it->get<std::uint64_t>();
     }
     p.expire = std::max<std::int64_t>(0, number(entry, "expire").value_or(0));
+    p.paidTill = std::max<std::int64_t>(0, number(entry, "paidTill").value_or(0));
     if (p.name.empty()) {
       p.name = UniqueProfileName(profiles, "Конфиг");
     }
