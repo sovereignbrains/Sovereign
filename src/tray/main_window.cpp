@@ -211,6 +211,7 @@ enum class ItemAction : std::uint8_t {
   SaveLogs,
   ToggleMore,  // the settings' "Дополнительно", folded or not (the window's own)
   Hide,        // our title bar's cross: the window away to the tray
+  SettingsTab, // index: the settings' tab to show (the window's own)
   Hint
 };
 
@@ -2396,9 +2397,32 @@ class Painter {
       return top + kRow;
     };
 
-    // The connection: where traffic goes, what holds it when the VPN drops, how it starts.
-    y = Heading(l, L"Подключение", x0, x1, y);
+    // Tabs, a group a page: more settings to come make a page longer, not a mash.
+    // They fill the row, the room left over shared out among them.
     {
+      static constexpr std::array<const wchar_t*, 4> kTabs = {L"Подключение", L"Сеть", L"Диагностика", L"Приложение"};
+      constexpr float kTabGap = 6;
+      float text = 0;
+      for (const wchar_t* tab : kTabs) {
+        text += TextWidth(tab, chip_.get());
+      }
+      const float pad = std::max(
+          8.0f, (x1 - x0 - text - kTabGap * static_cast<float>(kTabs.size() - 1)) / static_cast<float>(kTabs.size()));
+      float left = x0;
+      for (std::size_t i = 0; i < kTabs.size(); ++i) {
+        const float w = TextWidth(kTabs[i], chip_.get()) + pad;
+        Item tab = Make(Kind::Chip, {left, y, left + w, y + 30}, kTabs[i]);
+        tab.action = ItemAction::SettingsTab;
+        tab.index = static_cast<int>(i);
+        tab.checked = c.settingsTab == static_cast<int>(i);
+        l.items.push_back(std::move(tab));
+        left += w + kTabGap;
+      }
+      y += 30 + 16;
+    }
+
+    // The connection: where traffic goes, what holds it when the VPN drops, how it starts.
+    if (c.settingsTab == 0) {
       const std::size_t card = open(y);
       float top = page(y, L"Маршруты и DNS", UiPage::Routing, RoutingLine(c));
       line(top);
@@ -2418,15 +2442,16 @@ class Painter {
                 L"подключается сам, если был включён; «без подключения» — ждёт, пока включишь.");
       y = close(card, top + kRow);
     }
-    if (!c.killSwitchError.empty()) {
+    if (c.settingsTab == 0 && !c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
-    y = LocalNetwork(l, c, x0, x1, y);
+    if (c.settingsTab == 1) {
+      y = LocalNetwork(l, c, x0, x1, y);
+    }
 
     // When something's wrong: what to look at.
-    y = Heading(l, L"Диагностика", x0, x1, y);
-    {
+    if (c.settingsTab == 2) {
       const std::size_t card = open(y);
       float top = page(y, L"Проверка", UiPage::Checks, ChecksLine(c));
       line(top);
@@ -2437,8 +2462,7 @@ class Painter {
 
     // The app itself: its version and updates, its files, what few need
     // (folded), and out.
-    y = Heading(l, L"Приложение", x0, x1, y);
-    {
+    if (c.settingsTab == 3) {
       const std::size_t card = open(y);
       // The version: a line, the update's button only when there is one.
       l.items.push_back(Make(Kind::Text, {x0 + 20, y + 9, x1 - 56, y + 31}, L"Sovereign " + c.version));
@@ -3039,6 +3063,7 @@ struct MainWindow::Impl {
   LogView log;
   bool selecting = false;      // dragging a selection over the log
   bool settingsMore = false;   // the settings' "Дополнительно" unfolded (UiContent::settingsMore)
+  int settingsTab = 0;         // the settings' tab shown (UiContent::settingsTab)
   std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
   ULONGLONG panSince = 0;        // the middle button went down (log.pan)
   bool panMoved = false;         // the pointer left the still zone since
@@ -3371,6 +3396,7 @@ struct MainWindow::Impl {
       state.detail = log.Line(log.caret);
     }
     content.settingsMore = settingsMore;
+    content.settingsTab = settingsTab;
     layout = painter.Build(content, page, openProfile, size.width, size.height, scroll, state);
     ClampLog();
     // The same spot may hold another item now: a tip stays only on one of
@@ -3650,6 +3676,11 @@ struct MainWindow::Impl {
       case ItemAction::SaveLogs: SaveLogs(); return;
       case ItemAction::ToggleMore:
         settingsMore = !settingsMore;
+        Relayout();
+        return;
+      case ItemAction::SettingsTab:
+        settingsTab = item.index;
+        scroll = 0;
         Relayout();
         return;
       case ItemAction::Hide: PostMessageW(hwnd, WM_CLOSE, 0, 0); return;

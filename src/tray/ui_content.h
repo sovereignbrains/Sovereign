@@ -242,6 +242,7 @@ struct UiContent {
   bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
   bool routingMore = false;             // the routing page's fine settings and DNS unfolded
   bool settingsMore = false;            // the settings' "Дополнительно" unfolded (the window's own)
+  int settingsTab = 0;                  // the settings' tab (the window's own): connection, network, diagnostics, the app
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through
   std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
