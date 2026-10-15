@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -360,7 +361,7 @@ struct LiveTraffic {
 constexpr std::size_t kMaxParticles = 600;
 constexpr float kSparkLife = 0.6f;
 constexpr UINT_PTR kLiveTimer = 4;
-constexpr UINT kLiveFrameMs = 33;
+constexpr UINT kLiveFrameMs = 15;  // ~60 a second: the system's timer rounds to its 15.6 ms tick
 
 // Dots a second for `rate` bytes a second: a few for a trickle, a river for
 // a video or two (about 130 at 1 MB/s, 160 at most); none for nothing.
@@ -1494,14 +1495,14 @@ class Painter {
     return ServerCard(l, c, x0, x1, serverTop);
   }
 
-  // What it connects with, over the switch: every configuration on - the
-  // subscriptions first - a line each: its name, till when it's paid (the
-  // panel's word, or the user's for their own server: a click - paid again,
-  // another date), and only what's wrong besides (a failed refresh, the
-  // traffic running out). A card of glass that is a link to the
-  // configurations; its buttons on the right: a QR code on the screen,
-  // another one added, the subscriptions fetched again. Nothing before
-  // there's one on.
+  // What it connects with, over the switch: a card of glass that is a link
+  // to the configurations. On top what adds one - a QR code on the screen,
+  // the "+" (the clipboard, a file) - by its name; under it every
+  // configuration on, the subscriptions first, a line each: its name, till
+  // when it's paid (the panel's word, or the user's for their own server: a
+  // click - paid again, another date), only what's wrong besides (a failed
+  // refresh, the traffic running out) - and a subscription's own refresh by
+  // it, so it's plain what it fetches. Nothing before there's one on.
   float SubscriptionCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     std::vector<std::size_t> shown;
     for (const bool subscription : {true, false}) {
@@ -1518,12 +1519,13 @@ class Painter {
     const auto rowHeight = [&](const UiProfile& p) {
       return 26.0f + 22 + (p.failed ? 20.0f : 0.0f) + (p.trafficShare >= 0.8f ? 20.0f : 0.0f);
     };
-    float h = 12 + 10;
+    constexpr float kHead = 40;
+    float h = kHead + 12;
     for (const std::size_t i : shown) {
-      h += rowHeight(c.profiles[i]);
+      h += rowHeight(c.profiles[i]) + 8;
     }
-    h += static_cast<float>(shown.size() - 1) * 8;
     const float left = x0 + 16;
+    const float right = x1 - 12;
 
     Item card = Make(Kind::Card, {x0, y, x1, y + h}, L"Конфигурации");
     card.action = ItemAction::Page;
@@ -1531,44 +1533,37 @@ class Painter {
     card.glass = true;
     l.items.push_back(std::move(card));
 
-    // The buttons: in the card's middle for one line, by the first for more.
-    float buttons = x1 - 10;
-    const float by = shown.size() == 1 ? y + (h - 34) / 2 : y + 12;
     const auto key = [&](Item item) {
       item.key = true;
       l.items.push_back(std::move(item));
     };
-    const auto subscriptions = static_cast<int>(
-        std::count_if(shown.begin(), shown.end(), [&](std::size_t i) { return c.profiles[i].subscription; }));
-    if (subscriptions == 1) {
-      key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Обновить подписку", kGlyphRefresh,
-                      UiCommand::RefreshProfile, static_cast<int>(shown.front())));
-      buttons -= 40;
-    } else if (subscriptions > 1) {
-      key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Обновить подписки", kGlyphRefresh,
-                      UiCommand::RefreshAll));
-      buttons -= 40;
-    }
-    key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Добавить: из буфера, QR-код, файл",
+    // The head: its name, what adds one on the right.
+    l.items.push_back(Make(Kind::Muted, {left, y + 12, right - 80, y + 32}, L"Конфигурации"));
+    key(CommandItem(Kind::IconButton, {right - 32, y + 6, right, y + 38}, L"Добавить: из буфера, QR-код, файл",
                     kGlyphAdd, UiCommand::AddMenu));
-    buttons -= 40;
-    key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"QR-код с экрана", kGlyphQrCode,
+    key(CommandItem(Kind::IconButton, {right - 70, y + 6, right - 38, y + 38}, L"QR-код с экрана", kGlyphQrCode,
                     UiCommand::ScanScreen));
-    buttons -= 34;
-    const float textRight = buttons - 6;
+    l.items.push_back(Make(Kind::Divider, {left, y + kHead + 2, x1 - 16, y + kHead + 3}));
 
-    float top = y + 12;
-    for (std::size_t n = 0; n < shown.size(); ++n) {
-      const auto index = static_cast<int>(shown[n]);
-      const UiProfile& p = c.profiles[shown[n]];
-      // Past the first line the buttons are above: the text runs to the card's edge.
-      const float right = n == 0 ? textRight : x1 - 16;
-      l.items.push_back(Make(Kind::Heading, {left, top, right, top + 26}, p.name));
+    float top = y + kHead + 10;
+    for (const std::size_t i : shown) {
+      const auto index = static_cast<int>(i);
+      const UiProfile& p = c.profiles[i];
+      const float rh = rowHeight(p);
+      // A subscription's refresh by its line, in its middle.
+      float textRight = x1 - 16;
+      if (p.subscription) {
+        const float by = top + (rh - 32) / 2;
+        key(CommandItem(Kind::IconButton, {right - 32, by, right, by + 32}, L"Обновить «" + p.name + L"»",
+                        kGlyphRefresh, UiCommand::RefreshProfile, index));
+        textRight = right - 38;
+      }
+      l.items.push_back(Make(Kind::Heading, {left, top, textRight, top + 26}, p.name));
       float line = top + 28;
       if (p.paidTill.empty()) {
         // Not said by its panel, not by the user yet: a click to say it.
         const std::wstring ask = L"Указать, до какого числа оплачено ›";
-        const float w = std::min(TextWidth(ask, caption_.get()) + 4, right - left);
+        const float w = std::min(TextWidth(ask, caption_.get()) + 4, textRight - left);
         l.items.push_back(
             CommandItem(Kind::Muted, {left, line, left + w, line + 20}, ask, nullptr, UiCommand::PaidMenu, index));
       } else {
@@ -1577,29 +1572,30 @@ class Painter {
                             (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : std::format(L"ещё {} дн.", p.daysLeft));
         if (p.paidByHand) {
           paid += L" ›";
-          const float w = std::min(TextWidth(paid, caption_.get()) + 4, right - left);
+          const float w = std::min(TextWidth(paid, caption_.get()) + 4, textRight - left);
           Item item = CommandItem(Kind::Muted, {left, line, left + w, line + 20}, paid, nullptr, UiCommand::PaidMenu, index);
           item.warn = p.daysLeft <= 3;
           l.items.push_back(std::move(item));
         } else {
-          Item item = Make(Kind::Muted, {left, line, right, line + 20}, paid);
+          Item item = Make(Kind::Muted, {left, line, textRight, line + 20}, paid);
           item.warn = p.daysLeft <= 3;
           l.items.push_back(std::move(item));
         }
       }
       line += 22;
       if (p.failed) {
-        Item failed = Make(Kind::Muted, {left, line, right, line + 20}, L"Подписка не обновилась");
+        Item failed = Make(Kind::Muted, {left, line, textRight, line + 20}, L"Подписка не обновилась");
         failed.warn = true;
         l.items.push_back(std::move(failed));
         line += 20;
       }
       if (p.trafficShare >= 0.8f) {
-        Item traffic = Make(Kind::Muted, {left, line, right, line + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
+        Item traffic =
+            Make(Kind::Muted, {left, line, textRight, line + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
         traffic.warn = true;
         l.items.push_back(std::move(traffic));
       }
-      top += rowHeight(p) + 8;
+      top += rh + 8;
     }
     return y + h + kGap;
   }
@@ -3161,25 +3157,27 @@ struct MainWindow::Impl {
   // The live traffic (LiveTraffic): its timer runs while the overview shows
   // and there's traffic to draw or dots still on their way; it stops itself.
   LiveTraffic live;
-  ULONGLONG liveAt = 0;  // the last step; 0: the timer isn't running
+  // The last step, by the precise clock: the timer's ticks come every 15.6 ms
+  // or 31 - steps by them made the dots jerk. Empty: the timer isn't running.
+  std::optional<std::chrono::steady_clock::time_point> liveAt;
 
   void KickLive() {
-    if (liveAt == 0 && hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && page == UiPage::Overview && Motion() &&
+    if (!liveAt && hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && page == UiPage::Overview && Motion() &&
         (content.display == Display::On || !live.particles.empty())) {
-      liveAt = GetTickCount64();
+      liveAt = std::chrono::steady_clock::now();
       SetTimer(hwnd, kLiveTimer, kLiveFrameMs, nullptr);
     }
   }
 
   void StepLiveTraffic() {
-    const ULONGLONG now = GetTickCount64();
-    const float dt = std::min(0.1f, static_cast<float>(now - liveAt) / 1000.0f);
+    const auto now = std::chrono::steady_clock::now();
+    const float dt = liveAt ? std::min(0.1f, std::chrono::duration<float>(now - *liveAt).count()) : 0.0f;
     liveAt = now;
     const bool on = content.display == Display::On;
     if (!layout.glow || page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE || !Motion() ||
         (!on && live.particles.empty())) {
       KillTimer(hwnd, kLiveTimer);
-      liveAt = 0;
+      liveAt.reset();
       if (page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE) {
         live.particles.clear();  // shown again, it starts afresh
       }

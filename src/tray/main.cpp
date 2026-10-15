@@ -651,9 +651,6 @@ std::string CacheFilePath() {
 }
 
 // The worker's state besides the model: the settings it owns and saves.
-// RequestRefresh's id for every subscription on (an id is [a-z0-9-]: never this).
-constexpr std::string_view kEverySubscription = "*";
-
 class Worker {
  public:
   explicit Worker(TraySettings settings)
@@ -743,17 +740,7 @@ class Worker {
         }
         Save();
       }
-      if (refresh && *refresh == kEverySubscription) {
-        std::vector<std::string> ids;
-        for (const Profile& p : settings_.profiles) {
-          if (p.enabled && !p.url.empty()) {
-            ids.push_back(p.id);
-          }
-        }
-        for (const std::string& id : ids) {
-          Refresh(id, RefreshReason::Asked);
-        }
-      } else if (refresh) {
+      if (refresh) {
         Refresh(*refresh, refreshDirect ? RefreshReason::Direct : RefreshReason::Asked);
       }
       RefreshDue();
@@ -5151,9 +5138,6 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::ScanScreen:
       ScanScreen();
-      break;
-    case UiCommand::RefreshAll:
-      RequestRefresh(std::string(kEverySubscription));
       break;
     case UiCommand::AddMenu:  // the main screen's "+": what the configurations page offers, in one menu
       if (const auto picked = PickFromMenu(owner, args.anchor, {L"Вставить из буфера", L"QR-код с экрана", L"Из файла…"}, -1)) {
