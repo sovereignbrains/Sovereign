@@ -1834,7 +1834,7 @@ class Worker {
     lockoutReason_ = std::move(why);
     if (LockedOut() && !lockoutNoticed_) {
       lockoutNoticed_ = true;
-      Notify(L"Sovereign: интернет закрыт защитой",
+      Notify(L"Sovereign: интернет закрыт Kill switch'ем",
              L"Подключиться не удаётся: " + Widen(lockoutReason_) + L". В окне — выход без VPN.", true,
              UiPage::Overview);
     }
@@ -5185,24 +5185,89 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       Wake();
       break;
     }
-    case UiCommand::ToggleLanHost: {  // let in or not; the router keeps its name
+    case UiCommand::LanChipMenu: {  // the other bucket: everyone else - the switch; a device - closed again
+      if (args.index < 0) {
+        if (PickFromMenu(owner, args.anchor,
+                         {view.lanClosed ? L"В «Разрешено»: компьютер открыт для сети, как обычно"
+                                         : L"В «Закрыто»: никто в сети к компьютеру, он ни к кому"},
+                         -1)) {
+          RequestToggleLanClosed();
+        }
+        break;
+      }
       const auto entries = LanEntriesOf(view);
-      if (args.index < 0 || static_cast<std::size_t>(args.index) >= entries.size()) {
+      if (static_cast<std::size_t>(args.index) >= entries.size()) {
         break;
       }
       const sovereign::tray::LanEntry& e = entries[static_cast<std::size_t>(args.index)];
-      if (!e.allowed && view.lanAllowed.size() >= sovereign::tray::kMaxLanAllowed) {
+      // Its address (and hardware address) said first: a name may hide which one it is.
+      std::wstring said = Widen(e.address);
+      if (!e.mac.empty()) {
+        said += L" · " + Widen(e.mac);
+      }
+      if (!e.seen) {
+        said += L" · не в сети";
+      }
+      const std::vector<std::wstring> items = {said, L"", L"В «Закрыто»"};
+      if (const auto picked = PickFromMenu(owner, args.anchor, items, -1, {}, {0}); picked && *picked == 2) {
+        RequestLan({.address = e.address, .name = e.name}, false);
+      }
+      break;
+    }
+    case UiCommand::LanAdd: {
+      if (!view.lanClosed) {
+        // Open, one can't be shut apart: the service lets some in, it doesn't shut some out.
+        const std::vector<std::wstring> items = {L"Пока открыты все, отдельное устройство не закрыть", L"",
+                                                 L"Все остальные — закрыть компьютер от сети"};
+        if (const auto picked = PickFromMenu(owner, args.anchor, items, -1, {}, {0}); picked && *picked == 2) {
+          RequestToggleLanClosed();
+        }
+        break;
+      }
+      // The devices around not let in yet (the router first), then one by its address.
+      const auto entries = LanEntriesOf(view);
+      std::vector<std::wstring> items;
+      std::vector<int> which;  // per item: into entries; -1: by address; -2: only says
+      std::vector<std::size_t> labels;
+      for (std::size_t i = 0; i < entries.size(); ++i) {
+        const sovereign::tray::LanEntry& e = entries[i];
+        if (e.allowed || !e.seen) {
+          continue;
+        }
+        std::wstring item = e.router ? L"Роутер · " + Widen(e.address) : Widen(e.address);
+        if (!e.mac.empty()) {
+          item += L" · " + Widen(e.mac);
+        }
+        items.push_back(std::move(item));
+        which.push_back(static_cast<int>(i));
+      }
+      if (items.empty()) {
+        labels.push_back(items.size());
+        items.emplace_back(L"Других устройств в сети пока не видно");
+        which.push_back(-2);
+      }
+      items.emplace_back();
+      which.push_back(-2);
+      items.emplace_back(L"По адресу…");
+      which.push_back(-1);
+      const auto picked = PickFromMenu(owner, args.anchor, items, -1, {}, labels);
+      if (!picked || which[*picked] == -2) {
+        break;
+      }
+      if (view.lanAllowed.size() >= sovereign::tray::kMaxLanAllowed) {
         TellLan(std::format(L"Открыть можно не больше {} адресов.", sovereign::tray::kMaxLanAllowed));
         break;
       }
-      RequestLan({.address = e.address, .name = e.name.empty() && e.router ? "Роутер" : e.name}, !e.allowed);
+      if (which[*picked] == -1) {
+        if (g_mainWindow != nullptr) {  // typed across the bucket, up to the "+"
+          g_mainWindow->EditInPlace(UiCommand::LanAdd, 0, UiCommand::AddLanHostText, L"", false);
+        }
+        break;
+      }
+      const sovereign::tray::LanEntry& e = entries[static_cast<std::size_t>(which[*picked])];
+      RequestLan({.address = e.address, .name = e.router ? "Роутер" : e.name}, true);
       break;
     }
-    case UiCommand::AddLanHost:  // the address, typed over the button
-      if (g_mainWindow != nullptr) {
-        g_mainWindow->EditInPlace(UiCommand::AddLanHost, 0, UiCommand::AddLanHostText, L"", false);
-      }
-      break;
     case UiCommand::AddLanHostText: {
       const std::string text = Narrow(args.text);
       if (text.empty()) {

@@ -213,6 +213,7 @@ enum class ItemAction : std::uint8_t {
   ToggleLevel,
   PauseLogs,
   SaveLogs,
+  ToggleMore,  // the settings' "Дополнительно", folded or not (the window's own)
   Hint
 };
 
@@ -383,7 +384,7 @@ std::wstring StateDetailBase(const UiContent& c);
 std::wstring StateDetail(const UiContent& c) {
   std::wstring detail = StateDetailBase(c);
   if (c.killSwitchActive && c.display != Display::On && c.display != Display::Off) {
-    detail += L"\nИнтернет закрыт kill switch'ем, пока подключение не восстановится.";
+    detail += L"\nИнтернет закрыт Kill switch'ем, пока подключение не восстановится.";
   } else if (c.display == Display::ServiceDown && c.killSwitch) {
     detail += L"\nЕсли включён kill switch, интернета нет, пока служба не запустится; снять вручную: "
               L"sovereign-core.exe --unblock от администратора.";
@@ -1240,7 +1241,7 @@ class Painter {
     // getting through (main.cpp UpdateLockout) - why, and the way out.
     if (c.lockedOut) {
       y = Paragraph(l, Kind::ErrorText,
-                    L"Интернет закрыт защитой: подключиться не удаётся — " + c.lockoutReason +
+                    L"Интернет закрыт Kill switch'ем: подключиться не удаётся — " + c.lockoutReason +
                         L". Так настоящий IP не утечёт, но и интернета нет.",
                     x0, x1, y) +
           8;
@@ -2147,8 +2148,8 @@ class Painter {
     return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
-  // The local network: closed both ways, but for what the user lets in -
-  // the router, a device around, or an address typed in.
+  // The local network: open, or closed both ways but for what the user lets
+  // in - the router, a device around, or an address typed in.
   float LocalNetwork(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = Heading(l, L"Локальная сеть", x0, x1, y,
                 L"Фильтр только на этом компьютере. Роутер, телефоны и другие устройства работают как обычно и "
@@ -2158,46 +2159,73 @@ class Painter {
                 L"Закрытый роутер — это только его настройки и его DNS.\n\nСовсем спрятаться нельзя: роутер "
                 L"видит, что компьютер подключён, а сканер сети на телефоне — что по его адресу есть устройство. "
                 L"Связаться с ним никто не сможет.\n\nДействует, пока подключение включено.");
-    y = Switches(l,
-                 {Row(L"Закрыть компьютер от сети", {}, c.lanClosed, UiCommand::ToggleLanClosed,
-                      c.lanClosed ? L"Никто в сети к нему, он ни к кому" : L"Компьютер виден в сети, как обычно")},
-                 x0, x1, y) +
-        kGap;
-    if (!c.lanClosed) {
-      return y;
-    }
-    // Each one's switch opens it: the line under says what that means now.
-    std::vector<SwitchRow> rows;
-    for (std::size_t i = 0; i < c.lanHosts.size(); ++i) {
-      const UiLanHost& h = c.lanHosts[i];
-      const std::wstring title = h.router ? L"Роутер" : h.name.empty() ? h.address : h.name;
-      std::vector<std::wstring> parts;
-      if (title != h.address && !h.router) {
-        parts.push_back(h.address);
+    y += 6;
+    // As the routing board has it: a bucket each - let in, closed - and
+    // "Все остальные" in one of them (the switch, lanClosed); the devices let
+    // in are the closed network's exceptions. An open one has none: the
+    // service lets some in, it doesn't shut some out. A click on one: the
+    // other bucket (LanChipMenu); the "+" of the one without everyone else:
+    // who can go there (LanAdd).
+    struct Chip {
+      std::wstring text;
+      std::wstring detail;
+      int index;  // into lanHosts; -1: everyone else
+    };
+    constexpr float kHead = 42;
+    constexpr float kChipGap = 6;
+    const float left = x0 + 12;
+    const float right = x1 - 12;
+    for (const bool open : {true, false}) {
+      std::vector<Chip> chips;
+      if (open == !c.lanClosed) {
+        chips.push_back({L"Все остальные", {}, -1});
       }
-      if (h.router) {
-        parts.emplace_back(h.allowed ? L"открыт: настройки доступны" : L"закрыт, интернет работает");
-      } else {
-        parts.emplace_back(h.allowed ? L"открыт" : L"закрыт");
-        if (!h.seen) {
-          parts.emplace_back(L"не в сети");
-        } else if (!h.mac.empty() && title == h.address) {
-          parts.push_back(h.mac);  // to tell one unnamed device from another
+      if (open && c.lanClosed) {
+        for (std::size_t i = 0; i < c.lanHosts.size(); ++i) {
+          const UiLanHost& h = c.lanHosts[i];
+          if (!h.allowed) {
+            continue;
+          }
+          const std::wstring title = h.router ? L"Роутер" : h.name.empty() ? h.address : h.name;
+          chips.push_back({title, !h.seen ? L"не в сети" : title != h.address && !h.router ? h.address : L"",
+                           static_cast<int>(i)});
         }
       }
-      std::wstring detail;
-      for (const std::wstring& part : parts) {
-        detail += (detail.empty() ? L"" : L" · ") + part;
+      // In rows from the card's left, wrapped at its right.
+      std::vector<std::pair<std::size_t, D2D1_RECT_F>> placed;
+      float cx = left;
+      float cy = 0;
+      for (std::size_t n = 0; n < chips.size(); ++n) {
+        float w = 20 + TextWidth(chips[n].text, body_.get()) + (chips[n].index < 0 ? 22.0f : 0.0f) +
+                  (chips[n].detail.empty() ? 0.0f : 6 + TextWidth(chips[n].detail, caption_.get()));
+        w = std::min(w, right - left);
+        if (cx > left && cx + w > right) {
+          cx = left;
+          cy += kTag + kChipGap;
+        }
+        placed.emplace_back(n, D2D1_RECT_F{cx, cy, cx + w, cy + kTag});
+        cx += w + kChipGap;
       }
-      rows.push_back(Row(title, {}, h.allowed, UiCommand::ToggleLanHost, std::move(detail), static_cast<int>(i)));
+      const float h = placed.empty() ? kHead + 2 : kHead + cy + kTag + 12;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      const wchar_t* name = open ? L"Разрешено" : L"Закрыто";
+      l.items.push_back(Make(Kind::Heading, {left + 2, y + 6, left + 2 + TextWidth(name, heading_.get()) + 4, y + kHead - 4}, name));
+      if (open == c.lanClosed) {  // where everyone else isn't
+        l.items.push_back(
+            CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd, UiCommand::LanAdd));
+      }
+      for (const auto& [n, at] : placed) {
+        Item tag = CommandItem(Kind::Tag, {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom}, chips[n].text,
+                               nullptr, UiCommand::LanChipMenu, chips[n].index);
+        tag.detail = chips[n].detail;
+        if (chips[n].index < 0) {
+          tag.logo = "lan";
+        }
+        l.items.push_back(std::move(tag));
+      }
+      y += h + 8;
     }
-    y = Paragraph(l, Kind::Caption, L"Кому всё же разрешить связь с компьютером:", x0 + 4, x1, y) + 6;
-    if (!rows.empty()) {
-      y = Switches(l, rows, x0, x1, y) + 8;
-    }
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Открыть устройство по IP", kGlyphAdd,
-                                  UiCommand::AddLanHost));
-    return y + kButton + kGap + 4;
+    return y + kGap - 4;
   }
 
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
@@ -2222,7 +2250,7 @@ class Painter {
                  {Row(L"Kill switch",
                       L"Если подключение оборвётся, трафик не пойдёт мимо VPN: интернет закрыт, пока оно не "
                       L"восстановится.",
-                      c.killSwitch, UiCommand::ToggleKillSwitch)},
+                      c.killSwitch, UiCommand::ToggleKillSwitch, L"VPN оборвётся — интернет не пойдёт мимо него")},
                  x0, x1, y) +
         kGap;
     if (!c.killSwitchError.empty()) {
@@ -2231,8 +2259,52 @@ class Painter {
 
     y = LocalNetwork(l, c, x0, x1, y);
 
-    // The subscription relay (relay.h): the address and the key, each typed
-    // over its row; the key is never shown.
+    // Version and updates: a line - the button for an update only when there is one.
+    {
+      const bool available = c.update == UiUpdate::Available;
+      const float h = available ? 60 + kButton + 10 : 60.0f;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      l.items.push_back(Make(Kind::Text, {x0 + 16, y + 9, x1 - 56, y + 31}, L"Sovereign " + c.version));
+      l.items.push_back(Make(Kind::Muted, {x0 + 16, y + 31, x1 - 56, y + 51},
+                             c.update == UiUpdate::Downloading ? std::wstring(L"скачиваю обновление…") : UpdateStatus(c)));
+      Item check = CommandItem(Kind::IconButton, {x1 - 48, y + 12, x1 - 12, y + 48}, L"Проверить обновления",
+                               kGlyphRefresh, UiCommand::CheckUpdate);
+      check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
+      l.items.push_back(std::move(check));
+      if (available) {
+        l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, y + 60, x1 - 16, y + 60 + kButton},
+                                      L"Обновить до " + c.updateVersion, kGlyphDownload, UiCommand::InstallUpdate));
+      }
+      y += h + kGap;
+    }
+
+    // What few need, folded: one row opening it in place (not kept - it opens rarely).
+    {
+      Item more = Make(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Дополнительно",
+                       c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
+      more.action = ItemAction::ToggleMore;
+      if (!c.settingsMore) {
+        more.detail = L"подписки без подключения";
+      }
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kRow}));
+      l.items.push_back(std::move(more));
+      y += kRow + kGap;
+    }
+    if (c.settingsMore) {
+      y = Relay(l, c, x0, x1, y);
+    }
+
+    const float mid = (x0 + x1) / 2;
+    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Папка данных", kGlyphFolder,
+                                  UiCommand::OpenFolder));
+    l.items.push_back(CommandItem(Kind::DangerButton, {mid + 4, y, x1, y + kButton}, L"Выйти", kGlyphExit,
+                                  UiCommand::Exit));
+    return y + kButton;
+  }
+
+  // The subscription relay (relay.h): the address and the key, each typed
+  // over its row; the key is never shown.
+  float Relay(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = Heading(l, L"Подписки без подключения", x0, x1, y,
                 L"Пока подключение работает, подписки скачиваются через него. Когда его нет, напрямую их сервер "
                 L"увидел бы твой настоящий IP — поэтому они скачиваются через пересыльщик: твой Cloudflare Worker "
@@ -2253,30 +2325,7 @@ class Painter {
       l.items.push_back(std::move(key));
       y += h + kGap;
     }
-
-    // Version and updates: the button under the text, the window is narrow.
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 110}));
-    l.items.push_back(Make(Kind::Text, {x0 + 16, y + 10, x1 - 16, y + 34}, L"Sovereign " + c.version));
-    l.items.push_back(Make(Kind::Muted, {x0 + 16, y + 34, x1 - 16, y + 56}, UpdateStatus(c)));
-    const D2D1_RECT_F button{x0 + 16, y + 64, x1 - 16, y + 64 + kButton};
-    if (c.update == UiUpdate::Available) {
-      l.items.push_back(CommandItem(Kind::AccentButton, button, L"Обновить до " + c.updateVersion, kGlyphDownload,
-                                    UiCommand::InstallUpdate));
-    } else {
-      Item check = CommandItem(Kind::Button, button,
-                               c.update == UiUpdate::Downloading ? L"Скачиваю…" : L"Проверить обновления",
-                               kGlyphRefresh, UiCommand::CheckUpdate);
-      check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
-      l.items.push_back(std::move(check));
-    }
-    y += 110 + kGap;
-
-    const float mid = (x0 + x1) / 2;
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Папка данных", kGlyphFolder,
-                                  UiCommand::OpenFolder));
-    l.items.push_back(CommandItem(Kind::DangerButton, {mid + 4, y, x1, y + kButton}, L"Выйти", kGlyphExit,
-                                  UiCommand::Exit));
-    return y + kButton;
+    return y;
   }
 
   /* ---- drawing ---- */
@@ -2830,6 +2879,7 @@ struct MainWindow::Impl {
   Interaction in;
   LogView log;
   bool selecting = false;      // dragging a selection over the log
+  bool settingsMore = false;   // the settings' "Дополнительно" unfolded (UiContent::settingsMore)
   std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
   ULONGLONG panSince = 0;        // the middle button went down (log.pan)
   bool panMoved = false;         // the pointer left the still zone since
@@ -3107,6 +3157,7 @@ struct MainWindow::Impl {
     if (log.HasSelection()) {
       state.detail = log.Line(log.caret);
     }
+    content.settingsMore = settingsMore;
     layout = painter.Build(content, page, openProfile, size.width, size.height, scroll, state);
     ClampLog();
     // The same spot may hold another item now: a tip stays only on one of
@@ -3129,14 +3180,14 @@ struct MainWindow::Impl {
       const bool button = it.action == ItemAction::Command && it.command == anchor && it.index == index;
       if (title || button) {
         D2D1_RECT_F rect = it.rect;
-        if (anchor == UiCommand::BoardAdd || anchor == UiCommand::ChipMenu) {
+        if (anchor == UiCommand::BoardAdd || anchor == UiCommand::ChipMenu || anchor == UiCommand::LanAdd) {
           // A "+" in a bucket's corner: a site is typed across the bucket, up
           // to the "+"; a chip: what's in it, or its name, across the bucket.
           for (const Item& card : layout.items) {
             if (card.kind == Kind::Card && card.rect.top <= it.rect.top && card.rect.bottom >= it.rect.bottom &&
                 card.rect.left <= it.rect.left && card.rect.right >= it.rect.right) {
               rect = {card.rect.left + 8, it.rect.top,
-                      anchor == UiCommand::BoardAdd ? it.rect.left - 4 : card.rect.right - 8, it.rect.bottom};
+                      anchor == UiCommand::ChipMenu ? card.rect.right - 8 : it.rect.left - 4, it.rect.bottom};
             }
           }
         }
@@ -3383,6 +3434,10 @@ struct MainWindow::Impl {
         Relayout();
         return;
       case ItemAction::SaveLogs: SaveLogs(); return;
+      case ItemAction::ToggleMore:
+        settingsMore = !settingsMore;
+        Relayout();
+        return;
       case ItemAction::Command: break;
     }
     UiArgs args;

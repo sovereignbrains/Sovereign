@@ -230,6 +230,7 @@ struct UiContent {
   bool autostart = false;               // the tray starts when the user signs in
   bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
   bool routingMore = false;             // the routing page's fine settings and DNS unfolded
+  bool settingsMore = false;            // the settings' "Дополнительно" unfolded (the window's own)
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through
   std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
@@ -303,8 +304,8 @@ enum class UiCommand : std::uint8_t {
   ChooseLogLevel,      // anchor: where to open the menu of levels
   ToggleKillSwitch,
   ToggleLanClosed,
-  ToggleLanHost,      // index into lanHosts: let in or not
-  AddLanHost,         // starts typing an address over the button
+  LanChipMenu,        // index into lanHosts (-1: everyone else); anchor: the other bucket
+  LanAdd,             // anchor: who can go where everyone else isn't - a device around, an address typed
   AddLanHostText,     // text: the address
   EditRelayUrl,       // starts typing the relay's address over its row
   EditRelayUrlText,   // text: the address ("" clears the relay)
