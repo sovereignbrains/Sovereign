@@ -229,6 +229,7 @@ struct Item {
   bool checked = false;
   bool enabled = true;
   bool warn = false;    // something's wrong with it (a ProfileRow's refresh failed)
+  bool glass = false;   // a Card on the main screen: see-through - the light and the streams behind it show
   bool scrolls = true;  // lives in the page (scrolls, clipped), not in the rail
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
 };
@@ -1507,77 +1508,74 @@ class Painter {
       return y;
     }
     const UiProfile& p = *shown;
-    const auto others = std::count_if(c.profiles.begin(), c.profiles.end(), on) - 1;
-    // Under its name: till when it's paid - the panel's word, or the user's
-    // for their own server (a click: paid again, another date) - and the
-    // traffic only when it's running out.
+    // Its name; under it till when it's paid - the panel's word, or the
+    // user's for their own server (a click: paid again, another date) - and
+    // only what's wrong besides: a refresh that failed, the traffic running out.
     const bool trafficLow = p.trafficShare >= 0.8f;
-    const float h = 66 + 22 + (trafficLow ? 20.0f : 0.0f) + 6;
-    constexpr float kInset = 16;
-    const float left = x0 + kInset;
-    const float right = x1 - kInset;
+    const float h = 12 + 26 + 22 + (p.failed ? 20.0f : 0.0f) + (trafficLow ? 20.0f : 0.0f) + 12;
+    const float left = x0 + 16;
 
     Item card = Make(Kind::Card, {x0, y, x1, y + h}, L"Конфигурации");
     card.action = ItemAction::Page;
     card.index = static_cast<int>(UiPage::Subscription);
+    card.glass = true;
     l.items.push_back(std::move(card));
 
-    // The buttons, right, level with the two lines: another one added (the
-    // clipboard, a QR code, a file), and - a subscription - fetched again.
-    float buttons = x1 - 8;
+    // The buttons, right, in the card's middle: a QR code on the screen,
+    // another one added (the clipboard, a QR code, a file), and - a
+    // subscription - fetched again.
+    float buttons = x1 - 10;
+    const float by = y + (h - 34) / 2;
     const auto key = [&](Item item) {
       item.key = true;
       l.items.push_back(std::move(item));
     };
     if (p.subscription) {
-      key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Обновить подписку", kGlyphRefresh,
+      key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Обновить подписку", kGlyphRefresh,
                       UiCommand::RefreshProfile, static_cast<int>(shown - c.profiles.begin())));
-      buttons -= 42;
+      buttons -= 40;
     }
-    key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Добавить: из буфера, QR-код, файл",
+    key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"Добавить: из буфера, QR-код, файл",
                     kGlyphAdd, UiCommand::AddMenu));
-    buttons -= 42;
-    key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"QR-код с экрана", kGlyphQrCode,
+    buttons -= 40;
+    key(CommandItem(Kind::IconButton, {buttons - 34, by, buttons, by + 34}, L"QR-код с экрана", kGlyphQrCode,
                     UiCommand::ScanScreen));
-    buttons -= 38;
-    const float textRight = buttons - 4;
+    buttons -= 34;
+    const float textRight = buttons - 6;
 
-    // What it is, and how fresh; its name under it.
-    Item what = Make(Kind::Muted, {left, y + 12, textRight, y + 30},
-                     (p.subscription ? std::wstring(L"Подписка · ") : std::wstring(L"Свой конфиг · ")) +
-                         (p.failed         ? std::wstring(L"не обновилась")
-                          : p.subscription ? L"обновлена " + p.updated
-                                           : std::format(L"серверов: {}", p.serverCount)));
-    what.warn = p.failed;
-    l.items.push_back(std::move(what));
-    l.items.push_back(Make(Kind::Heading, {left, y + 30, textRight, y + 56},
-                           others > 0 ? std::format(L"{}  +{}", p.name, others) : p.name));
+    l.items.push_back(Make(Kind::Heading, {left, y + 12, textRight, y + 38}, p.name));
 
     const int index = static_cast<int>(shown - c.profiles.begin());
-    float top = y + 60;
+    float top = y + 40;
     if (p.paidTill.empty()) {
       // Not said by its panel, not by the user yet: a click to say it.
       const std::wstring ask = L"Указать, до какого числа оплачено ›";
-      const float w = std::min(TextWidth(ask, caption_.get()) + 4, right - left);
+      const float w = std::min(TextWidth(ask, caption_.get()) + 4, textRight - left);
       l.items.push_back(CommandItem(Kind::Muted, {left, top, left + w, top + 20}, ask, nullptr, UiCommand::PaidMenu, index));
     } else {
       std::wstring paid = (p.paidByHand ? L"Сервер оплачен до " : L"Оплачено до ") + p.paidTill.substr(0, 5) + L" · " +
                           (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : std::format(L"ещё {} дн.", p.daysLeft));
       if (p.paidByHand) {
         paid += L" ›";
-        const float w = std::min(TextWidth(paid, caption_.get()) + 4, right - left);
+        const float w = std::min(TextWidth(paid, caption_.get()) + 4, textRight - left);
         Item line = CommandItem(Kind::Muted, {left, top, left + w, top + 20}, paid, nullptr, UiCommand::PaidMenu, index);
         line.warn = p.daysLeft <= 3;
         l.items.push_back(std::move(line));
       } else {
-        Item line = Make(Kind::Muted, {left, top, right, top + 20}, paid);
+        Item line = Make(Kind::Muted, {left, top, textRight, top + 20}, paid);
         line.warn = p.daysLeft <= 3;
         l.items.push_back(std::move(line));
       }
     }
     top += 22;
+    if (p.failed) {
+      Item failed = Make(Kind::Muted, {left, top, textRight, top + 20}, L"Подписка не обновилась");
+      failed.warn = true;
+      l.items.push_back(std::move(failed));
+      top += 20;
+    }
     if (trafficLow) {
-      Item traffic = Make(Kind::Muted, {left, top, right, top + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
+      Item traffic = Make(Kind::Muted, {left, top, textRight, top + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
       traffic.warn = true;
       l.items.push_back(std::move(traffic));
     }
@@ -1589,7 +1587,9 @@ class Painter {
   // the server auto picked.
   float ServerCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const float h = 60;
-    l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+    Item glass = Make(Kind::Card, {x0, y, x1, y + h});
+    glass.glass = true;
+    l.items.push_back(std::move(glass));
     Item card = Make(Kind::ServerCard, {x0 + 2, y + 2, x1 - 2, y + h - 2}, {}, kGlyphChevron);
     card.action = ItemAction::Page;
     card.index = static_cast<int>(UiPage::Servers);
@@ -2531,11 +2531,12 @@ class Painter {
     const float hoverAlpha = pressed ? 0.04f : (hovered ? 0.08f : 0.0f);
     switch (it.kind) {
       case Kind::Card:
-        k.Round(r, kRadius, FromColorRef(ui::kCardColor));
+        // Glass: a breath of white over what's behind, a brighter edge; else the card's own colour.
+        k.Round(r, kRadius, it.glass ? Rgb(255, 255, 255, 0.035f) : FromColorRef(ui::kCardColor));
         if (hoverAlpha > 0 && it.action != ItemAction::None) {  // a card that is a link
           k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha * 0.5f));
         }
-        k.Outline(r, kRadius, Rgb(255, 255, 255, 0.06f));
+        k.Outline(r, kRadius, Rgb(255, 255, 255, it.glass ? 0.10f : 0.06f));
         break;
       case Kind::Divider: k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(255, 255, 255, 0.06f)); break;
       case Kind::Title: k.Text(it.text, title_.get(), r, primary); break;
@@ -2971,37 +2972,18 @@ class Painter {
       t->FillRectangle(D2D1::RectF(0, 0, size.width, size.height), brush.get());
     }
   }
-  // An icon button as a key: its face lit from above, a bright edge along
-  // its top, on a dark base that gives it height - up a little under the
-  // pointer, down when pressed.
+  // An icon button of the main screen's glass card: a round of glass, its
+  // rim catching the light - brighter under the pointer, a little down
+  // pressed - the glyph in its middle.
   void DrawKey(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
-    DrawKeyIn(k, Inflate(it.rect, -4), it.glyph, hovered, pressed);
-  }
-
-  // A key in `r` (its base; the face stands over it), `glyph` on its face.
-  void DrawKeyIn(const Canvas& k, D2D1_RECT_F r, std::wstring_view glyph, bool hovered, bool pressed) const {
-    constexpr float kRest = 3;  // how far the face stands over the base at rest
-    const float height = pressed ? 1.0f : hovered ? 4.5f : kRest;
-    constexpr float kKeyRadius = 8;
-    const D2D1_RECT_F base{r.left, r.top + kRest, r.right, r.bottom};
-    const D2D1_RECT_F face{r.left, base.top - height, r.right, base.bottom - height};
-    k.Round(base, kKeyRadius, Rgb(9, 9, 10));
-    k.Outline(base, kKeyRadius, Rgb(255, 255, 255, 0.07f));
-    const float lift = hovered ? 8.0f : 0.0f;
-    const std::array<D2D1_GRADIENT_STOP, 2> stops{{{0, Rgb(46 + lift, 46 + lift, 50 + lift)},
-                                                   {1, Rgb(28 + lift, 28 + lift, 31 + lift)}}};
-    wil::com_ptr<ID2D1GradientStopCollection> collection;
-    wil::com_ptr<ID2D1LinearGradientBrush> fill;
-    if (SUCCEEDED(k.t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
-        SUCCEEDED(k.t->CreateLinearGradientBrush(
-            D2D1::LinearGradientBrushProperties({face.left, face.top}, {face.left, face.bottom}), collection.get(),
-            fill.put()))) {
-      k.t->FillRoundedRectangle(D2D1::RoundedRect(face, kKeyRadius, kKeyRadius), fill.get());
-    }
-    k.Outline(face, kKeyRadius, Rgb(255, 255, 255, hovered ? 0.24f : 0.14f));
-    k.Line({face.left + kKeyRadius, face.top + 1.5f}, {face.right - kKeyRadius, face.top + 1.5f},
-           Rgb(255, 255, 255, hovered ? 0.30f : 0.20f));
-    k.Text(glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.88f));
+    const D2D1_RECT_F r = it.rect;
+    const D2D1_POINT_2F center{(r.left + r.right) / 2, (r.top + r.bottom) / 2 + (pressed ? 1.0f : 0.0f)};
+    const float radius = std::min(r.right - r.left, r.bottom - r.top) / 2 - 1;
+    const D2D1_ELLIPSE round = D2D1::Ellipse(center, radius, radius);
+    k.t->FillEllipse(round, k.Color(Rgb(255, 255, 255, pressed ? 0.12f : hovered ? 0.09f : 0.04f)));
+    k.t->DrawEllipse(round, k.Color(Rgb(255, 255, 255, hovered ? 0.30f : 0.14f)), 1);
+    const D2D1_RECT_F face{center.x - radius, center.y - radius, center.x + radius, center.y + radius};
+    k.Text(it.glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.82f));
   }
 
   // The switch is a cube (cube.h): in the pose the window animates it
