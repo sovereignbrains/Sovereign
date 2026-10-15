@@ -1086,7 +1086,8 @@ class Painter {
     };
     const std::wstring warpHint =
         L"WARP — бесплатный выход через Cloudflare. Выручает там, где сайт не пускает с адресов VPN-серверов "
-        L"или режет контент (Gemini, ChatGPT, Netflix): сайт видит адрес Cloudflare.\n\nWARP идёт поверх "
+        L"или режет контент (ChatGPT, Netflix): сайт видит адрес Cloudflare. Google его адреса не любит — "
+        L"Gemini и поиск через WARP упрутся в капчу.\n\nWARP идёт поверх "
         L"твоего VPN — провайдер его не видит. Не проходит так — Sovereign сам пустит WARP напрямую. "
         L"Выбрать вручную — нажми «через …» справа от названия.";
     // Where everything else goes: said on that bucket, with how many it doesn't show.
