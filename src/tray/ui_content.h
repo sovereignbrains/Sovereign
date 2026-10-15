@@ -389,6 +389,24 @@ inline std::wstring DelayDetail(const UiDelay& delay, bool detailed) {
   return text;
 }
 
+// "день", "дня" or "дней" after the number `n`.
+inline const wchar_t* DaysWord(std::int64_t n) {
+  const std::int64_t last = n % 10;
+  const std::int64_t lastTwo = n % 100;
+  if (last == 1 && lastTwo != 11) {
+    return L"день";
+  }
+  if (last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14)) {
+    return L"дня";
+  }
+  return L"дней";
+}
+
+// "осталось 6 дней", "остался 1 день" - till a payment.
+inline std::wstring DaysLeftText(std::int64_t n) {
+  return std::format(L"{} {} {}", n % 10 == 1 && n % 100 != 11 ? L"остался" : L"осталось", n, DaysWord(n));
+}
+
 inline std::wstring FormatRate(double bytesPerSecond) {
   if (bytesPerSecond < 1024) {
     return std::format(L"{:.0f} Б/с", bytesPerSecond);

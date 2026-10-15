@@ -1834,7 +1834,7 @@ class Worker {
       Notify(L"Sovereign: пора платить",
              days == 0   ? L"Оплата за " + what + L" закончилась."
              : days == 1 ? L"Оплата за " + what + L" заканчивается сегодня."
-                         : std::format(L"За {} платить через {} дн.", what, days),
+                         : std::format(L"За {} платить через {} {}.", what, days, sovereign::tray::DaysWord(days)),
              false, UiPage::Overview);
     }
   }

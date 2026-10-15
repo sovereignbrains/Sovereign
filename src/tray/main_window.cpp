@@ -1362,14 +1362,19 @@ class Painter {
   }
 
   // Our own title bar (the system's is gone - Impl's WM_NCCALCSIZE): the
-  // name on the left; the settings and the cross, hiding the window to the
-  // tray, on the right - on every page. The rest of it drags the window
+  // name on the left; adding a configuration (the clipboard, a QR code, a
+  // file), the settings and the cross, hiding the window to the tray, on the
+  // right - on every page. The rest of it drags the window
   // (WM_NCHITTEST).
   void Caption(Layout& l, float width) const {
-    Item name = Make(Kind::AppTitle, {12, 0, width - 100, kCaption}, L"Sovereign");
+    Item name = Make(Kind::AppTitle, {12, 0, width - 140, kCaption}, L"Sovereign");
     name.text2 = SelfPath();
     name.scrolls = false;
     l.items.push_back(std::move(name));
+    Item add = CommandItem(Kind::IconButton, {width - 126, 0, width - 86, kCaption}, L"Добавить: из буфера, QR-код, файл",
+                           kGlyphAdd, UiCommand::AddMenu);
+    add.scrolls = false;
+    l.items.push_back(std::move(add));
     Item settings = Make(Kind::IconButton, {width - 86, 0, width - 46, kCaption}, L"Настройки", kGlyphSettings);
     settings.action = ItemAction::Page;
     settings.index = static_cast<int>(UiPage::Settings);
@@ -1496,13 +1501,13 @@ class Painter {
   }
 
   // What it connects with, over the switch: a card of glass that is a link
-  // to the configurations. On top what adds one - a QR code on the screen,
-  // the "+" (the clipboard, a file) - by its name; under it every
-  // configuration on, the subscriptions first, a line each: its name, till
-  // when it's paid (the panel's word, or the user's for their own server: a
-  // click - paid again, another date), only what's wrong besides (a failed
-  // refresh, the traffic running out) - and a subscription's own refresh by
-  // it, so it's plain what it fetches. Nothing before there's one on.
+  // to the configurations (refreshed, added, switched there; "+" in the
+  // title bar adds one too) - every configuration on, the subscriptions
+  // first, a line each: its name, till when it's paid (the panel's word, or
+  // the user's for their own server: a click - paid again, another date),
+  // and only what's wrong besides (a failed refresh, the traffic running
+  // out). No buttons: the card says, it doesn't ask. Nothing before there's
+  // one on.
   float SubscriptionCard(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     std::vector<std::size_t> shown;
     for (const bool subscription : {true, false}) {
@@ -1519,13 +1524,12 @@ class Painter {
     const auto rowHeight = [&](const UiProfile& p) {
       return 26.0f + 22 + (p.failed ? 20.0f : 0.0f) + (p.trafficShare >= 0.8f ? 20.0f : 0.0f);
     };
-    constexpr float kHead = 40;
-    float h = kHead + 12;
+    float h = 12 + 4;
     for (const std::size_t i : shown) {
       h += rowHeight(c.profiles[i]) + 8;
     }
     const float left = x0 + 16;
-    const float right = x1 - 12;
+    const float right = x1 - 16;
 
     Item card = Make(Kind::Card, {x0, y, x1, y + h}, L"Конфигурации");
     card.action = ItemAction::Page;
@@ -1533,69 +1537,47 @@ class Painter {
     card.glass = true;
     l.items.push_back(std::move(card));
 
-    const auto key = [&](Item item) {
-      item.key = true;
-      l.items.push_back(std::move(item));
-    };
-    // The head: its name, what adds one on the right.
-    l.items.push_back(Make(Kind::Muted, {left, y + 12, right - 80, y + 32}, L"Конфигурации"));
-    key(CommandItem(Kind::IconButton, {right - 32, y + 6, right, y + 38}, L"Добавить: из буфера, QR-код, файл",
-                    kGlyphAdd, UiCommand::AddMenu));
-    key(CommandItem(Kind::IconButton, {right - 70, y + 6, right - 38, y + 38}, L"QR-код с экрана", kGlyphQrCode,
-                    UiCommand::ScanScreen));
-    l.items.push_back(Make(Kind::Divider, {left, y + kHead + 2, x1 - 16, y + kHead + 3}));
-
-    float top = y + kHead + 10;
+    float top = y + 12;
     for (const std::size_t i : shown) {
       const auto index = static_cast<int>(i);
       const UiProfile& p = c.profiles[i];
-      const float rh = rowHeight(p);
-      // A subscription's refresh by its line, in its middle.
-      float textRight = x1 - 16;
-      if (p.subscription) {
-        const float by = top + (rh - 32) / 2;
-        key(CommandItem(Kind::IconButton, {right - 32, by, right, by + 32}, L"Обновить «" + p.name + L"»",
-                        kGlyphRefresh, UiCommand::RefreshProfile, index));
-        textRight = right - 38;
-      }
-      l.items.push_back(Make(Kind::Heading, {left, top, textRight, top + 26}, p.name));
+      l.items.push_back(Make(Kind::Heading, {left, top, right, top + 26}, p.name));
       float line = top + 28;
       if (p.paidTill.empty()) {
         // Not said by its panel, not by the user yet: a click to say it.
         const std::wstring ask = L"Указать, до какого числа оплачено ›";
-        const float w = std::min(TextWidth(ask, caption_.get()) + 4, textRight - left);
+        const float w = std::min(TextWidth(ask, caption_.get()) + 4, right - left);
         l.items.push_back(
             CommandItem(Kind::Muted, {left, line, left + w, line + 20}, ask, nullptr, UiCommand::PaidMenu, index));
       } else {
         std::wstring paid = (p.paidByHand ? L"Сервер оплачен до " : L"Оплачено до ") + p.paidTill.substr(0, 5) +
-                            L" · " +
-                            (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : std::format(L"ещё {} дн.", p.daysLeft));
+                            L" · " + (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : DaysLeftText(p.daysLeft));
         if (p.paidByHand) {
           paid += L" ›";
-          const float w = std::min(TextWidth(paid, caption_.get()) + 4, textRight - left);
+          const float w = std::min(TextWidth(paid, caption_.get()) + 4, right - left);
           Item item = CommandItem(Kind::Muted, {left, line, left + w, line + 20}, paid, nullptr, UiCommand::PaidMenu, index);
           item.warn = p.daysLeft <= 3;
           l.items.push_back(std::move(item));
         } else {
-          Item item = Make(Kind::Muted, {left, line, textRight, line + 20}, paid);
+          Item item = Make(Kind::Muted, {left, line, right, line + 20}, paid);
           item.warn = p.daysLeft <= 3;
           l.items.push_back(std::move(item));
         }
       }
       line += 22;
       if (p.failed) {
-        Item failed = Make(Kind::Muted, {left, line, textRight, line + 20}, L"Подписка не обновилась");
+        Item failed = Make(Kind::Muted, {left, line, right, line + 20}, L"Подписка не обновилась");
         failed.warn = true;
         l.items.push_back(std::move(failed));
         line += 20;
       }
       if (p.trafficShare >= 0.8f) {
         Item traffic =
-            Make(Kind::Muted, {left, line, textRight, line + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
+            Make(Kind::Muted, {left, line, right, line + 20}, L"Трафик: " + p.trafficUsed + L" из " + p.trafficTotal);
         traffic.warn = true;
         l.items.push_back(std::move(traffic));
       }
-      top += rh + 8;
+      top += rowHeight(p) + 8;
     }
     return y + h + kGap;
   }
