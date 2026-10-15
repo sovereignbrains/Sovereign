@@ -54,6 +54,7 @@ constexpr float kDefaultHeight = 660;
 constexpr float kMinWidth = 360;
 constexpr float kMinHeight = 440;
 constexpr float kPad = 16;         // the page's margins
+constexpr float kCaption = 36;     // our own title bar (Painter::Caption): the system's is gone
 constexpr float kMaxPage = 560;    // wider windows keep the page at this, centered
 constexpr float kRow = 44;         // a list row
 constexpr float kLatencyRow = 56;  // a server to pick: its name and latency, what the measurement is made of
@@ -134,6 +135,7 @@ constexpr const wchar_t* kGlyphChevronDown = L"\xE70D";  // a fold that opens
 constexpr const wchar_t* kGlyphChevronUp = L"\xE70E";    // ...and closes
 constexpr const wchar_t* kGlyphLog = L"\xE8A5";
 constexpr const wchar_t* kGlyphSettings = L"\xE713";
+constexpr const wchar_t* kGlyphClose = L"\xE8BB";  // ChromeClose
 constexpr const wchar_t* kGlyphPower = L"\xE7E8";
 constexpr const wchar_t* kGlyphPaste = L"\xE77F";
 constexpr const wchar_t* kGlyphRefresh = L"\xE72C";
@@ -206,6 +208,7 @@ enum class ItemAction : std::uint8_t {
   PauseLogs,
   SaveLogs,
   ToggleMore,  // the settings' "Дополнительно", folded or not (the window's own)
+  Hide,        // our title bar's cross: the window away to the tray
   Hint
 };
 
@@ -352,15 +355,20 @@ struct LiveTraffic {
   }
 };
 
-constexpr std::size_t kMaxParticles = 240;
+constexpr std::size_t kMaxParticles = 600;
 constexpr float kSparkLife = 0.6f;
 constexpr UINT_PTR kLiveTimer = 4;
 constexpr UINT kLiveFrameMs = 33;
 
-// Dots a second for `rate` bytes a second: a few for a trickle, about forty
-// for megabytes; none for nothing.
+// Dots a second for `rate` bytes a second: a few for a trickle, a river for
+// a video or two (about 130 at 1 MB/s, 160 at most); none for nothing.
 float DotsPerSecond(double rate) {
-  return rate < 64 ? 0.0f : std::min(40.0f, 3 + 6 * std::log2(1 + static_cast<float>(rate) / 16384));
+  return rate < 64 ? 0.0f : std::min(160.0f, 3 + 26 * std::log2(1 + static_cast<float>(rate) / 32768));
+}
+
+// A dot's size: bigger as the stream swells, DIPs.
+float DotSize(double rate, float random) {
+  return 1.2f + 1.2f * random + std::min(1.2f, std::log2(1 + static_cast<float>(rate) / 262144) * 0.5f);
 }
 
 // How fast: a trip of a little over two seconds, quicker as the rate grows.
@@ -430,7 +438,7 @@ void StepLive(LiveTraffic& live, const UiContent& c, bool on, float dt, D2D1_REC
   const auto spawn = [&](Stream stream, double rate) {
     if (live.particles.size() < kMaxParticles) {
       live.particles.push_back({.stream = stream, .t = 0, .speed = DotSpeed(rate) * (0.85f + 0.3f * live.Random()),
-                                .offset = live.Random() * 2 - 1, .size = 1.3f + 1.4f * live.Random(), .at = {}, .v = {}});
+                                .offset = live.Random() * 2 - 1, .size = DotSize(rate, live.Random()), .at = {}, .v = {}});
     }
   };
   const std::array<std::pair<Stream, double>, 3> streams = {
@@ -546,7 +554,7 @@ UiPage BackOf(UiPage page) {
   }
 }
 
-// Under the main screen's switch: the state in words - connected how long
+// The main screen's switch's tip: the state in words - connected how long
 // and how fast; nothing for an error (said at the top).
 std::wstring PowerLine(const UiContent& c) {
   switch (c.display) {
@@ -750,11 +758,12 @@ class Painter {
     const float pageWidth = std::min(page == UiPage::Logs ? width : kMaxPage, std::max(280.0f, width - 2 * kPad));
     const float x0 = std::max(kPad, (width - pageWidth) / 2);
     const float x1 = x0 + pageWidth;
-    l.viewTop = 0;
+    l.viewTop = kCaption;  // the page scrolls under our title bar
     l.viewBottom = height;
+    Caption(l, width);     // fixed: before the page's items, which scroll
     const std::size_t first = l.items.size();
 
-    float y = kPad;
+    float y = kCaption + 8;
     switch (page) {
       case UiPage::Overview: y = Overview(l, c, x0, x1, y, l.viewBottom - kPad); break;
       case UiPage::Servers: y = Servers(l, c, x0, x1, y); break;
@@ -1335,21 +1344,30 @@ class Painter {
     return y + h;
   }
 
+  // Our own title bar (the system's is gone - Impl's WM_NCCALCSIZE): the
+  // name on the left; the settings and the cross, hiding the window to the
+  // tray, on the right - on every page. The rest of it drags the window
+  // (WM_NCHITTEST).
+  void Caption(Layout& l, float width) const {
+    Item name = Make(Kind::Muted, {14, 9, width - 100, kCaption - 9}, L"Sovereign");
+    name.scrolls = false;
+    l.items.push_back(std::move(name));
+    Item settings = Make(Kind::IconButton, {width - 86, 0, width - 46, kCaption}, L"Настройки", kGlyphSettings);
+    settings.action = ItemAction::Page;
+    settings.index = static_cast<int>(UiPage::Settings);
+    settings.scrolls = false;
+    l.items.push_back(std::move(settings));
+    Item close = Make(Kind::IconButton, {width - 46, 0, width, kCaption}, L"Спрятать в трей", kGlyphClose);
+    close.action = ItemAction::Hide;
+    close.scrolls = false;
+    l.items.push_back(std::move(close));
+  }
+
   // The one screen for every day, top to bottom: the state, what waits for a
   // click (an update, a subscription), the switch, the server it runs on and
   // where it comes out. The rest of the window - routing, the checks, the
-  // log, the kill switch - is in the settings, a key in the top corner.
+  // log, the kill switch - is in the settings, a key in the title bar.
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
-    // The settings: a key in the subscription's card (SubscriptionCard); without one, alone at the top.
-    if (std::none_of(c.profiles.begin(), c.profiles.end(), [](const UiProfile& p) { return p.enabled; })) {
-      Item settings = Make(Kind::IconButton, {x1 - 38, y, x1, y + 38}, L"Настройки", kGlyphSettings);
-      settings.action = ItemAction::Page;
-      settings.index = static_cast<int>(UiPage::Settings);
-      settings.key = true;
-      l.items.push_back(std::move(settings));
-      y += 38 + 8;
-    }
-
     // The state is the cube's: words only when there's something to say -
     // an error with the log a click away.
     if (const std::wstring detail = StateDetail(c); !detail.empty()) {
@@ -1443,23 +1461,19 @@ class Painter {
     }
 
     // The server at the foot; the switch in the middle of what's between,
-    // big, its state in words under it, a light behind it (DrawBackdrop).
+    // big, a light behind it (DrawBackdrop) and the live traffic round it -
+    // its state in words only in its tip (PowerLine), the streams say the rest.
     constexpr float kServerCard = 60;
-    constexpr float kLine = 20;
     const float serverTop = std::max(y + 180, bottom - kServerCard);
     const float room = serverTop - y;
-    const float size = std::clamp(std::min(room - kLine - 40, (x1 - x0) * 0.6f), 88.0f, 220.0f);
-    const float top = y + std::max(0.0f, (room - size - kLine - 8) / 2);
+    const float size = std::clamp(std::min(room - 40, (x1 - x0) * 0.6f), 88.0f, 220.0f);
+    const float top = y + std::max(0.0f, (room - size) / 2);
     const float mid = (x0 + x1) / 2;
     const D2D1_RECT_F cube{mid - size / 2, top, mid + size / 2, top + size};
-    Item power = CommandItem(Kind::Power, cube, {}, kGlyphPower, UiCommand::Toggle);
+    Item power = CommandItem(Kind::Power, cube, PowerLine(c), kGlyphPower, UiCommand::Toggle);
     power.checked = c.on;
     l.items.push_back(std::move(power));
     l.glow = cube;
-    if (const std::wstring line = PowerLine(c); !line.empty()) {
-      const float w = TextWidth(line, caption_.get()) + 6;
-      l.items.push_back(Make(Kind::Muted, {mid - w / 2, cube.bottom + 8, mid + w / 2, cube.bottom + 8 + kLine}, line));
-    }
     return ServerCard(l, c, x0, x1, serverTop);
   }
 
@@ -1501,13 +1515,6 @@ class Painter {
       item.key = true;
       l.items.push_back(std::move(item));
     };
-    {
-      Item settings = Make(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Настройки", kGlyphSettings);
-      settings.action = ItemAction::Page;
-      settings.index = static_cast<int>(UiPage::Settings);
-      key(std::move(settings));
-      buttons -= 42;
-    }
     if (p.subscription) {
       key(CommandItem(Kind::IconButton, {buttons - 38, y + 14, buttons, y + 52}, L"Обновить подписку", kGlyphRefresh,
                       UiCommand::RefreshProfile, static_cast<int>(shown - c.profiles.begin())));
@@ -1743,7 +1750,7 @@ class Painter {
     if (c.profiles.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
       l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56},
-                             L"Пока ни одной — добавь ссылку, ключи, конфиг или QR-код."));
+                             L"Пока ни одной — добавь через «+» на главном экране."));
       y += 56;
     } else {
       const float h = static_cast<float>(c.profiles.size()) * kProfileRow;
@@ -1777,17 +1784,8 @@ class Painter {
       y = Paragraph(l, Kind::Caption, L"Не вошло: " + note, x0, x1, y) + 6;
     }
 
-    // Adding one: the clipboard (a link, keys, a config, a picture with a QR
-    // code, files), a file, QR codes on the screen.
-    const float mid = (x0 + x1) / 2;
-    l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Добавить из буфера", kGlyphAdd,
-                                  UiCommand::PasteSubscription));
-    y += kButton + 8;
-    l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Файл…", kGlyphFile,
-                                  UiCommand::ImportFile));
-    l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"QR с экрана", kGlyphQrCode,
-                                  UiCommand::ScanScreen));
-    return y + kButton;
+    // Adding one is the main screen's: its "+" (the clipboard, a file, a QR code).
+    return y;
   }
 
   // One configuration: its name, on/off, its subscription's refreshing, a
@@ -3181,8 +3179,8 @@ struct MainWindow::Impl {
     THROW_LAST_ERROR_IF(!window);
     const BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof dark);
-    const COLORREF caption = ui::kPanelColor;
-    DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &caption, sizeof caption);  // Windows 11; ignored on 10
+    // The frame again, now with the title bar ours (WM_NCCALCSIZE).
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     const UINT dpi = GetDpiForWindow(hwnd);
     bigIcon = LoadAppIcon(GetSystemMetricsForDpi(SM_CXICON, dpi));
     smallIcon = LoadAppIcon(GetSystemMetricsForDpi(SM_CXSMICON, dpi));
@@ -3249,6 +3247,9 @@ struct MainWindow::Impl {
            layout.items[static_cast<std::size_t>(index)].kind == kind;
   }
 
+  // Shows its words after a while: an icon button its name, the switch its state.
+  bool HasTip(int index) const { return IsKind(index, Kind::IconButton) || IsKind(index, Kind::Power); }
+
   // The pointer is over `h` now: a "?" shows its tip, an icon button starts
   // the wait for its name.
   void Hover(int h) {
@@ -3258,7 +3259,7 @@ struct MainWindow::Impl {
     in.hover = h;
     KillTimer(hwnd, kTipTimer);
     in.tip = IsKind(h, Kind::Hint) ? h : -1;
-    if (IsKind(h, Kind::IconButton)) {
+    if (HasTip(h)) {
       SetTimer(hwnd, kTipTimer, kTipDelayMs, nullptr);
     }
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -3382,7 +3383,7 @@ struct MainWindow::Impl {
     // its kind (the content refreshes every second under a resting pointer).
     const bool tipShown = in.tip >= 0;
     in.hover = mouse ? HitAt(*mouse) : -1;
-    in.tip = IsKind(in.hover, Kind::Hint) || (tipShown && IsKind(in.hover, Kind::IconButton)) ? in.hover : -1;
+    in.tip = IsKind(in.hover, Kind::Hint) || (tipShown && HasTip(in.hover)) ? in.hover : -1;
     if (in.focus >= static_cast<int>(layout.items.size()) ||
         (in.focus >= 0 && !Interactive(layout.items[static_cast<std::size_t>(in.focus)]))) {
       in.focus = -1;
@@ -3657,6 +3658,7 @@ struct MainWindow::Impl {
         settingsMore = !settingsMore;
         Relayout();
         return;
+      case ItemAction::Hide: PostMessageW(hwnd, WM_CLOSE, 0, 0); return;
       case ItemAction::Command: break;
     }
     UiArgs args;
@@ -3967,6 +3969,38 @@ struct MainWindow::Impl {
         return 0;
       }
       case WM_ERASEBKGND: return 1;  // Direct2D paints everything
+      case WM_NCCALCSIZE:
+        if (wParam == TRUE) {
+          // No system title bar: ours is in the client (Painter::Caption);
+          // the sides and the bottom keep their sizing borders.
+          auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);  // NOLINT(performance-no-int-to-ptr)
+          const LONG top = params->rgrc[0].top;
+          const LRESULT result = DefWindowProcW(w, message, wParam, lParam);
+          params->rgrc[0].top = top;
+          return result;
+        }
+        return DefWindowProcW(w, message, wParam, lParam);
+      case WM_NCHITTEST: {
+        // The sides, the bottom, the corners - the system's; the top edge
+        // sizes it, our title bar drags it but for its buttons.
+        const LRESULT hit = DefWindowProcW(w, message, wParam, lParam);
+        if (hit != HTCLIENT) {
+          return hit;
+        }
+        POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(w, &at);
+        const UINT dpi = GetDpiForWindow(w);
+        const int frame = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        if (at.y < frame) {
+          RECT rc{};
+          GetClientRect(w, &rc);
+          return at.x < frame * 2 ? HTTOPLEFT : at.x >= rc.right - frame * 2 ? HTTOPRIGHT : HTTOP;
+        }
+        if (ToDip(at.y) < kCaption && !IsKind(HitAt(at), Kind::IconButton)) {
+          return HTCAPTION;
+        }
+        return HTCLIENT;
+      }
       case WM_SIZE:
         EndEdit(true);
         if (target) {
@@ -4050,7 +4084,7 @@ struct MainWindow::Impl {
         }
         if (wParam == kTipTimer) {
           KillTimer(w, kTipTimer);
-          if (IsKind(in.hover, Kind::IconButton)) {
+          if (HasTip(in.hover)) {
             in.tip = in.hover;
             InvalidateRect(w, nullptr, FALSE);
           }
