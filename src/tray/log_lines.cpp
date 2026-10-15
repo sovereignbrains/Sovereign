@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cstddef>
 #include <utility>
 
@@ -27,6 +28,9 @@ std::optional<LogsPage> ParseLogsResponse(std::string_view response) {
     line.level = Field<std::string>(entry, "level", {});
     const std::string message = Field<std::string>(entry, "message", {});
     line.message = std::string(StripCoreLevelPrefix(message));
+    if (Harmless(line.message)) {
+      line.level = "debug";
+    }
     page.lines.push_back(std::move(line));
   }
   return page;
@@ -52,6 +56,19 @@ std::string_view StripCoreLevelPrefix(std::string_view message) {
     ++j;
   }
   return message.substr(j);
+}
+
+bool Harmless(std::string_view message) {
+  // A QUIC stream (Hysteria 2, TUIC) the other end closed with code 0 - no
+  // error: a site done with a connection. sing-box says ERROR every time
+  // (every 15 s with Telegram, 15.10.2026), which only scared.
+  for (const std::string_view said : {"canceled by remote with error code 0", "canceled by local with error code 0"}) {
+    if (const std::size_t at = message.find(said); at != std::string_view::npos) {
+      const std::size_t end = at + said.size();
+      return end == message.size() || std::isalnum(static_cast<unsigned char>(message[end])) == 0;  // not 0x10, 01
+    }
+  }
+  return false;
 }
 
 }  // namespace sovereign::tray

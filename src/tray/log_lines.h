@@ -30,4 +30,8 @@ std::optional<LogsPage> ParseLogsResponse(std::string_view response);
 // of its own. Anything else is returned as is.
 std::string_view StripCoreLevelPrefix(std::string_view message);
 
+// An error sing-box reports that isn't one - a stream the other end closed
+// with "no error" - shown as debug (ParseLogsResponse), not in red.
+bool Harmless(std::string_view message);
+
 }  // namespace sovereign::tray

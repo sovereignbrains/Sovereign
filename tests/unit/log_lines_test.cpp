@@ -53,6 +53,21 @@ void TestStripsOnlyTheLevelPrefix() {
   CHECK(StripCoreLevelPrefix("") == "");
 }
 
+void TestHarmlessErrorsAreDebug() {
+  const auto page = ParseLogsResponse(
+      R"({"cmd":"box_logs","entries":[)"
+      R"({"level":"error","message":"ERROR[4635] [1050002654 317ms] connection: connection upload closed: stream 4468 canceled by remote with error code 0"},)"
+      R"({"level":"error","message":"ERROR[4636] connection: stream 12 canceled by remote with error code 258"}],"next":2})");
+  CHECK(page.has_value());
+  if (page) {
+    CHECK(page->lines.size() == 2 && page->lines[0].level == "debug");
+    CHECK(page->lines[1].level == "error");  // code 258: an error indeed
+  }
+  CHECK(Harmless("stream 4 canceled by local with error code 0"));
+  CHECK(!Harmless("stream 4 canceled by remote with error code 0x101"));
+  CHECK(!Harmless("dial tcp: i/o timeout"));
+}
+
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
@@ -60,6 +75,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestParsesAPage();
     TestRejectsWhatIsNotAPage();
     TestStripsOnlyTheLevelPrefix();
+    TestHarmlessErrorsAreDebug();
     TestHostileTypes();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";

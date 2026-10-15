@@ -84,6 +84,14 @@ constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the windo
 // no more either).
 constexpr float kLogLine = 20;
 constexpr std::size_t kLogKeep = 5000;
+// Its scrollbar: the strip at its right edge a press takes - wider than the
+// thumb drawn. The middle button's scrolling: a frame, the still zone round
+// where it was pressed, and held this long (or moved) it ends on release.
+constexpr float kLogBar = 14;
+constexpr UINT_PTR kPanTimer = 3;
+constexpr UINT kPanFrameMs = 16;
+constexpr float kPanStill = 10;
+constexpr ULONGLONG kPanHoldMs = 300;
 
 // The log's right-click menu.
 // The edit box typed in lost the focus: keep what's in it (posted - the box
@@ -277,6 +285,8 @@ struct LogView {
   bool follow = true;   // stays at the bottom as lines come
   int anchor = -1;      // -1: no selection
   int caret = -1;
+  bool barHot = false;  // the pointer on the scrollbar, or dragging it: drawn wider
+  std::optional<D2D1_POINT_2F> pan;  // the middle button's scrolling: where it was pressed
 
   int Count() const { return static_cast<int>(shown.size()); }
   const std::wstring& Line(int i) const { return lines[static_cast<std::size_t>(shown[static_cast<std::size_t>(i)])]; }
@@ -296,6 +306,18 @@ struct LogView {
     }
   }
 };
+
+// The log's scrollbar thumb in `box` - its strip's width, the drawn part is
+// thinner; none while every line fits.
+std::optional<D2D1_RECT_F> LogThumb(D2D1_RECT_F box, const LogView& log) {
+  const float view = box.bottom - box.top;
+  if (log.Height() <= view + 1) {
+    return std::nullopt;
+  }
+  const float thumb = std::max(32.0f, view * view / log.Height());
+  const float top = box.top + (view - thumb) * (log.scroll / (log.Height() - view));
+  return D2D1_RECT_F{box.right - kLogBar, top, box.right, top + thumb};
+}
 
 // What the log page's layout shows of the log's state.
 struct LogState {
@@ -571,7 +593,8 @@ class Painter {
   Layout Build(const UiContent& c, UiPage page, const std::string& profile, float width, float height, float& scroll,
                const LogState& logState) const {
     Layout l;
-    const float pageWidth = std::min(kMaxPage, std::max(280.0f, width - 2 * kPad));
+    // The log takes a wide window whole: its lines are long.
+    const float pageWidth = std::min(page == UiPage::Logs ? width : kMaxPage, std::max(280.0f, width - 2 * kPad));
     const float x0 = std::max(kPad, (width - pageWidth) / 2);
     const float x1 = x0 + pageWidth;
     l.viewTop = 0;
@@ -2109,7 +2132,8 @@ class Painter {
 
     // Fills the window: the lines scroll inside, the page doesn't.
     const float detailHeight =
-        s.detail.empty() ? 0.0f : std::min(84.0f, TextHeight(s.detail, captionWrap_.get(), x1 - x0 - 28)) + 20;
+        s.detail.empty() ? 0.0f
+                         : std::min(std::max(84.0f, height * 0.3f), TextHeight(s.detail, captionWrap_.get(), x1 - x0 - 28)) + 20;
     const float bottom = std::max(y + 120, height - kPad - (detailHeight > 0 ? detailHeight + 8 : 0.0f));
     l.items.push_back(Make(Kind::Card, {x0, y, x1, bottom}));
     l.items.push_back(Make(Kind::LogBox, {x0, y, x1, bottom}));
@@ -2566,7 +2590,6 @@ class Painter {
       return;
     }
     k.t->PushAxisAlignedClip(box, D2D1_ANTIALIAS_MODE_ALIASED);
-    const float view = box.bottom - box.top;
     const auto first = static_cast<std::size_t>(std::max(0.0f, std::floor(log.scroll / kLogLine)));
     for (auto i = static_cast<int>(first); i < log.Count(); ++i) {
       const float top = box.top + static_cast<float>(i) * kLogLine - log.scroll;
@@ -2599,10 +2622,18 @@ class Painter {
         k.Text(line, mono_.get(), {x, row.top, box.right - 14, row.bottom}, primary);
       }
     }
-    if (log.Height() > view + 1) {
-      const float thumb = std::max(32.0f, view * view / log.Height());
-      const float top = box.top + (view - thumb) * (log.scroll / (log.Height() - view));
-      k.Round({box.right - 7, top + 2, box.right - 4, top + thumb - 2}, 1.5f, Rgb(255, 255, 255, 0.22f));
+    if (const auto thumb = LogThumb(box, log)) {
+      // Thin at rest; wider and brighter under the pointer, to be taken.
+      const float width = log.barHot ? 8.0f : 3.0f;
+      k.Round({box.right - 4 - width, thumb->top + 2, box.right - 4, thumb->bottom - 2}, width / 2,
+              Rgb(255, 255, 255, log.barHot ? 0.45f : 0.22f));
+    }
+    if (log.pan) {
+      // Where the middle button went down: the farther from it, the faster.
+      const D2D1_POINT_2F at = *log.pan;
+      k.t->FillEllipse(D2D1::Ellipse(at, 12, 12), k.Color(Rgb(20, 24, 32, 0.85f)));
+      k.t->DrawEllipse(D2D1::Ellipse(at, 12, 12), k.Color(Rgb(255, 255, 255, 0.6f)), 1.2f);
+      k.t->FillEllipse(D2D1::Ellipse(at, 2.5f, 2.5f), k.Color(Rgb(255, 255, 255, 0.85f)));
     }
     k.t->PopAxisAlignedClip();
   }
@@ -2799,6 +2830,10 @@ struct MainWindow::Impl {
   Interaction in;
   LogView log;
   bool selecting = false;      // dragging a selection over the log
+  std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
+  ULONGLONG panSince = 0;        // the middle button went down (log.pan)
+  bool panMoved = false;         // the pointer left the still zone since
+  bool panEndedByRight = false;  // a right press ended it: no menu on its release
   std::optional<POINT> mouse;  // the cursor over the client area, in pixels
   bool placed = false;  // sized and put by the tray once, on the first show
 
@@ -2977,6 +3012,68 @@ struct MainWindow::Impl {
     const float y = ToDip(px.y) - layout.logBox->top + log.scroll;
     const auto line = static_cast<int>(std::floor(y / kLogLine));
     return std::clamp(line, 0, log.Count() - 1);
+  }
+
+  // On the log's scrollbar strip, with something to scroll.
+  bool OnLogBar(POINT px) const {
+    return InLog(px) && LogThumb(*layout.logBox, log) && ToDip(px.x) >= layout.logBox->right - kLogBar;
+  }
+
+  // The thumb's top dragged to `top` (DIPs): the lines scrolled to match.
+  void DragLogThumb(float top) {
+    if (!layout.logBox) {
+      return;
+    }
+    const D2D1_RECT_F box = *layout.logBox;
+    const auto thumb = LogThumb(box, log);
+    if (!thumb) {
+      return;
+    }
+    const float view = box.bottom - box.top;
+    const float room = view - (thumb->bottom - thumb->top);
+    const float at = room > 0 ? std::clamp((top - box.top) / room, 0.0f, 1.0f) : 0.0f;
+    ScrollLog(at * (log.Height() - view) - log.scroll);
+  }
+
+  static HCURSOR PanCursor() { return LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)); }  // IDC_SIZENS
+
+  // The middle button's scrolling, as browsers have it: held and moved, it
+  // ends on release; clicked, it goes on until the next press, a key or the wheel.
+  void StartPan(POINT px) {
+    SetCapture(hwnd);  // first: taken from another, WM_CAPTURECHANGED would end it
+    log.pan = D2D1::Point2F(ToDip(px.x), ToDip(px.y));
+    panSince = GetTickCount64();
+    panMoved = false;
+    SetTimer(hwnd, kPanTimer, kPanFrameMs, nullptr);
+    SetCursor(PanCursor());
+    InvalidateRect(hwnd, nullptr, FALSE);
+  }
+
+  void StopPan() {
+    if (!log.pan) {
+      return;
+    }
+    log.pan.reset();
+    KillTimer(hwnd, kPanTimer);
+    if (GetCapture() == hwnd) {
+      ReleaseCapture();
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
+  }
+
+  // A frame of it: the farther the pointer from where it was pressed, the
+  // faster - a few lines a second near, thousands far.
+  void PanStep() {
+    POINT px{};
+    GetCursorPos(&px);
+    ScreenToClient(hwnd, &px);
+    const float off = ToDip(px.y) - log.pan->y;
+    const float beyond = std::abs(off) - kPanStill;
+    if (beyond <= 0) {
+      return;
+    }
+    panMoved = true;
+    ScrollLog(std::copysign(beyond * 0.12f + beyond * beyond * 0.003f, off));
   }
 
   // The log's scroll within its lines, or at the bottom while following.
@@ -3622,6 +3719,18 @@ struct MainWindow::Impl {
       case WM_MOUSEMOVE: {
         const POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         mouse = at;
+        if (log.pan) {
+          SetCursor(PanCursor());  // captured: no WM_SETCURSOR comes
+          return 0;
+        }
+        if (barGrab) {
+          DragLogThumb(ToDip(at.y) - *barGrab);
+          return 0;
+        }
+        if (const bool hot = page == UiPage::Logs && OnLogBar(at); hot != log.barHot) {
+          log.barHot = hot;
+          InvalidateRect(w, nullptr, FALSE);
+        }
         if (selecting && layout.logBox) {
           const D2D1_RECT_F box = *layout.logBox;
           if (const int line = LogLineAt(at); line >= 0 && line != log.caret) {
@@ -3643,6 +3752,7 @@ struct MainWindow::Impl {
       }
       case WM_MOUSELEAVE:
         mouse.reset();
+        log.barHot = barGrab.has_value();
         Hover(-1);
         return 0;
       case WM_TIMER:
@@ -3652,6 +3762,12 @@ struct MainWindow::Impl {
             KillTimer(w, kCubeTimer);
           }
           InvalidateRect(w, nullptr, FALSE);
+          return 0;
+        }
+        if (wParam == kPanTimer) {
+          if (log.pan) {
+            PanStep();
+          }
           return 0;
         }
         if (wParam == kTipTimer) {
@@ -3665,9 +3781,22 @@ struct MainWindow::Impl {
         return DefWindowProcW(w, message, wParam, lParam);
       case WM_LBUTTONDOWN: {
         const POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (log.pan) {
+          StopPan();  // a press ends it, and does nothing else
+          return 0;
+        }
         SetFocus(w);
         SetCapture(w);
         in.focusVisible = false;
+        if (page == UiPage::Logs && OnLogBar(at)) {
+          // The thumb taken where pressed; a press beside it brings it there.
+          const D2D1_RECT_F thumb = *LogThumb(*layout.logBox, log);
+          const float y = ToDip(at.y);
+          barGrab = y >= thumb.top && y < thumb.bottom ? y - thumb.top : (thumb.bottom - thumb.top) / 2;
+          log.barHot = true;
+          DragLogThumb(y - *barGrab);
+          return 0;
+        }
         if (InLog(at)) {
           const int line = LogLineAt(at);
           if ((wParam & MK_SHIFT) != 0 && log.HasSelection() && line >= 0) {
@@ -3684,6 +3813,13 @@ struct MainWindow::Impl {
         return 0;
       }
       case WM_LBUTTONUP: {
+        if (barGrab) {
+          barGrab.reset();
+          ReleaseCapture();
+          log.barHot = mouse && OnLogBar(*mouse);
+          InvalidateRect(w, nullptr, FALSE);
+          return 0;
+        }
         ReleaseCapture();
         if (std::exchange(selecting, false)) {
           return 0;
@@ -3700,8 +3836,33 @@ struct MainWindow::Impl {
       }
       case WM_CAPTURECHANGED:
         selecting = false;
+        barGrab.reset();
+        StopPan();
         return 0;
+      case WM_MBUTTONDOWN: {
+        // The middle button on the log: scrolling by where the pointer goes.
+        const POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (log.pan) {
+          StopPan();
+        } else if (page == UiPage::Logs && InLog(at) && LogThumb(*layout.logBox, log)) {
+          StartPan(at);
+        }
+        return 0;
+      }
+      case WM_MBUTTONUP:
+        if (log.pan && (panMoved || GetTickCount64() - panSince >= kPanHoldMs)) {
+          StopPan();
+        }
+        return 0;
+      case WM_RBUTTONDOWN:
+        if (log.pan) {
+          StopPan();
+          panEndedByRight = true;
+          return 0;
+        }
+        return DefWindowProcW(w, message, wParam, lParam);
       case WM_MOUSEWHEEL: {
+        StopPan();
         POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(w, &at);
         const float step = -static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
@@ -3714,6 +3875,9 @@ struct MainWindow::Impl {
       }
       case WM_KEYDOWN: return Key(wParam) ? 0 : DefWindowProcW(w, message, wParam, lParam);
       case WM_CONTEXTMENU:
+        if (std::exchange(panEndedByRight, false)) {
+          return 0;
+        }
         if (page == UiPage::Logs && layout.logBox) {
           POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
           if (at.x == -1 && at.y == -1) {
@@ -3732,6 +3896,7 @@ struct MainWindow::Impl {
         return DefWindowProcW(w, message, wParam, lParam);
       case WM_ACTIVATE:
         if (LOWORD(wParam) == WA_INACTIVE) {
+          StopPan();
           deactivatedAt = GetTickCount64();
         }
         return DefWindowProcW(w, message, wParam, lParam);
@@ -3759,6 +3924,10 @@ struct MainWindow::Impl {
   }
 
   bool Key(WPARAM key) {
+    if (log.pan) {
+      StopPan();  // a key ends the middle button's scrolling, and does nothing else
+      return true;
+    }
     const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
     if (ctrl && key >= '1' && key < '1' + kUiPageCount) {
