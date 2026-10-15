@@ -38,16 +38,38 @@ std::string Read(const fs::path& path) {
   return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
-// The kill switch: on for a new user; a tray.json that says nothing of it
-// (from before it was the default) keeps it off; what it says stays.
+// The kill switch: on for a new user, quietly; off in a tray.json the user
+// never switched it in (nothing of it, or an update's false) - on, and said;
+// off by the user's own hand stays off, and that survives a save.
 void TestKillSwitchDefault(const fs::path& data) {
   std::error_code ec;
   fs::remove_all(data, ec);
-  CHECK(LoadSettings().killSwitch);
-  Write(data / "tray.json", R"({"wantOn":false})");
-  CHECK(!LoadSettings().killSwitch);
+  {
+    const TraySettings s = LoadSettings();
+    CHECK(s.killSwitch);
+    CHECK(!s.killSwitchTurnedOn);
+  }
+  for (const char* text : {R"({"wantOn":false})", R"({"wantOn":false,"killSwitch":false})"}) {
+    Write(data / "tray.json", text);
+    const TraySettings s = LoadSettings();
+    CHECK(s.killSwitch);
+    CHECK(s.killSwitchTurnedOn);
+  }
   Write(data / "tray.json", R"({"wantOn":false,"killSwitch":true})");
   CHECK(LoadSettings().killSwitch);
+  CHECK(!LoadSettings().killSwitchTurnedOn);
+  Write(data / "tray.json", R"({"wantOn":false,"killSwitch":false,"killSwitchChosen":true})");
+  {
+    TraySettings s = LoadSettings();
+    CHECK(!s.killSwitch);
+    CHECK(!s.killSwitchTurnedOn);
+    SaveSettings(s);
+  }
+  CHECK(!LoadSettings().killSwitch);
+  // The old "killSwitchLan": false meant the local network closed with the
+  // kill switch on - judged by what the file said, not by the turning on.
+  Write(data / "tray.json", R"({"wantOn":false,"killSwitch":false,"killSwitchLan":false})");
+  CHECK(!LoadSettings().lanClosed);
   fs::remove_all(data, ec);
 }
 

@@ -233,16 +233,23 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("routingMore"); v != json.end() && v->is_boolean()) {
     settings.routingMore = v->get<bool>();
   }
+  // What the file says; nothing - a tray.json from before it was the default - off.
+  bool killSwitch = false;
   if (const auto v = json.find("killSwitch"); v != json.end() && v->is_boolean()) {
-    settings.killSwitch = v->get<bool>();
-  } else {
-    settings.killSwitch = false;  // a tray.json from before it was the default: off, as it was
+    killSwitch = v->get<bool>();
   }
+  if (const auto v = json.find("killSwitchChosen"); v != json.end() && v->is_boolean()) {
+    settings.killSwitchChosen = v->get<bool>();
+  }
+  // Off, and not the user's doing: an update's leftover - the traffic went
+  // around a dropped connection unasked. On, once; the user can say off again.
+  settings.killSwitch = killSwitch || !settings.killSwitchChosen;
+  settings.killSwitchTurnedOn = settings.killSwitch && !killSwitch;
   if (const auto v = json.find("lanClosed"); v != json.end() && v->is_boolean()) {
     settings.lanClosed = v->get<bool>();
   } else if (const auto old = json.find("killSwitchLan"); old != json.end() && old->is_boolean()) {
     // Before: the kill switch without the local network - the same wish.
-    settings.lanClosed = settings.killSwitch && !old->get<bool>();
+    settings.lanClosed = killSwitch && !old->get<bool>();
   }
   if (const auto v = json.find("lanAllowed"); v != json.end() && v->is_array()) {
     for (const auto& host : *v) {
@@ -315,6 +322,7 @@ void SaveSettings(const TraySettings& settings) {
   json["routingMore"] = settings.routingMore;
   json["logLevel"] = settings.logLevel;
   json["killSwitch"] = settings.killSwitch;
+  json["killSwitchChosen"] = settings.killSwitchChosen;
   json["lanClosed"] = settings.lanClosed;
   json["lanAllowed"] = nlohmann::json::array();
   for (const LanHost& host : settings.lanAllowed) {

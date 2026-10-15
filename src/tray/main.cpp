@@ -662,6 +662,13 @@ class Worker {
     for (const Profile& profile : settings_.profiles) {
       AdoptOriginal(profile);
     }
+    if (settings_.killSwitchTurnedOn) {
+      Save();  // said once: on in the file now
+      Notify(L"Sovereign: Kill switch включён",
+             L"После обновления он оставался выключенным: при обрыве VPN трафик шёл бы мимо него. "
+             L"Выключить можно в настройках.",
+             false, UiPage::Settings);
+    }
     while (!stop.stop_requested()) {
       std::optional<bool> want;
       std::optional<std::string> import;
@@ -813,6 +820,7 @@ class Worker {
       }
       if (toggleKillSwitch) {
         settings_.killSwitch = !settings_.killSwitch;
+        settings_.killSwitchChosen = true;
         killSwitchError_.clear();
         lastKillSwitchTry_.reset();
         Save();

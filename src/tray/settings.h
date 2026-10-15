@@ -23,7 +23,7 @@ namespace sovereign::tray {
 //
 //   tray.json    {"wantOn", "profiles", "protocol", "routing", "appsMode", "apps",
 //                 "appPaths", "hideExitIp", "delaysDetailed", "connectAtStartup", "routingMore", "logLevel", "killSwitch",
-//                 "lanClosed", "lanAllowed"}
+//                 "killSwitchChosen", "lanClosed", "lanAllowed"}
 //   profiles\<id>\         one configuration (profiles.h), each with:
 //     config.json            the sing-box config: the subscription's copy,
 //                            the user's edits on it, or the user's own; the
@@ -75,9 +75,12 @@ struct TraySettings {
   // The kill switch (the service's kill_switch.h): in force while the
   // connection is meant to be on, so a drop doesn't let traffic around it.
   // On for a new user (0.4.70 on: the window offers the way out when it locks
-  // the internet - main.cpp UpdateLockout); a tray.json there already keeps
-  // what it says, and off if it says nothing.
+  // the internet - main.cpp UpdateLockout). Off in a tray.json the user never
+  // switched it in (0.5.6 on: killSwitchChosen) is what an update from before
+  // 0.4.70 left - turned on once, and said so (killSwitchTurnedOn).
   bool killSwitch = true;
+  bool killSwitchChosen = false;    // the user switched it (Settings): what it says stays
+  bool killSwitchTurnedOn = false;  // this load turned it on; not saved
   // The local network closed both ways while the connection is meant to be
   // on - nothing of it reaches the PC, the PC reaches nothing of it - but for
   // the addresses let in. Open, the kill switch doesn't close it either. (A
