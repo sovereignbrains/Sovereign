@@ -3446,7 +3446,8 @@ wil::unique_hbitmap GlyphMenuIcon(const wchar_t* glyph) {
   GdiFlush();
   constexpr std::uint32_t kInk = 235;  // the dark menus' text: near white
   for (std::uint32_t& pixel : std::span(static_cast<std::uint32_t*>(bits), static_cast<std::size_t>(size) * size)) {
-    const std::uint32_t alpha = std::max({pixel & 0xFFU, (pixel >> 8) & 0xFFU, (pixel >> 16) & 0xFFU});
+    // In parentheses: windows.h's max macro, where NOMINMAX isn't set (clang-tidy in CI).
+    const std::uint32_t alpha = (std::max)({pixel & 0xFFU, (pixel >> 8) & 0xFFU, (pixel >> 16) & 0xFFU});
     const std::uint32_t ink = kInk * alpha / 255;  // premultiplied
     pixel = (alpha << 24) | (ink << 16) | (ink << 8) | ink;
   }

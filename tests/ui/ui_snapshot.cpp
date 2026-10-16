@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -366,29 +367,62 @@ int EditTest(HINSTANCE instance) {
   });
   window.Update(SampleContent());
   window.Show(UiPage::Subscription);
-  HWND hwnd = FindWindowW(L"SovereignMainWindow", nullptr);
+  // This thread's own window - never FindWindowW: an installed Sovereign has
+  // a window of the same class, and the keys below went to it (16.10.2026:
+  // a desktop run turned the user's connection off).
+  HWND hwnd = nullptr;
+  EnumThreadWindows(
+      GetCurrentThreadId(),
+      [](HWND candidate, LPARAM found) -> BOOL {
+        std::array<wchar_t, 64> name{};
+        GetClassNameW(candidate, name.data(), static_cast<int>(name.size()));
+        if (std::wstring_view(name.data()) != L"SovereignMainWindow") {
+          return TRUE;
+        }
+        *reinterpret_cast<HWND*>(found) = candidate;  // NOLINT(performance-no-int-to-ptr) - the API's context
+        return FALSE;
+      },
+      reinterpret_cast<LPARAM>(&hwnd));
+  if (hwnd == nullptr) {
+    std::fputs("edit in place: no window of this test's own\n", stderr);
+    return 1;
+  }
+  // A fifth of a second of the window's messages. Timed, not drained: on the
+  // main page the live traffic's WM_PAINT asks for the next frame (0.5.3 on)
+  // and waits for vsync, so the queue never runs dry - draining it after Esc
+  // led there never returned (CI failed from dc9e160 on, a desktop run hung).
   const auto pump = [] {
-    for (int i = 0; i < 20; ++i) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    while (std::chrono::steady_clock::now() < until) {
       MSG msg;
-      while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+      } else {
+        Sleep(10);
       }
-      Sleep(10);
     }
   };
   const auto key = [&](WPARAM vk) {
     SendMessageW(hwnd, WM_KEYDOWN, vk, 0);
     pump();
   };
+  // Tab goes through the window's own caption first - "+", the settings,
+  // "hide" (0.4.97 on) - then the page's back arrow. Before, the count left
+  // them out: Enter landed on "+" and its menu waited for a click (CI failed
+  // from dc9e160 on, a desktop run hung).
+  constexpr int kCaptionButtons = 3;
+  const auto tabs = [&](int n) {
+    for (int i = 0; i < n; ++i) {
+      key(VK_TAB);
+    }
+  };
   const auto startEdit = [&] {
     key(VK_ESCAPE);  // to the list, if on the configuration's page
     window.Show(UiPage::Subscription);
-    key(VK_TAB);  // back
-    key(VK_TAB);  // the first configuration
+    tabs(kCaptionButtons + 2);  // past the caption and back: the first configuration
     key(VK_RETURN);
-    key(VK_TAB);  // back
-    key(VK_TAB);  // the title
+    tabs(kCaptionButtons + 2);  // past the caption and back: the title
     key(VK_RETURN);
     return FindWindowExW(hwnd, nullptr, L"EDIT", nullptr);
   };
