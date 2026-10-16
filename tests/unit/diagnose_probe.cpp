@@ -59,6 +59,16 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
                                  static constexpr const char* kStatus[] = {"-", "...", "OK  ", "WARN", "FAIL"};
                                  std::printf("%s %-12s %s\n     %s\n", kStatus[static_cast<int>(r.status)],
                                              kNames[static_cast<int>(id)], r.summary.c_str(), r.detail.c_str());
+                                 // The speed test's graph, as numbers: Mbit/s a quarter of a second.
+                                 for (const auto* series : {&r.speedDown, &r.speedUp}) {
+                                   if (!series->empty()) {
+                                     std::printf("     %s", series == &r.speedDown ? "down:" : "up:  ");
+                                     for (const float mbps : *series) {
+                                       std::printf(" %.0f", mbps);
+                                     }
+                                     std::printf("\n");
+                                   }
+                                 }
                                });
   } catch (const std::exception& e) {
     std::fprintf(stderr, "diagnose-probe: %s\n", e.what());

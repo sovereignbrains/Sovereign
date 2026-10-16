@@ -102,13 +102,13 @@ void TestRoutes() {
 
   RoutingSettings routing;  // «Российское напрямую» on
   const auto site = [](const char* host, bool russian, std::optional<RouteWay> way) {
-    return SiteWay{.host = host, .russian = russian, .resolved = true, .way = std::move(way)};
+    return SiteWay{.host = host, .where = {}, .russian = russian, .resolved = true, .way = std::move(way)};
   };
   // As it should be: one line by outcome, in the sites' order.
   CheckResult r = JudgeRoutes({site("ya.ru", true, direct), site("spiegel.de", false, vpn), site("chatgpt.com", false, vpn)},
                               routing);
   CHECK(r.status == CheckResult::Status::Ok);
-  CHECK(r.summary == "напрямую: ya.ru · через VPN: spiegel.de, chatgpt.com");
+  CHECK(r.summary == "ya.ru → напрямую · spiegel.de, chatgpt.com → через VPN");
   CHECK(r.detail.find("chatgpt.com — через VPN (AnyTLS · aeza)") != std::string::npos);
   CHECK(r.detail.find("ya.ru — напрямую; российская зона .ru → напрямую") != std::string::npos);
 
@@ -120,11 +120,24 @@ void TestRoutes() {
   CHECK(JudgeRoutes({site("spiegel.de", false, direct)}, routing).status == CheckResult::Status::Ok);
   routing.rules.clear();
 
+  // Named by what they stand for, as "Проверить всё" sends them (kRouteProbes).
+  {
+    std::vector<SiteWay> probes;
+    probes.reserve(kRouteProbes.size());
+    for (const RouteProbe& probe : kRouteProbes) {
+      probes.push_back(SiteWay{.host = std::string(probe.host),
+                               .where = std::string(probe.where),
+                               .russian = probe.russian,
+                               .resolved = true,
+                               .way = probe.russian ? std::optional<RouteWay>(direct) : vpn});
+    }
+    CHECK(JudgeRoutes(probes, routing).summary == "Россия → напрямую · Европа, США → через VPN");
+  }
   // Only chosen things through the VPN: a foreign site directly is the mode, not a failure.
   r = JudgeRoutes({site("ya.ru", true, direct), site("spiegel.de", false, direct), site("chatgpt.com", false, direct)},
                   routing, /*selective=*/true);
   CHECK(r.status == CheckResult::Status::Ok);
-  CHECK(r.summary == "напрямую: ya.ru, spiegel.de, chatgpt.com");
+  CHECK(r.summary == "ya.ru, spiegel.de, chatgpt.com → напрямую");
   CHECK(r.detail.starts_with("Через VPN идут только выбранные"));
 
   // The Russian one through the VPN: a warning with «Российское напрямую» on,
@@ -133,10 +146,10 @@ void TestRoutes() {
   routing.russiaDirect = false;
   CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Ok);
   r = JudgeRoutes({site("ya.ru", true, vpn), site("chatgpt.com", false, std::nullopt),
-                   SiteWay{.host = "nx.example", .russian = false, .resolved = false, .way = std::nullopt}},
+                   SiteWay{.host = "nx.example", .where = {}, .russian = false, .resolved = false, .way = std::nullopt}},
                   routing);
   CHECK(r.status == CheckResult::Status::Warn);
-  CHECK(r.summary == "через VPN: ya.ru · не видно: chatgpt.com · не находится: nx.example");
+  CHECK(r.summary == "ya.ru → через VPN · chatgpt.com → не видно · nx.example → не находится");
 }
 
 void TestRules() {

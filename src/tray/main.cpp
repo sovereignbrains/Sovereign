@@ -4183,7 +4183,7 @@ UiContent ContentFrom(const View& v) {
   }
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckTitles = {
       L"Выход через VPN", L"Российское напрямую", L"Утечка DNS",        L"WebRTC / UDP", L"IPv6",
-      L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Куда пойдёт адрес"};
+      L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Куда идут сайты"};
   // What each check does - its "?" on the page.
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckHints = {
       L"Какой адрес и страну видят зарубежные сайты (Cloudflare). Должен быть адрес сервера, а не твой.",
@@ -4199,9 +4199,10 @@ UiContent ContentFrom(const View& v) {
       L"Сколько занимает узнать адрес сайта: зарубежного (через VPN) и российского (напрямую).",
       L"Скорость скачивания и отдачи через текущий маршрут (speed.cloudflare.com). Гоняет десятки мегабайт — "
       L"поэтому своей кнопкой.",
-      L"Открывает российский, европейский и американский сайт (ya.ru, spiegel.de, chatgpt.com) и спрашивает ядро, "
-      L"куда пошло каждое соединение и по какому правилу. Российский должен идти напрямую, зарубежные — через "
-      L"VPN. Свой адрес — кнопкой справа."};
+      L"Открывает три сайта — российский (ya.ru), европейский (spiegel.de) и американский (chatgpt.com) — и "
+      L"показывает, как пошёл каждый: напрямую или через VPN. «Россия → напрямую · Европа, США → через VPN» — "
+      L"обычная картина. В режиме «только выбранное» напрямую идут все три: через VPN — только программы и сайты "
+      L"из списка. Проверить любой свой адрес — кнопкой справа."};
   for (std::size_t i = 0; i < sovereign::tray::kCheckCount; ++i) {
     const auto& result = v.checks[i];
     c.checks.push_back({.title = kCheckTitles[i],
@@ -4211,7 +4212,9 @@ UiContent ContentFrom(const View& v) {
                         .hint = kCheckHints[i],
                         .fix = result.status == sovereign::tray::CheckResult::Status::Fail
                                    ? static_cast<sovereign::tray::UiCheck::Fix>(result.fix)
-                                   : sovereign::tray::UiCheck::Fix::None});
+                                   : sovereign::tray::UiCheck::Fix::None,
+                        .speedDown = result.speedDown,
+                        .speedUp = result.speedUp});
   }
   c.checksRunning = v.checksRunning;
   using sovereign::tray::RoutingSettings;

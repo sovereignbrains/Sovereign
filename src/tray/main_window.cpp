@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "cube.h"
+#include "diagnostics.h"
 #include "flags.h"
 #include "icons.h"
 #include "resource.h"
@@ -67,6 +68,7 @@ constexpr float kHint = 18;        // a "?" that shows a tip when pointed at
 // The checks with a button of their own (diagnostics.h CheckId order).
 constexpr std::size_t kCheckSpeed = 7;
 constexpr std::size_t kCheckRoute = 8;
+constexpr float kSpeedGraph = 150;  // the speed test's graph under the checks
 constexpr float kServerRow = 60;   // a server on a configuration's page: its name, protocol and switch
 constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
@@ -196,6 +198,7 @@ enum class Kind : std::uint8_t {
   Meter,         // a thin bar: how much is used (index: per mille)
   Tag,           // a thing on the routing board: a program's icon (text2: its exe), its name, a detail after it
   AppTitle,      // our title bar's name, after the app's icon (text2: the exe it's taken from)
+  SpeedGraph,    // the speed test's throughput over time, down and up (index: its check's, UiCheck speedDown/Up)
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
@@ -742,7 +745,7 @@ class Painter {
     const float x1 = x0 + pageWidth;
     l.viewTop = kCaption;  // the page scrolls under our title bar
     l.viewBottom = height;
-    Caption(l, width);     // fixed: before the page's items, which scroll
+    Caption(l, width, page);  // fixed: before the page's items, which scroll
     const std::size_t first = l.items.size();
 
     float y = kCaption + 8;
@@ -857,14 +860,14 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 31> kNames = {
+    static constexpr std::array<const wchar_t*, 32> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Server",   L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
         L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter",  L"Tag",
-        L"AppTitle"};
+        L"AppTitle", L"Speed"};
     // One per Kind, in its order: a kind added or gone shifts every name after it.
-    static_assert(kNames.size() == static_cast<std::size_t>(Kind::AppTitle) + 1);
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::SpeedGraph) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -1341,27 +1344,41 @@ class Painter {
   }
 
   // Our own title bar (the system's is gone - Impl's WM_NCCALCSIZE): the
-  // name on the left; adding a configuration (the clipboard, a QR code, a
-  // file), the settings and the cross, hiding the window to the tray, on the
-  // right - on every page. The rest of it drags the window
+  // name on the left; on the right the cross, hiding the window to the tray,
+  // and where they belong - the main screen and the configurations' list -
+  // adding a configuration (the clipboard, a QR code, a file), and on the
+  // main screen the settings: inside the settings they were in the way (he
+  // asked them gone, 16.10.2026). The rest of it drags the window
   // (WM_NCHITTEST).
-  void Caption(Layout& l, float width) const {
-    Item name = Make(Kind::AppTitle, {12, 0, width - 140, kCaption}, L"Sovereign");
+  void Caption(Layout& l, float width, UiPage page) const {
+    float right = width - 46;  // the next key's right edge, leftwards from the cross
+    Item close = Make(Kind::IconButton, {right, 0, width, kCaption}, L"Спрятать в трей", kGlyphClose);
+    close.action = ItemAction::Hide;
+    close.scrolls = false;
+    std::vector<Item> keys;
+    if (page == UiPage::Overview) {
+      Item settings = Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Настройки", kGlyphSettings);
+      settings.action = ItemAction::Page;
+      settings.index = static_cast<int>(UiPage::Settings);
+      settings.scrolls = false;
+      keys.push_back(std::move(settings));
+      right -= 40;
+    }
+    if (page == UiPage::Overview || page == UiPage::Subscription) {
+      Item add = CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Добавить: из буфера, QR-код, файл",
+                             kGlyphAdd, UiCommand::AddMenu);
+      add.scrolls = false;
+      keys.push_back(std::move(add));
+      right -= 40;
+    }
+    Item name = Make(Kind::AppTitle, {12, 0, right - 14, kCaption}, L"Sovereign");
     name.text2 = SelfPath();
     name.scrolls = false;
     l.items.push_back(std::move(name));
-    Item add = CommandItem(Kind::IconButton, {width - 126, 0, width - 86, kCaption}, L"Добавить: из буфера, QR-код, файл",
-                           kGlyphAdd, UiCommand::AddMenu);
-    add.scrolls = false;
-    l.items.push_back(std::move(add));
-    Item settings = Make(Kind::IconButton, {width - 86, 0, width - 46, kCaption}, L"Настройки", kGlyphSettings);
-    settings.action = ItemAction::Page;
-    settings.index = static_cast<int>(UiPage::Settings);
-    settings.scrolls = false;
-    l.items.push_back(std::move(settings));
-    Item close = Make(Kind::IconButton, {width - 46, 0, width, kCaption}, L"Спрятать в трей", kGlyphClose);
-    close.action = ItemAction::Hide;
-    close.scrolls = false;
+    // Left to right, as Tab goes: "+", the settings, the cross.
+    for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
+      l.items.push_back(std::move(*it));
+    }
     l.items.push_back(std::move(close));
   }
 
@@ -2163,6 +2180,17 @@ class Painter {
     }
     y += h;
 
+    // The speed test's graph, growing while it runs and kept after.
+    if (c.checks.size() > kCheckSpeed &&
+        (!c.checks[kCheckSpeed].speedDown.empty() || !c.checks[kCheckSpeed].speedUp.empty())) {
+      y += 8;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kSpeedGraph}));
+      Item graph = Make(Kind::SpeedGraph, {x0, y, x1, y + kSpeedGraph});
+      graph.index = static_cast<int>(kCheckSpeed);
+      l.items.push_back(std::move(graph));
+      y += kSpeedGraph;
+    }
+
     // The failed ones' way out, under the results: a banner an action, the
     // checks it helps named in it (WebRTC and IPv6 both want the kill switch).
     std::vector<FixAction> ways;
@@ -2634,6 +2662,7 @@ class Painter {
         k.Text(it.detail, body_.get(), {r.left + 110, r.top, r.right, r.bottom}, primary);
         break;
       case Kind::Power: DrawPower(k, it, c, hovered, pressed); break;
+      case Kind::SpeedGraph: DrawSpeed(k, it, c); break;
       case Kind::ServerCard: {
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, kRadius - 1, Rgb(255, 255, 255, hoverAlpha * 0.6f));
@@ -2981,6 +3010,109 @@ class Painter {
   // The live traffic's dots round the switch's square `cube`: each with a
   // soft halo and a short trail behind it, fading in and out along its path;
   // sparks fade as they fly.
+  // The speed test's graph: download in the accent colour, upload in green,
+  // each smoothed over three samples and laid across the width as its time
+  // allows (kSpeedDownSeconds, kSpeedUpSeconds) - so it grows from the left
+  // while the test runs; the scale rounded up, lines at its top and half; the
+  // speeds on top: the mean past the first second, as the test's result.
+  void DrawSpeed(const Canvas& k, const Item& it, const UiContent& c) const {
+    if (it.index < 0 || static_cast<std::size_t>(it.index) >= c.checks.size()) {
+      return;
+    }
+    const UiCheck& check = c.checks[static_cast<std::size_t>(it.index)];
+    const D2D1_RECT_F r = it.rect;
+    const D2D1_COLOR_F down = FromColorRef(ui::kAccent);
+    const D2D1_COLOR_F up = FromColorRef(ui::kUpload);
+    const D2D1_COLOR_F secondary = FromColorRef(ui::kSecondaryText);
+    const auto smooth = [](const std::vector<float>& s) {
+      std::vector<float> out(s.size());
+      for (std::size_t i = 0; i < s.size(); ++i) {
+        const std::size_t lo = i > 0 ? i - 1 : i;
+        const std::size_t hi = i + 1 < s.size() ? i + 1 : i;
+        float sum = 0;
+        for (std::size_t j = lo; j <= hi; ++j) {
+          sum += s[j];
+        }
+        out[i] = sum / static_cast<float>(hi - lo + 1);
+      }
+      return out;
+    };
+    const std::vector<float> downs = smooth(check.speedDown);
+    const std::vector<float> ups = smooth(check.speedUp);
+    float peak = 1;
+    for (const auto* s : {&downs, &ups}) {
+      for (const float v : *s) {
+        peak = std::max(peak, v);
+      }
+    }
+    static constexpr std::array<float, 14> kScales = {10, 20, 50, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 5000, 10000};
+    float scale = kScales.back();
+    for (const float s : kScales) {
+      if (s >= peak * 1.1f) {
+        scale = s;
+        break;
+      }
+    }
+
+    const float pad = 16;
+    const float legend = r.top + 10;
+    k.Text(std::format(L"↓ {:.0f}", StreamMbps(check.speedDown)), heading_.get(),
+           {r.left + pad, legend, r.left + pad + 84, legend + 22}, down);
+    float units = r.left + pad + 84;
+    if (!check.speedUp.empty()) {
+      k.Text(std::format(L"↑ {:.0f}", StreamMbps(check.speedUp)), heading_.get(),
+             {units, legend, units + 84, legend + 22}, up);
+      units += 84;
+    }
+    k.Text(L"Мбит/с", caption_.get(), {units, legend + 3, units + 80, legend + 22}, secondary);
+    k.Text(std::format(L"{:.0f}", scale), trailing_.get(), {r.right - pad - 80, legend + 3, r.right - pad, legend + 22},
+           secondary);
+
+    const D2D1_RECT_F plot{r.left + pad, r.top + 42, r.right - pad, r.bottom - 14};
+    const float mid = (plot.top + plot.bottom) / 2;
+    k.Line({plot.left, plot.top}, {plot.right, plot.top}, Rgb(255, 255, 255, 0.05f));
+    k.Line({plot.left, mid}, {plot.right, mid}, Rgb(255, 255, 255, 0.05f));
+    k.Line({plot.left, plot.bottom}, {plot.right, plot.bottom}, Rgb(255, 255, 255, 0.12f));
+
+    wil::com_ptr<ID2D1Factory> factory;
+    k.t->GetFactory(factory.put());
+    const auto series = [&](const std::vector<float>& s, int seconds, D2D1_COLOR_F color) {
+      if (s.size() < 2) {
+        return;
+      }
+      const float slots = static_cast<float>(seconds) * 1000.0f / static_cast<float>(kSpeedSampleMs);
+      const float dx = (plot.right - plot.left) / std::max(1.0f, slots - 1);
+      std::vector<D2D1_POINT_2F> points;
+      points.reserve(s.size());
+      for (std::size_t i = 0; i < s.size(); ++i) {
+        const float x = std::min(plot.right, plot.left + static_cast<float>(i) * dx);
+        const float y = plot.bottom - std::min(s[i] / scale, 1.0f) * (plot.bottom - plot.top);
+        points.push_back({x, y});
+      }
+      // A faint area under the line, as speed tests draw it.
+      wil::com_ptr<ID2D1PathGeometry> area;
+      wil::com_ptr<ID2D1GeometrySink> sink;
+      if (factory && SUCCEEDED(factory->CreatePathGeometry(area.put())) && SUCCEEDED(area->Open(sink.put()))) {
+        sink->BeginFigure({points.front().x, plot.bottom}, D2D1_FIGURE_BEGIN_FILLED);
+        for (const D2D1_POINT_2F& p : points) {
+          sink->AddLine(p);
+        }
+        sink->AddLine({points.back().x, plot.bottom});
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        if (SUCCEEDED(sink->Close())) {
+          D2D1_COLOR_F fill = color;
+          fill.a = 0.12f;
+          k.t->FillGeometry(area.get(), k.Color(fill));
+        }
+      }
+      for (std::size_t i = 1; i < points.size(); ++i) {
+        k.Line(points[i - 1], points[i], color, 2);
+      }
+    };
+    series(downs, kSpeedDownSeconds, down);
+    series(ups, kSpeedUpSeconds, up);
+  }
+
   void DrawLive(const Canvas& k, const LiveTraffic& live, D2D1_RECT_F cube) const {
     for (const Particle& p : live.particles) {
       D2D1_COLOR_F color = FromColorRef(ui::kAccent);

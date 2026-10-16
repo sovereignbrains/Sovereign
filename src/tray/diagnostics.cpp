@@ -305,7 +305,9 @@ std::string SiteLine(const SiteWay& site, const RoutingSettings& routing) {
 CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing, bool selective) {
   CheckResult result;
   result.status = CheckResult::Status::Ok;
-  // The summary by outcome, in the sites' order: "напрямую: ya.ru · через VPN: spiegel.de, chatgpt.com".
+  // The summary by outcome, in the sites' order, by what they stand for:
+  // "Россия → напрямую · Европа, США → через VPN" (16.10.2026: the domains
+  // alone told him nothing).
   std::vector<std::pair<std::string, std::string>> groups;
   std::string lines;
   std::string why;
@@ -313,11 +315,12 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
     const std::string outcome = !site.resolved ? std::string("не находится")
                                 : !site.way    ? std::string("не видно")
                                                : WayText(*site.way);
+    const std::string& name = site.where.empty() ? site.host : site.where;
     const auto group = std::find_if(groups.begin(), groups.end(), [&](const auto& g) { return g.first == outcome; });
     if (group == groups.end()) {
-      groups.emplace_back(outcome, site.host);
+      groups.emplace_back(outcome, name);
     } else {
-      group->second += ", " + site.host;
+      group->second += ", " + name;
     }
     lines += std::format("{}{}", lines.empty() ? "" : "\n", SiteLine(site, routing));
 
@@ -336,8 +339,8 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
       }
     }
   }
-  for (const auto& [outcome, hosts] : groups) {
-    result.summary += std::format("{}{}: {}", result.summary.empty() ? "" : " · ", outcome, hosts);
+  for (const auto& [outcome, names] : groups) {
+    result.summary += std::format("{}{} → {}", result.summary.empty() ? "" : " · ", names, outcome);
   }
   if (result.status == CheckResult::Status::Ok) {
     why = selective             ? "Через VPN идут только выбранные программы и сайты, остальные — напрямую."
@@ -379,6 +382,19 @@ std::string ClientRuleFor(std::string_view host, const RoutingSettings& routing)
     }
   }
   return {};
+}
+
+double StreamMbps(const std::vector<float>& samples) {
+  constexpr std::size_t kWarmUp = 1000 / kSpeedSampleMs;
+  const auto from = samples.size() > kWarmUp ? samples.begin() + static_cast<std::ptrdiff_t>(kWarmUp) : samples.begin();
+  if (from == samples.end()) {
+    return 0;
+  }
+  double sum = 0;
+  for (auto it = from; it != samples.end(); ++it) {
+    sum += *it;
+  }
+  return sum / static_cast<double>(samples.end() - from);
 }
 
 double Mbps(std::uint64_t bytes, double seconds) {

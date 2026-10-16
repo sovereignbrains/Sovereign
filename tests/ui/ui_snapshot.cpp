@@ -156,19 +156,21 @@ std::vector<std::wstring> SampleLogs() {
 std::vector<sovereign::tray::UiCheck> SampleChecks() {
   using Check = sovereign::tray::UiCheck;
   return {
-      {L"Выход через VPN", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None},
-      {L"Российское напрямую", L"46.148.140.142", L"Российские сайты видят твой адрес, не адрес сервера.", Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None},
+      {L"Выход через VPN", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}},
+      {L"Российское напрямую", L"46.148.140.142", L"Российские сайты видят твой адрес, не адрес сервера.", Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}},
       {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через VPN — провайдер их не видит.",
-       Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None},
+       Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}},
       {L"WebRTC / UDP", L"UDP не проходит",
-       L"STUN не ответил: звонки в браузере и игры через UDP могут не работать (утечки при этом нет).", Check::Status::Warn, L"Что проверяет и как.", Check::Fix::None},
-      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.", Check::Status::Fail, L"Что проверяет и как.", Check::Fix::KillSwitch},
-      {L"Локальная сеть", L"проверяю...", L"", Check::Status::Running, L"Что проверяет и как.", Check::Fix::None},
-      {L"Задержка DNS", L"нет ответа", L"DNS не отвечает — сайты не откроются.", Check::Status::Fail, L"Что проверяет и как.", Check::Fix::Dns},
+       L"STUN не ответил: звонки в браузере и игры через UDP могут не работать (утечки при этом нет).", Check::Status::Warn, L"Что проверяет и как.", Check::Fix::None, {}, {}},
+      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.", Check::Status::Fail, L"Что проверяет и как.", Check::Fix::KillSwitch, {}, {}},
+      {L"Локальная сеть", L"проверяю...", L"", Check::Status::Running, L"Что проверяет и как.", Check::Fix::None, {}, {}},
+      {L"Задержка DNS", L"нет ответа", L"DNS не отвечает — сайты не откроются.", Check::Status::Fail, L"Что проверяет и как.", Check::Fix::Dns, {}, {}},
       {L"Скорость интернета", L"↓ 151 · ↑ 98 Мбит/с · 84 мс", L"Через VPN, до ближайшего узла Cloudflare.",
-       Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None},
+       Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None,
+       {39, 169, 350, 521, 340, 312, 404, 310, 462, 338, 217, 111, 503, 311, 276, 409, 291, 132, 55, 84, 392, 229},
+       {25, 221, 728, 506, 12, 177, 636, 523, 177, 139, 390, 718, 257, 118, 206, 603, 366, 18, 158, 684, 454}},
       {L"Куда пойдёт адрес", L"vk.com -> напрямую", L"Ни одно из твоих правил не подошло — решили списки.",
-       Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None}};
+       Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}}};
 }
 
 int Snapshots(const std::wstring& dir) {
@@ -407,11 +409,13 @@ int EditTest(HINSTANCE instance) {
     SendMessageW(hwnd, WM_KEYDOWN, vk, 0);
     pump();
   };
-  // Tab goes through the window's own caption first - "+", the settings,
-  // "hide" (0.4.97 on) - then the page's back arrow. Before, the count left
-  // them out: Enter landed on "+" and its menu waited for a click (CI failed
-  // from dc9e160 on, a desktop run hung).
-  constexpr int kCaptionButtons = 3;
+  // Tab goes through the window's own caption first (0.4.97 on) - then the
+  // page's back arrow. Before, the count left them out: Enter landed on "+"
+  // and its menu waited for a click (CI failed from dc9e160 on, a desktop run
+  // hung). The configurations' list has "+" and "hide" there, a
+  // configuration's page "hide" only (0.5.12 on: MainWindow's Caption).
+  constexpr int kListCaption = 2;
+  constexpr int kProfileCaption = 1;
   const auto tabs = [&](int n) {
     for (int i = 0; i < n; ++i) {
       key(VK_TAB);
@@ -420,9 +424,9 @@ int EditTest(HINSTANCE instance) {
   const auto startEdit = [&] {
     key(VK_ESCAPE);  // to the list, if on the configuration's page
     window.Show(UiPage::Subscription);
-    tabs(kCaptionButtons + 2);  // past the caption and back: the first configuration
+    tabs(kListCaption + 2);  // past the caption and back: the first configuration
     key(VK_RETURN);
-    tabs(kCaptionButtons + 2);  // past the caption and back: the title
+    tabs(kProfileCaption + 2);  // past the caption and back: the title
     key(VK_RETURN);
     return FindWindowExW(hwnd, nullptr, L"EDIT", nullptr);
   };

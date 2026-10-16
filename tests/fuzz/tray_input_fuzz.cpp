@@ -113,7 +113,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   (void)ParseStunResponse(text, StunId{});
   (void)JudgeDnsLeak(ParseDnsLeak(text));
   if (const auto way = ParseRouteAnswer(text)) {
-    (void)JudgeRoutes({SiteWay{.host = std::string(text.substr(0, 16)), .russian = false, .resolved = true, .way = way}},
+    (void)JudgeRoutes({SiteWay{.host = std::string(text.substr(0, 16)), .where = {}, .russian = false, .resolved = true, .way = way}},
                       RoutingSettings{});
   }
   (void)ClientRuleFor(text, RoutingSettings{});

@@ -5,8 +5,11 @@
 
 #include <wil/resource.h>
 
+#include <algorithm>
 #include <array>
+#include <cstdint>
 #include <format>
+#include <functional>
 #include <initializer_list>
 #include <optional>
 #include <string_view>
@@ -35,12 +38,15 @@ struct Response {
   std::vector<std::optional<std::string>> headers;  // per name asked for: its value, if sent
 };
 
-// One GET over https; `what` names the server in errors ("сервер подписки").
-// Redirects are followed https to https only (WinHTTP's default policy).
-std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std::wstring& userAgent,
-                                              std::size_t maxBytes, std::initializer_list<const wchar_t*> headerNames,
-                                              std::string_view what, const wchar_t* method = L"GET",
-                                              std::string_view body = {}, const std::wstring& extraHeaders = {}) {
+// A request opened, not sent: its handles, the request's last (it goes first).
+struct Opened {
+  wil::unique_winhttp_hinternet session;
+  wil::unique_winhttp_hinternet connection;
+  wil::unique_winhttp_hinternet request;
+};
+
+std::expected<Opened, std::string> Open(const std::wstring& url, const std::wstring& userAgent, const wchar_t* method,
+                                        std::string_view what) {
   if (!IsHttpsUrl(url)) {
     return std::unexpected("ссылка должна быть https://");
   }
@@ -57,23 +63,37 @@ std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std
   std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength);
   path.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
 
-  const wil::unique_winhttp_hinternet session(
+  Opened opened;
+  opened.session.reset(
       WinHttpOpen(userAgent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-  if (!session) {
+  if (!opened.session) {
     return std::unexpected(Failure("WinHTTP не открылся"));
   }
-  WinHttpSetTimeouts(session.get(), 10'000, 10'000, 15'000, 30'000);
+  WinHttpSetTimeouts(opened.session.get(), 10'000, 10'000, 15'000, 30'000);
 
-  const wil::unique_winhttp_hinternet connection(WinHttpConnect(session.get(), host.c_str(), parts.nPort, 0));
-  if (!connection) {
+  opened.connection.reset(WinHttpConnect(opened.session.get(), host.c_str(), parts.nPort, 0));
+  if (!opened.connection) {
     return std::unexpected(Failure(std::format("не удалось подключиться: {}", what)));
   }
-  const wil::unique_winhttp_hinternet request(WinHttpOpenRequest(connection.get(), method, path.c_str(), nullptr,
-                                                                 WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                                                 WINHTTP_FLAG_SECURE));
-  if (!request) {
+  opened.request.reset(WinHttpOpenRequest(opened.connection.get(), method, path.c_str(), nullptr, WINHTTP_NO_REFERER,
+                                          WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
+  if (!opened.request) {
     return std::unexpected(Failure("запрос не создался"));
   }
+  return opened;
+}
+
+// One GET over https; `what` names the server in errors ("сервер подписки").
+// Redirects are followed https to https only (WinHTTP's default policy).
+std::expected<Response, std::string> HttpsGet(const std::wstring& url, const std::wstring& userAgent,
+                                              std::size_t maxBytes, std::initializer_list<const wchar_t*> headerNames,
+                                              std::string_view what, const wchar_t* method = L"GET",
+                                              std::string_view body = {}, const std::wstring& extraHeaders = {}) {
+  auto opened = Open(url, userAgent, method, what);
+  if (!opened) {
+    return std::unexpected(opened.error());
+  }
+  const wil::unique_winhttp_hinternet& request = opened->request;
   // WinHTTP takes the body as non-const; it doesn't write to it.
   auto* data = body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data());
   if (!WinHttpSendRequest(request.get(), extraHeaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : extraHeaders.c_str(),
@@ -284,6 +304,70 @@ std::expected<std::string, std::string> HttpsSend(const std::wstring& url, const
     return std::unexpected(std::format("сервер ответил {}", response->status));
   }
   return std::move(response->body);
+}
+
+std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, const std::wstring& userAgent,
+                                                      std::uint64_t upload,
+                                                      const std::function<bool(std::uint64_t)>& onBytes) {
+  auto opened = Open(url, userAgent, upload > 0 ? L"POST" : L"GET", "сервер");
+  if (!opened) {
+    return std::unexpected(opened.error());
+  }
+  HINTERNET request = opened->request.get();
+  constexpr std::size_t kPiece = std::size_t{64} * 1024;
+  std::uint64_t moved = 0;
+  if (upload > 0) {
+    // The whole length announced, the body written piece by piece while
+    // wanted - stopped early, the request is dropped unfinished.
+    if (!WinHttpSendRequest(request, L"Content-Type: application/octet-stream", static_cast<DWORD>(-1),
+                            WINHTTP_NO_REQUEST_DATA, 0, static_cast<DWORD>(upload), 0)) {
+      return std::unexpected(Failure("сервер не ответил"));
+    }
+    const std::string piece(kPiece, 'x');
+    while (moved < upload) {
+      const auto size = static_cast<DWORD>(std::min<std::uint64_t>(piece.size(), upload - moved));
+      DWORD written = 0;
+      if (!WinHttpWriteData(request, piece.data(), size, &written)) {
+        // Cut off by the server after a while: what went is what's measured.
+        return moved > 0 ? std::expected<std::uint64_t, std::string>(moved)
+                         : std::unexpected(Failure("обрыв при отправке"));
+      }
+      moved += written;
+      if (!onBytes(moved)) {
+        break;
+      }
+    }
+    return moved;
+  }
+  if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+      !WinHttpReceiveResponse(request, nullptr)) {
+    return std::unexpected(Failure("сервер не ответил"));
+  }
+  DWORD status = 0;
+  DWORD statusSize = sizeof status;
+  if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+                           &status, &statusSize, WINHTTP_NO_HEADER_INDEX)) {
+    return std::unexpected(Failure("нет кода ответа"));
+  }
+  if (status != 200) {
+    return std::unexpected(std::format("сервер ответил {}", status));
+  }
+  std::vector<char> buffer(kPiece);
+  for (;;) {
+    DWORD read = 0;
+    if (!WinHttpReadData(request, buffer.data(), static_cast<DWORD>(buffer.size()), &read)) {
+      return moved > 0 ? std::expected<std::uint64_t, std::string>(moved)
+                       : std::unexpected(Failure("обрыв при чтении ответа"));
+    }
+    if (read == 0) {
+      break;
+    }
+    moved += read;
+    if (!onBytes(moved)) {
+      break;
+    }
+  }
+  return moved;
 }
 
 std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body) {

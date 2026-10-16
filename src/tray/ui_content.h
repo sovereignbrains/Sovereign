@@ -168,6 +168,9 @@ struct UiCheck {
   Status status = Status::NotRun;
   std::wstring hint;  // what it checks and how - its "?"
   Fix fix = Fix::None;
+  // The speed test's throughput, Mbit/s every quarter of a second (diagnostics.h kSpeedSampleMs).
+  std::vector<float> speedDown;
+  std::vector<float> speedUp;
 };
 
 // What the tray's window shows; built by main.cpp from the worker's view.

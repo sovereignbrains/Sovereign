@@ -29,7 +29,21 @@ struct CheckResult {
   std::string summary;  // one line: "5.83.147.210 · DE"
   std::string detail;   // what it means, what to do
   CheckFix fix = CheckFix::None;  // with a Fail: the way out, if there's one
+  // The speed test's throughput, Mbit/s every kSpeedSampleMs - down, then up:
+  // the page draws them as they come (a speed test's graph).
+  std::vector<float> speedDown;
+  std::vector<float> speedUp;
 };
+
+// The speed test: a download and an upload, each this long at most, the
+// throughput taken this often.
+inline constexpr int kSpeedDownSeconds = 8;
+inline constexpr int kSpeedUpSeconds = 6;
+inline constexpr int kSpeedSampleMs = 250;
+
+// A stream's speed from its samples: the mean of all but the first second's
+// (the connection still speeding up), or of all when that's all there is.
+double StreamMbps(const std::vector<float>& samples);
 
 // Cloudflare's /cdn-cgi/trace: "ip=...\nloc=DE\n...".
 struct Trace {
@@ -82,14 +96,17 @@ std::string WayText(const RouteWay& way);
 // directly (with «Российское напрямую»), the foreign ones through the VPN.
 struct RouteProbe {
   std::string_view host;
+  std::string_view where;  // what it stands for, as the page names it
   bool russian = false;
 };
-inline constexpr std::array<RouteProbe, 3> kRouteProbes = {
-    {{.host = "ya.ru", .russian = true}, {.host = "spiegel.de", .russian = false}, {.host = "chatgpt.com", .russian = false}}};
+inline constexpr std::array<RouteProbe, 3> kRouteProbes = {{{.host = "ya.ru", .where = "Россия", .russian = true},
+                                                            {.host = "spiegel.de", .where = "Европа", .russian = false},
+                                                            {.host = "chatgpt.com", .where = "США", .russian = false}}};
 
 // One site's request: whether its name resolved, and where it went.
 struct SiteWay {
   std::string host;
+  std::string where;  // the summary's name for it ("Европа"); empty: the host itself
   bool russian = false;
   bool resolved = false;
   std::optional<RouteWay> way;  // nullopt: the core kept no connection to it

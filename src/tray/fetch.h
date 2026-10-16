@@ -2,7 +2,9 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -50,5 +52,14 @@ std::expected<std::string, std::string> HttpsSend(const std::wstring& url, const
 // A POST of `body` over https, same client; an error for anything but a 200.
 // Blocking: call it off the UI thread.
 std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body);
+
+// A speed test's stream, same client: a GET read through - or, `upload`
+// bytes announced, a POST of that many written - piece by piece, nothing
+// kept; `onBytes` is told how many moved so far after each piece and says
+// whether to go on. The bytes moved; an error only if none did (a server
+// cutting a long stream off is the end of it). Blocking: off the UI thread.
+std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, const std::wstring& userAgent,
+                                                      std::uint64_t upload,
+                                                      const std::function<bool(std::uint64_t)>& onBytes);
 
 }  // namespace sovereign::tray

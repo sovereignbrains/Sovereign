@@ -16,7 +16,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <expected>
 #include <format>
+#include <functional>
 #include <optional>
 #include <random>
 #include <string_view>
@@ -187,6 +190,8 @@ struct Run {
   std::string exitIp;   // what foreign sites see
   std::string exitLoc;
   std::string directIp;  // what Russian ones see
+  // A check's result while it runs (the speed test's graph growing); may be empty.
+  std::function<void(const CheckResult&)> live;
 
   // The VPN's exit: the core's, else - everything through the VPN - what the
   // trace saw; with only chosen things through it, unknown without the core.
@@ -431,15 +436,18 @@ struct Run {
         pings.push_back(Millis(Clock::now() - started));
       }
     }
-    constexpr std::uint64_t kDown = 25'000'000;
-    const auto downStarted = Clock::now();
-    const auto down = Download(Widen(std::format("https://speed.cloudflare.com/__down?bytes={}", kDown)), input.userAgent,
-                               kDown + 1024);
-    const double downSeconds = Seconds(Clock::now() - downStarted);
-    const std::string upBody(8'000'000, 'x');
-    const auto upStarted = Clock::now();
-    const auto up = Upload(L"https://speed.cloudflare.com/__up", input.userAgent, upBody);
-    const double upSeconds = Seconds(Clock::now() - upStarted);
+    // Each way for a few seconds, as speed tests do, the throughput taken
+    // every quarter: more than the line can carry in that time is asked for.
+    r.status = Status::Running;
+    const auto show = [&] {
+      r.summary = r.speedUp.empty() ? std::format("↓ {:.0f} Мбит/с…", r.speedDown.empty() ? 0.0 : r.speedDown.back())
+                                    : std::format("↑ {:.0f} Мбит/с…", r.speedUp.back());
+      if (live) {
+        live(r);
+      }
+    };
+    const auto down = Stream(L"https://speed.cloudflare.com/__down?bytes=50000000", 0, kSpeedDownSeconds, r.speedDown, show);
+    const auto up = Stream(L"https://speed.cloudflare.com/__up", 50'000'000, kSpeedUpSeconds, r.speedUp, show);
     if (!down && !up) {
       r.status = Status::Fail;
       r.summary = "не удалось";
@@ -449,8 +457,8 @@ struct Run {
     }
     std::sort(pings.begin(), pings.end());
     const std::string ping = pings.empty() ? std::string("—") : std::format("{} мс", pings[pings.size() / 2]);
-    const std::string downText = down ? std::format("{:.0f}", Mbps(down->size(), downSeconds)) : std::string("—");
-    const std::string upText = up ? std::format("{:.0f}", Mbps(upBody.size(), upSeconds)) : std::string("—");
+    const std::string downText = down ? std::format("{:.0f}", StreamMbps(r.speedDown)) : std::string("—");
+    const std::string upText = up ? std::format("{:.0f}", StreamMbps(r.speedUp)) : std::string("—");
     // Which server it went through: the core keeps the connections.
     std::vector<std::string> targets = Addresses("speed.cloudflare.com");
     targets.emplace_back("speed.cloudflare.com");
@@ -464,10 +472,54 @@ struct Run {
     return r;
   }
 
+  // One way of the speed test: `url` streamed again and again (`upload`
+  // bytes announced: a POST each) for `seconds` - Cloudflare gives no more
+  // than 50 MB a request (403 from 100 MB) - the throughput of every
+  // kSpeedSampleMs added to `samples`, `onSample` told after each. Ok if
+  // anything moved.
+  std::expected<void, std::string> Stream(const wchar_t* url, std::uint64_t upload, int seconds,
+                                          std::vector<float>& samples, const std::function<void()>& onSample) const {
+    const auto started = Clock::now();
+    const auto until = started + std::chrono::seconds(seconds);
+    const auto step = std::chrono::milliseconds(kSpeedSampleMs);
+    auto sampledAt = started;
+    std::uint64_t sampledBytes = 0;
+    std::uint64_t before = 0;  // what the requests before this one moved
+    while (Clock::now() < until) {
+      const auto moved = StreamBytes(url, input.userAgent, upload, [&](std::uint64_t bytes) {
+        const auto now = Clock::now();
+        const std::uint64_t total = before + bytes;
+        if (now - sampledAt >= step) {
+          samples.push_back(static_cast<float>(Mbps(total - sampledBytes, Seconds(now - sampledAt))));
+          sampledAt = now;
+          sampledBytes = total;
+          onSample();
+        }
+        return now < until;
+      });
+      if (!moved) {
+        if (before == 0) {
+          return std::unexpected(moved.error());
+        }
+        break;
+      }
+      before += *moved;
+      if (*moved == 0) {
+        break;
+      }
+    }
+    // Over before its first quarter (a tiny answer): its one sample.
+    if (samples.empty() && before > 0) {
+      samples.push_back(static_cast<float>(Mbps(before, Seconds(Clock::now() - started))));
+      onSample();
+    }
+    return {};
+  }
+
   // A real request to `host` - the core sees the name (TLS SNI) and routes
   // it as any program's - and where the core says it went.
-  SiteWay Visit(std::string host, bool russian) const {
-    SiteWay site{.host = std::move(host), .russian = russian, .resolved = false, .way = std::nullopt};
+  SiteWay Visit(std::string host, std::string where, bool russian) const {
+    SiteWay site{.host = std::move(host), .where = std::move(where), .russian = russian, .resolved = false, .way = std::nullopt};
     std::vector<std::string> targets = Addresses(site.host);
     if (targets.empty()) {
       return site;
@@ -487,7 +539,7 @@ struct Run {
       std::vector<SiteWay> sites;
       sites.reserve(kRouteProbes.size());
       for (const RouteProbe& probe : kRouteProbes) {
-        sites.push_back(Visit(std::string(probe.host), probe.russian));
+        sites.push_back(Visit(std::string(probe.host), std::string(probe.where), probe.russian));
       }
       return JudgeRoutes(sites, input.routing, input.selective);
     }
@@ -496,7 +548,7 @@ struct Run {
       host = host.substr(scheme + 3);
     }
     host = host.substr(0, host.find_first_of("/:?#"));
-    const SiteWay site = Visit(host, false);
+    const SiteWay site = Visit(host, {}, false);
     CheckResult r;
     r.status = site.way ? Status::Ok : Status::Warn;
     r.summary = host + ": " + (!site.resolved ? std::string("имя не находится")
@@ -517,16 +569,24 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
       progress(id, CheckResult{.status = Status::Fail,
                                .summary = "сеть недоступна",
                                .detail = std::format("Winsock не запустился (ошибка {}).", failed),
-                               .fix = CheckFix::None});
+                               .fix = CheckFix::None,
+                               .speedDown = {},
+                               .speedUp = {}});
     }
     return;
   }
-  Run run{.input = input, .exitIp = {}, .exitLoc = {}, .directIp = {}};
+  Run run{.input = input, .exitIp = {}, .exitLoc = {}, .directIp = {}, .live = {}};
   for (const CheckId id : which) {
     if (stop.stop_requested()) {
       break;
     }
-    progress(id, CheckResult{.status = Status::Running, .summary = "проверяю...", .detail = {}, .fix = CheckFix::None});
+    progress(id, CheckResult{.status = Status::Running,
+                             .summary = "проверяю...",
+                             .detail = {},
+                             .fix = CheckFix::None,
+                             .speedDown = {},
+                             .speedUp = {}});
+    run.live = [&progress, id](const CheckResult& partial) { progress(id, partial); };
     CheckResult result;
     switch (id) {
       case CheckId::Exit: result = run.Exit(); break;
