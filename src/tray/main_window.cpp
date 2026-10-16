@@ -700,6 +700,11 @@ wil::com_ptr<IDWriteTextLayout> MakeTextLayout(IDWriteFactory* dwrite, std::wstr
 // or, for snapshots, a WIC bitmap's.
 class Painter {
  public:
+  // The speed test's graph: how far the line has gone towards its newest
+  // sample (0..1) - Impl eases it frame by frame, so the graph grows
+  // smoothly, not a quarter of a second at a time (he: "like 10 fps").
+  float speedTip = 1;
+
   Painter() {
     THROW_IF_FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d_.put()));
     THROW_IF_FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
@@ -3028,8 +3033,8 @@ class Painter {
     const auto smooth = [](const std::vector<float>& s) {
       std::vector<float> out(s.size());
       for (std::size_t i = 0; i < s.size(); ++i) {
-        const std::size_t lo = i > 0 ? i - 1 : i;
-        const std::size_t hi = i + 1 < s.size() ? i + 1 : i;
+        const std::size_t lo = i > 1 ? i - 2 : 0;
+        const std::size_t hi = std::min(i + 2, s.empty() ? 0 : s.size() - 1);
         float sum = 0;
         for (std::size_t j = lo; j <= hi; ++j) {
           sum += s[j];
@@ -3075,8 +3080,6 @@ class Painter {
     k.Line({plot.left, mid}, {plot.right, mid}, Rgb(255, 255, 255, 0.05f));
     k.Line({plot.left, plot.bottom}, {plot.right, plot.bottom}, Rgb(255, 255, 255, 0.12f));
 
-    wil::com_ptr<ID2D1Factory> factory;
-    k.t->GetFactory(factory.put());
     const float perSecond = 1000.0f / static_cast<float>(kSpeedSampleMs);
     const float downSlots = static_cast<float>(kSpeedDownSeconds) * perSecond;
     const float allSlots = downSlots + static_cast<float>(kSpeedUpSeconds) * perSecond;
@@ -3086,7 +3089,9 @@ class Painter {
       const float seam = plot.left + (downSlots - 0.5f) * dx;
       k.Line({seam, plot.top}, {seam, plot.bottom}, Rgb(255, 255, 255, 0.06f));
     }
-    const auto series = [&](const std::vector<float>& s, float firstSlot, D2D1_COLOR_F color) {
+    // `growing`: the series the test is on - its newest point drawn only
+    // speedTip of the way from the one before, eased there frame by frame.
+    const auto series = [&](const std::vector<float>& s, float firstSlot, D2D1_COLOR_F color, bool growing) {
       if (s.size() < 2) {
         return;
       }
@@ -3097,14 +3102,26 @@ class Painter {
         const float y = plot.bottom - std::min(s[i] / scale, 1.0f) * (plot.bottom - plot.top);
         points.push_back({x, y});
       }
-      // A faint area under the line, as speed tests draw it.
+      if (growing) {
+        const D2D1_POINT_2F from = points[points.size() - 2];
+        D2D1_POINT_2F& to = points.back();
+        const float t = std::clamp(speedTip, 0.0f, 1.0f);
+        to = {from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t};
+      }
+      // A curve through the points' midpoints (each point its control): no corners, as speed tests draw.
+      const auto trace = [&](ID2D1GeometrySink* sink) {
+        for (std::size_t i = 1; i + 1 < points.size(); ++i) {
+          const D2D1_POINT_2F mid{(points[i].x + points[i + 1].x) / 2, (points[i].y + points[i + 1].y) / 2};
+          sink->AddQuadraticBezier(D2D1::QuadraticBezierSegment(points[i], mid));
+        }
+        sink->AddLine(points.back());
+      };
       wil::com_ptr<ID2D1PathGeometry> area;
       wil::com_ptr<ID2D1GeometrySink> sink;
-      if (factory && SUCCEEDED(factory->CreatePathGeometry(area.put())) && SUCCEEDED(area->Open(sink.put()))) {
+      if (SUCCEEDED(d2d_->CreatePathGeometry(area.put())) && SUCCEEDED(area->Open(sink.put()))) {
         sink->BeginFigure({points.front().x, plot.bottom}, D2D1_FIGURE_BEGIN_FILLED);
-        for (const D2D1_POINT_2F& p : points) {
-          sink->AddLine(p);
-        }
+        sink->AddLine(points.front());
+        trace(sink.get());
         sink->AddLine({points.back().x, plot.bottom});
         sink->EndFigure(D2D1_FIGURE_END_CLOSED);
         if (SUCCEEDED(sink->Close())) {
@@ -3113,12 +3130,19 @@ class Painter {
           k.t->FillGeometry(area.get(), k.Color(fill));
         }
       }
-      for (std::size_t i = 1; i < points.size(); ++i) {
-        k.Line(points[i - 1], points[i], color, 2);
+      wil::com_ptr<ID2D1PathGeometry> line;
+      wil::com_ptr<ID2D1GeometrySink> lineSink;
+      if (SUCCEEDED(d2d_->CreatePathGeometry(line.put())) && SUCCEEDED(line->Open(lineSink.put()))) {
+        lineSink->BeginFigure(points.front(), D2D1_FIGURE_BEGIN_HOLLOW);
+        trace(lineSink.get());
+        lineSink->EndFigure(D2D1_FIGURE_END_OPEN);
+        if (SUCCEEDED(lineSink->Close())) {
+          k.t->DrawGeometry(line.get(), k.Color(color), 2);
+        }
       }
     };
-    series(downs, 0, down);
-    series(ups, downSlots, up);
+    series(downs, 0, down, ups.empty());
+    series(ups, downSlots, up, !ups.empty());
   }
 
   void DrawLive(const Canvas& k, const LiveTraffic& live, D2D1_RECT_F cube) const {
@@ -3352,6 +3376,40 @@ struct MainWindow::Impl {
   // 64 a second, and its 15.6 ms ticks made the dots jerk). The last step,
   // by the precise clock; empty: not running.
   std::optional<std::chrono::steady_clock::time_point> liveAt;
+  // The speed test's graph easing to its newest sample (NoteSpeed): how many it had, and when the last came.
+  std::size_t speedSamples = 0;
+  std::chrono::steady_clock::time_point speedSampleAt{};
+
+  // New speed samples in the content: the graph's tip starts again from the
+  // one before (Painter::speedTip), frames asked for while it eases.
+  void NoteSpeed() {
+    std::size_t samples = 0;
+    if (content.checks.size() > kCheckSpeed) {
+      samples = content.checks[kCheckSpeed].speedDown.size() + content.checks[kCheckSpeed].speedUp.size();
+    }
+    const bool more = samples > speedSamples;
+    speedSamples = samples;
+    if (more && Motion()) {
+      speedSampleAt = std::chrono::steady_clock::now();
+      painter.speedTip = 0;
+      if (hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && page == UiPage::Checks) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+    }
+  }
+
+  // A frame of the speed test's graph: its tip eased towards the newest
+  // sample over one sample's time; true while there's way to go.
+  bool StepSpeed() {
+    if (page != UiPage::Checks || IsWindowVisible(hwnd) == FALSE || !Motion()) {
+      painter.speedTip = 1;
+      return false;
+    }
+    const float t = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - speedSampleAt).count() /
+                    static_cast<float>(kSpeedSampleMs);
+    painter.speedTip = std::min(1.0f, t);
+    return t < 1.0f;
+  }
 
   void KickLive() {
     if (!liveAt && hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && page == UiPage::Overview && Motion() &&
@@ -4196,11 +4254,12 @@ struct MainWindow::Impl {
     switch (message) {
       case WM_PAINT: {
         const bool going = liveAt && StepLiveTraffic();
+        const bool easing = StepSpeed();
         PAINTSTRUCT ps;
         BeginPaint(w, &ps);
         Paint();
         EndPaint(w, &ps);
-        if (going) {
+        if (going || easing) {
           InvalidateRect(w, nullptr, FALSE);  // the next frame: this one waited for the screen's refresh
         }
         return 0;
@@ -4612,6 +4671,7 @@ bool MainWindow::IsVisible() const { return impl_->hwnd != nullptr && IsWindowVi
 void MainWindow::Update(const UiContent& content) {
   impl_->CubeTo(content.display);
   impl_->content = content;
+  impl_->NoteSpeed();
   if (IsVisible()) {
     impl_->Relayout();
     impl_->KickLive();
