@@ -3010,11 +3010,12 @@ class Painter {
   // The live traffic's dots round the switch's square `cube`: each with a
   // soft halo and a short trail behind it, fading in and out along its path;
   // sparks fade as they fly.
-  // The speed test's graph: download in the accent colour, upload in green,
-  // each smoothed over three samples and laid across the width as its time
-  // allows (kSpeedDownSeconds, kSpeedUpSeconds) - so it grows from the left
-  // while the test runs; the scale rounded up, lines at its top and half; the
-  // speeds on top: the mean past the first second, as the test's result.
+  // The speed test's graph: one timeline as the test runs - the download
+  // (kSpeedDownSeconds) in the accent colour, then the upload
+  // (kSpeedUpSeconds) in green after it - each smoothed over three samples,
+  // growing from the left; the scale rounded up, lines at its top and half;
+  // the speeds on top: the mean past the first second, as the test's result.
+  // (Both laid over the whole width at once read as one thing - 16.10.2026.)
   void DrawSpeed(const Canvas& k, const Item& it, const UiContent& c) const {
     if (it.index < 0 || static_cast<std::size_t>(it.index) >= c.checks.size()) {
       return;
@@ -3076,16 +3077,23 @@ class Painter {
 
     wil::com_ptr<ID2D1Factory> factory;
     k.t->GetFactory(factory.put());
-    const auto series = [&](const std::vector<float>& s, int seconds, D2D1_COLOR_F color) {
+    const float perSecond = 1000.0f / static_cast<float>(kSpeedSampleMs);
+    const float downSlots = static_cast<float>(kSpeedDownSeconds) * perSecond;
+    const float allSlots = downSlots + static_cast<float>(kSpeedUpSeconds) * perSecond;
+    const float dx = (plot.right - plot.left) / std::max(1.0f, allSlots - 1);
+    // Where the download hands over to the upload.
+    if (!ups.empty()) {
+      const float seam = plot.left + (downSlots - 0.5f) * dx;
+      k.Line({seam, plot.top}, {seam, plot.bottom}, Rgb(255, 255, 255, 0.06f));
+    }
+    const auto series = [&](const std::vector<float>& s, float firstSlot, D2D1_COLOR_F color) {
       if (s.size() < 2) {
         return;
       }
-      const float slots = static_cast<float>(seconds) * 1000.0f / static_cast<float>(kSpeedSampleMs);
-      const float dx = (plot.right - plot.left) / std::max(1.0f, slots - 1);
       std::vector<D2D1_POINT_2F> points;
       points.reserve(s.size());
       for (std::size_t i = 0; i < s.size(); ++i) {
-        const float x = std::min(plot.right, plot.left + static_cast<float>(i) * dx);
+        const float x = std::min(plot.right, plot.left + (firstSlot + static_cast<float>(i)) * dx);
         const float y = plot.bottom - std::min(s[i] / scale, 1.0f) * (plot.bottom - plot.top);
         points.push_back({x, y});
       }
@@ -3109,8 +3117,8 @@ class Painter {
         k.Line(points[i - 1], points[i], color, 2);
       }
     };
-    series(downs, kSpeedDownSeconds, down);
-    series(ups, kSpeedUpSeconds, up);
+    series(downs, 0, down);
+    series(ups, downSlots, up);
   }
 
   void DrawLive(const Canvas& k, const LiveTraffic& live, D2D1_RECT_F cube) const {

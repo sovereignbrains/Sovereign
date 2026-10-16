@@ -314,6 +314,9 @@ std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, c
     return std::unexpected(opened.error());
   }
   HINTERNET request = opened->request.get();
+  // A stall is the end of this stream, not half a minute of the test: the
+  // caller starts another (Cloudflare holds a request back now and then).
+  WinHttpSetTimeouts(request, 10'000, 10'000, 3'000, 3'000);
   constexpr std::size_t kPiece = std::size_t{64} * 1024;
   std::uint64_t moved = 0;
   if (upload > 0) {

@@ -185,6 +185,29 @@ std::pair<std::string, std::optional<int>> PingGateway() {
   return {};
 }
 
+// The speed test's samples, one a slot of kSpeedSampleMs from its start: the
+// throughput since the last one, spread over every slot that passed - a stall
+// (no bytes for a second) fills its slots with what came over it, so the n-th
+// sample is always the n-th quarter of a second (taken as bytes came, a stall
+// left none and the graph ended early - 16.10.2026).
+struct Slots {
+  Clock::time_point started;
+  Clock::time_point sampledAt;
+  std::uint64_t sampledBytes = 0;
+
+  // `total` moved by `now`: true if a sample was added.
+  bool Fill(std::vector<float>& samples, std::uint64_t total, Clock::time_point now) {
+    const auto due = static_cast<std::size_t>((now - started) / std::chrono::milliseconds(kSpeedSampleMs));
+    if (due <= samples.size()) {
+      return false;
+    }
+    samples.resize(due, static_cast<float>(Mbps(total - sampledBytes, Seconds(now - sampledAt))));
+    sampledAt = now;
+    sampledBytes = total;
+    return true;
+  }
+};
+
 struct Run {
   const DiagnoseInput& input;
   std::string exitIp;   // what foreign sites see
@@ -446,8 +469,8 @@ struct Run {
         live(r);
       }
     };
-    const auto down = Stream(L"https://speed.cloudflare.com/__down?bytes=50000000", 0, kSpeedDownSeconds, r.speedDown, show);
-    const auto up = Stream(L"https://speed.cloudflare.com/__up", 50'000'000, kSpeedUpSeconds, r.speedUp, show);
+    const auto down = Stream(kSpeedDownSeconds, r.speedDown, show);
+    const auto up = UploadStream(kSpeedUpSeconds, r.speedUp, show);
     if (!down && !up) {
       r.status = Status::Fail;
       r.summary = "не удалось";
@@ -472,46 +495,85 @@ struct Run {
     return r;
   }
 
-  // One way of the speed test: `url` streamed again and again (`upload`
-  // bytes announced: a POST each) for `seconds` - Cloudflare gives no more
-  // than 50 MB a request (403 from 100 MB) - the throughput of every
-  // kSpeedSampleMs added to `samples`, `onSample` told after each. Ok if
-  // anything moved.
-  std::expected<void, std::string> Stream(const wchar_t* url, std::uint64_t upload, int seconds,
-                                          std::vector<float>& samples, const std::function<void()>& onSample) const {
+  // The download: Cloudflare's test file read again and again for `seconds`,
+  // as their own test does - from 1 MB, doubled while one comes in under
+  // half a second, to 25 MB; a refusal (429 - too much asked lately; 403 -
+  // over 50 MB) halves it. A stall ends a request after 3 s: another starts.
+  // The throughput of every kSpeedSampleMs added to `samples`, `onSample`
+  // told after each. Ok if anything came.
+  std::expected<void, std::string> Stream(int seconds, std::vector<float>& samples,
+                                          const std::function<void()>& onSample) const {
     const auto started = Clock::now();
     const auto until = started + std::chrono::seconds(seconds);
-    const auto step = std::chrono::milliseconds(kSpeedSampleMs);
-    auto sampledAt = started;
-    std::uint64_t sampledBytes = 0;
+    Slots slots{.started = started, .sampledAt = started, .sampledBytes = 0};
+    constexpr std::uint64_t kLeast = 1'000'000;
+    constexpr std::uint64_t kMost = 25'000'000;
+    std::uint64_t size = kLeast;
     std::uint64_t before = 0;  // what the requests before this one moved
+    std::string error;
     while (Clock::now() < until) {
-      const auto moved = StreamBytes(url, input.userAgent, upload, [&](std::uint64_t bytes) {
+      const auto asked = Clock::now();
+      const std::wstring url = std::format(L"https://speed.cloudflare.com/__down?bytes={}", size);
+      const auto moved = StreamBytes(url, input.userAgent, 0, [&](std::uint64_t bytes) {
         const auto now = Clock::now();
-        const std::uint64_t total = before + bytes;
-        if (now - sampledAt >= step) {
-          samples.push_back(static_cast<float>(Mbps(total - sampledBytes, Seconds(now - sampledAt))));
-          sampledAt = now;
-          sampledBytes = total;
+        if (slots.Fill(samples, before + bytes, now)) {
           onSample();
         }
         return now < until;
       });
       if (!moved) {
-        if (before == 0) {
-          return std::unexpected(moved.error());
-        }
-        break;
+        error = moved.error();  // tried again, smaller, while there's time - not in a tight loop
+        size = std::max(kLeast, size / 2);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        continue;
       }
       before += *moved;
-      if (*moved == 0) {
-        break;
+      if (*moved >= size && Clock::now() - asked < std::chrono::milliseconds(500)) {
+        size = std::min(kMost, size * 2);
       }
+    }
+    if (before == 0) {
+      return std::unexpected(error.empty() ? std::string("ничего не пришло") : error);
     }
     // Over before its first quarter (a tiny answer): its one sample.
     if (samples.empty() && before > 0) {
       samples.push_back(static_cast<float>(Mbps(before, Seconds(Clock::now() - started))));
       onSample();
+    }
+    return {};
+  }
+
+  // The upload: POSTs of a growing size, each timed to the server's answer -
+  // the bytes it took, not the ones the system had buffered (written pieces
+  // counted before they left: 15 and 305 Mbit/s in two runs of one line,
+  // 16.10.2026). From 1 MB, doubled while one takes under half a second, to
+  // 16 MB.
+  std::expected<void, std::string> UploadStream(int seconds, std::vector<float>& samples,
+                                                const std::function<void()>& onSample) const {
+    const auto started = Clock::now();
+    const auto until = started + std::chrono::seconds(seconds);
+    Slots slots{.started = started, .sampledAt = started, .sampledBytes = 0};
+    constexpr std::size_t kMost = std::size_t{16} * 1024 * 1024;
+    const std::string body(kMost, 'x');
+    std::size_t size = std::size_t{1024} * 1024;
+    std::uint64_t total = 0;
+    while (Clock::now() < until) {
+      const auto sent = Clock::now();
+      const auto done = Upload(L"https://speed.cloudflare.com/__up", input.userAgent, std::string_view(body).substr(0, size));
+      const auto now = Clock::now();
+      if (!done) {
+        if (total == 0) {
+          return std::unexpected(done.error());
+        }
+        break;
+      }
+      total += size;
+      if (slots.Fill(samples, total, now)) {
+        onSample();
+      }
+      if (now - sent < std::chrono::milliseconds(500) && size < kMost) {
+        size *= 2;
+      }
     }
     return {};
   }
