@@ -307,9 +307,8 @@ std::expected<std::string, std::string> HttpsSend(const std::wstring& url, const
 }
 
 std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, const std::wstring& userAgent,
-                                                      std::uint64_t upload,
                                                       const std::function<bool(std::uint64_t)>& onBytes) {
-  auto opened = Open(url, userAgent, upload > 0 ? L"POST" : L"GET", "сервер");
+  auto opened = Open(url, userAgent, L"GET", "сервер");
   if (!opened) {
     return std::unexpected(opened.error());
   }
@@ -319,29 +318,6 @@ std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, c
   WinHttpSetTimeouts(request, 10'000, 10'000, 3'000, 3'000);
   constexpr std::size_t kPiece = std::size_t{64} * 1024;
   std::uint64_t moved = 0;
-  if (upload > 0) {
-    // The whole length announced, the body written piece by piece while
-    // wanted - stopped early, the request is dropped unfinished.
-    if (!WinHttpSendRequest(request, L"Content-Type: application/octet-stream", static_cast<DWORD>(-1),
-                            WINHTTP_NO_REQUEST_DATA, 0, static_cast<DWORD>(upload), 0)) {
-      return std::unexpected(Failure("сервер не ответил"));
-    }
-    const std::string piece(kPiece, 'x');
-    while (moved < upload) {
-      const auto size = static_cast<DWORD>(std::min<std::uint64_t>(piece.size(), upload - moved));
-      DWORD written = 0;
-      if (!WinHttpWriteData(request, piece.data(), size, &written)) {
-        // Cut off by the server after a while: what went is what's measured.
-        return moved > 0 ? std::expected<std::uint64_t, std::string>(moved)
-                         : std::unexpected(Failure("обрыв при отправке"));
-      }
-      moved += written;
-      if (!onBytes(moved)) {
-        break;
-      }
-    }
-    return moved;
-  }
   if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
       !WinHttpReceiveResponse(request, nullptr)) {
     return std::unexpected(Failure("сервер не ответил"));

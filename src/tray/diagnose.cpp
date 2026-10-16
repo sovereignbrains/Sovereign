@@ -514,7 +514,7 @@ struct Run {
     while (Clock::now() < until) {
       const auto asked = Clock::now();
       const std::wstring url = std::format(L"https://speed.cloudflare.com/__down?bytes={}", size);
-      const auto moved = StreamBytes(url, input.userAgent, 0, [&](std::uint64_t bytes) {
+      const auto moved = StreamBytes(url, input.userAgent, [&](std::uint64_t bytes) {
         const auto now = Clock::now();
         if (slots.Fill(samples, before + bytes, now)) {
           onSample();
