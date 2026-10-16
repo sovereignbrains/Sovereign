@@ -3325,11 +3325,18 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) 
   sovereign::tray::RoutingSettings routing;
   bool lanClosed = false;
   std::vector<std::string> lanAllowed;
+  sovereign::tray::ExitIp vpn;
+  bool selective = false;
   {
     const std::scoped_lock lock(shared.mutex);
     if (shared.view.checksRunning) {
       return;
     }
+    if (shared.view.wantOn) {
+      vpn = shared.view.exitIp;  // the core's, through the server in use (UpdateExitIp)
+    }
+    // Only chosen things through the VPN: the checks' own requests go directly.
+    selective = shared.view.routing.finalDirect || shared.view.appsMode == AppsMode::Include;
     shared.view.checksRunning = true;
     for (const auto id : which) {
       shared.view.checks[static_cast<std::size_t>(id)] = {};
@@ -3342,7 +3349,7 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) 
   }
   g_checks.reset();  // the last run's thread, finished
   g_checks.emplace([which = std::move(which), host = std::move(host), routing, lanClosed,
-                    lanAllowed = std::move(lanAllowed)](const std::stop_token& stop) {
+                    lanAllowed = std::move(lanAllowed), vpn = std::move(vpn), selective](const std::stop_token& stop) {
     const auto post = [] {
       auto& s = State();
       HWND window = nullptr;
@@ -3357,7 +3364,10 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host) 
                                                .userAgent = kUserAgent,
                                                .routeOf = RouteOf,
                                                .lanClosed = lanClosed,
-                                               .lanAllowed = lanAllowed};
+                                               .lanAllowed = lanAllowed,
+                                               .vpnIp = vpn.ip,
+                                               .vpnCountry = vpn.country,
+                                               .selective = selective};
     sovereign::tray::RunChecks(stop, which, input,
                                [&](sovereign::tray::CheckId id, const sovereign::tray::CheckResult& result) {
                                  {

@@ -92,10 +92,11 @@ struct SiteWay {
 // ядра: …" - the user's own rule, if one names it, before the core's.
 std::string SiteLine(const SiteWay& site, const RoutingSettings& routing);
 // Judged: a foreign site going directly with none of the user's rules
-// saying so fails (blocked sites won't open, the user's own address shows);
-// a Russian one through the VPN with «Российское напрямую» on, or a site
-// not seen, warns.
-CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing);
+// saying so fails (blocked sites won't open, the user's own address shows) -
+// unless only chosen things go through the VPN (`selective`): then that's
+// the mode; a Russian one through the VPN with «Российское напрямую» on, or
+// a site not seen, warns.
+CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing, bool selective = false);
 
 // Which of the client's rules - the user's, or Russia's zones - names `host`
 // (lists aren't read: they're the core's), as a line for the user; empty if

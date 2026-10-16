@@ -34,6 +34,16 @@ struct DiagnoseInput {
   // answering is what was asked for - and answering, that the closing leaks.
   bool lanClosed = false;
   std::vector<std::string> lanAllowed;
+  // The VPN's own exit, as the core finds it through the server in use
+  // (box_exitip); empty while unknown. The checks' requests are the tray's:
+  // with only chosen programs and sites through the VPN (`selective`: what
+  // no rule names goes directly, or only the listed apps go through) they go
+  // directly like anything unlisted - what they see is then the user's own
+  // address, not the VPN's, and that is as meant (16.10.2026: the page took
+  // it for the VPN's and called the home address "the VPN's exit").
+  std::string vpnIp;
+  std::string vpnCountry;
+  bool selective = false;
 };
 
 // Each check as it starts (Running) and as it ends.

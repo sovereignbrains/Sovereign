@@ -1,6 +1,6 @@
 // diagnose-probe: the "Проверка" page's checks from a console, on this
 // machine as it is - for trying them out by hand, not a ctest (they go to
-// the internet). `diagnose-probe [all|speed|route <host>]`.
+// the internet). `diagnose-probe [all|speed|route <host>] [--selective] [--vpn <ip> [country]]`.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -30,6 +30,23 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     } else if (what == "route" && argc > 2) {
       which = {CheckId::Route};
       input.host = argv[2];
+    } else if (what == "all") {
+      which.push_back(CheckId::Route);  // the Russian, European and American sites
+    }
+    // As the tray says it: --selective (only chosen things through the VPN),
+    // --vpn <ip> [country] (the core's exit, box_exitip).
+    for (int i = 2; i < argc; ++i) {
+      const std::string_view arg = argv[i];
+      if (arg == "--selective") {
+        input.selective = true;
+        input.routing.finalDirect = true;
+        input.routing.russiaDirect = false;
+      } else if (arg == "--vpn" && i + 1 < argc) {
+        input.vpnIp = argv[++i];
+        if (i + 1 < argc && std::string_view(argv[i + 1]).size() == 2) {
+          input.vpnCountry = argv[++i];
+        }
+      }
     }
     static constexpr const char* kNames[] = {"exit", "russia", "dns leak", "webrtc", "ipv6", "lan", "dns latency",
                                              "speed", "route"};

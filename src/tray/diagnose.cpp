@@ -188,6 +188,13 @@ struct Run {
   std::string exitLoc;
   std::string directIp;  // what Russian ones see
 
+  // The VPN's exit: the core's, else - everything through the VPN - what the
+  // trace saw; with only chosen things through it, unknown without the core.
+  std::string VpnIp() const { return !input.vpnIp.empty() ? input.vpnIp : input.selective ? std::string() : exitIp; }
+  std::string VpnLoc() const {
+    return !input.vpnCountry.empty() ? input.vpnCountry : input.selective ? std::string() : exitLoc;
+  }
+
   std::optional<Trace> FetchTrace(const wchar_t* url) const {
     const auto body = Download(url, input.userAgent, std::size_t{64} * 1024);
     return body ? ParseTrace(*body) : std::nullopt;
@@ -204,8 +211,31 @@ struct Run {
     }
     exitIp = trace->ip;
     exitLoc = trace->loc;
+    const std::string seen = trace->loc.empty() ? trace->ip : std::format("{} · {}", trace->ip, trace->loc);
+    if (input.selective) {
+      // The trace went directly, as anything unlisted: the VPN's exit is the core's.
+      if (input.vpnIp.empty()) {
+        r.status = Status::Warn;
+        r.summary = "VPN ещё не ответил";
+        r.detail = "Адрес VPN пока не известен — проверь снова через пару секунд после подключения.";
+        return r;
+      }
+      r.status = Status::Ok;
+      r.summary = input.vpnCountry.empty() ? input.vpnIp : std::format("{} · {}", input.vpnIp, input.vpnCountry);
+      r.detail = std::format("Через VPN идут только выбранные программы и сайты — они выходят с этого адреса. "
+                             "Остальные сайты видят твой: {}.",
+                             seen);
+      return r;
+    }
+    r.summary = seen;
+    // Everything through the VPN: a site sees its exit - another address is the traffic going round it.
+    if (!input.vpnIp.empty() && trace->ip != input.vpnIp &&
+        (trace->loc.empty() || input.vpnCountry.empty() || trace->loc != input.vpnCountry)) {
+      r.status = Status::Fail;
+      r.detail = std::format("Сайты видят не адрес VPN ({}), а этот — трафик идёт мимо VPN.", input.vpnIp);
+      return r;
+    }
     r.status = Status::Ok;
-    r.summary = trace->loc.empty() ? trace->ip : std::format("{} · {}", trace->ip, trace->loc);
     r.detail = "Этот адрес видят зарубежные сайты.";
     return r;
   }
@@ -222,7 +252,14 @@ struct Run {
     }
     directIp = *ip;
     r.summary = *ip;
-    const bool same = !exitIp.empty() && *ip == exitIp;
+    const std::string vpn = VpnIp();
+    const bool same = !vpn.empty() && *ip == vpn;
+    if (input.selective) {
+      r.status = Status::Ok;
+      r.detail = same ? "Российские сайты идут через VPN — так решили твои правила."
+                      : "Российские сайты видят твой адрес: в список VPN они не входят.";
+      return r;
+    }
     if (input.routing.russiaDirect) {
       r.status = same ? Status::Fail : Status::Ok;
       r.detail = same ? "Российские сайты видят адрес сервера, а не твой: правило «напрямую» не сработало."
@@ -265,10 +302,16 @@ struct Run {
       return r;
     }
     r.summary = *mapped;
-    if (!directIp.empty() && *mapped == directIp && *mapped != exitIp) {
+    const std::string vpn = VpnIp();
+    if (input.selective) {
+      r.status = Status::Ok;
+      r.detail = *mapped == vpn ? "WebRTC видит адрес VPN."
+                                : "Проверка идёт не из списка VPN и видит твой адрес — так и задумано. "
+                                  "Программы из списка выдают через WebRTC адрес VPN.";
+    } else if (!directIp.empty() && *mapped == directIp && *mapped != vpn) {
       r.status = Status::Fail;
       r.detail = "Утечка: через WebRTC сайты увидят твой настоящий адрес.";
-    } else if (!exitIp.empty() && *mapped != exitIp) {
+    } else if (!vpn.empty() && *mapped != vpn) {
       r.status = Status::Warn;
       r.detail = "WebRTC видит адрес, отличный от адреса VPN — у UDP другой выход.";
     } else {
@@ -288,7 +331,13 @@ struct Run {
       return r;
     }
     r.summary = trace->loc.empty() ? trace->ip : std::format("{} · {}", trace->ip, trace->loc);
-    const bool proxied = trace->ip == exitIp || (!trace->loc.empty() && trace->loc == exitLoc);
+    const std::string vpnLoc = VpnLoc();
+    const bool proxied = trace->ip == VpnIp() || (!trace->loc.empty() && trace->loc == vpnLoc);
+    if (input.selective) {
+      r.status = Status::Ok;
+      r.detail = proxied ? "IPv6 идёт через VPN." : "IPv6 идёт напрямую — как всё, что не в списке VPN.";
+      return r;
+    }
     r.status = proxied ? Status::Ok : Status::Fail;
     r.detail = proxied ? "IPv6 идёт через VPN." : "IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.";
     return r;
@@ -432,7 +481,7 @@ struct Run {
       for (const RouteProbe& probe : kRouteProbes) {
         sites.push_back(Visit(std::string(probe.host), probe.russian));
       }
-      return JudgeRoutes(sites, input.routing);
+      return JudgeRoutes(sites, input.routing, input.selective);
     }
     std::string host = input.host;
     if (const std::size_t scheme = host.find("://"); scheme != std::string::npos) {

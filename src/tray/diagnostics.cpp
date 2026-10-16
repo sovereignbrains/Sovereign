@@ -301,7 +301,7 @@ std::string SiteLine(const SiteWay& site, const RoutingSettings& routing) {
   return line;
 }
 
-CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing) {
+CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing, bool selective) {
   CheckResult result;
   result.status = CheckResult::Status::Ok;
   // The summary by outcome, in the sites' order: "напрямую: ya.ru · через VPN: spiegel.de, chatgpt.com".
@@ -321,7 +321,7 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
     lines += std::format("{}{}", lines.empty() ? "" : "\n", SiteLine(site, routing));
 
     const bool direct = site.way && site.way->type == "direct";
-    if (direct && !site.russian && ClientRuleFor(site.host, routing).empty()) {
+    if (direct && !site.russian && !selective && ClientRuleFor(site.host, routing).empty()) {
       result.status = CheckResult::Status::Fail;
       why = std::format("{} идёт мимо VPN: заблокированные сайты не откроются, а сайт видит твой адрес.", site.host);
     } else if (result.status == CheckResult::Status::Ok) {
@@ -338,8 +338,9 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
     result.summary += std::format("{}{}: {}", result.summary.empty() ? "" : " · ", outcome, hosts);
   }
   if (result.status == CheckResult::Status::Ok) {
-    why = routing.russiaDirect ? "Российские сайты идут напрямую, зарубежные — через VPN."
-                               : "Сайты идут через VPN.";
+    why = selective             ? "Через VPN идут только выбранные программы и сайты, остальные — напрямую."
+          : routing.russiaDirect ? "Российские сайты идут напрямую, зарубежные — через VPN."
+                                 : "Сайты идут через VPN.";
   }
   result.detail = why + "\n" + lines;
   return result;

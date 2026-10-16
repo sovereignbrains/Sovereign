@@ -120,6 +120,13 @@ void TestRoutes() {
   CHECK(JudgeRoutes({site("spiegel.de", false, direct)}, routing).status == CheckResult::Status::Ok);
   routing.rules.clear();
 
+  // Only chosen things through the VPN: a foreign site directly is the mode, not a failure.
+  r = JudgeRoutes({site("ya.ru", true, direct), site("spiegel.de", false, direct), site("chatgpt.com", false, direct)},
+                  routing, /*selective=*/true);
+  CHECK(r.status == CheckResult::Status::Ok);
+  CHECK(r.summary == "напрямую: ya.ru, spiegel.de, chatgpt.com");
+  CHECK(r.detail.starts_with("Через VPN идут только выбранные"));
+
   // The Russian one through the VPN: a warning with «Российское напрямую» on,
   // as it should be with it off; a site not seen, a warning either way.
   CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Warn);
