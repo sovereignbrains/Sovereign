@@ -488,6 +488,7 @@ struct Shared {
   bool pendingToggleRoutingMore = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
+  bool pendingReconnect = false;
   bool pendingToggleLanClosed = false;
   std::vector<std::pair<sovereign::tray::LanHost, bool>> pendingLan;  // an address let in (true) or not, in order
   std::optional<AppsChange> pendingApps;
@@ -504,7 +505,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -692,6 +693,7 @@ class Worker {
       bool toggleRoutingMore = false;
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
+      bool reconnect = false;
       bool toggleLanClosed = false;
       std::vector<std::pair<sovereign::tray::LanHost, bool>> lan;
       {
@@ -715,6 +717,7 @@ class Worker {
         toggleRoutingMore = std::exchange(shared.pendingToggleRoutingMore, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
+        reconnect = std::exchange(shared.pendingReconnect, false);
         toggleLanClosed = std::exchange(shared.pendingToggleLanClosed, false);
         lan = std::exchange(shared.pendingLan, {});
       }
@@ -828,6 +831,10 @@ class Worker {
         killSwitchError_.clear();
         lastKillSwitchTry_.reset();
         Save();
+      }
+      // Stopped while wanted on: the next poll starts it again, with the config as it is now.
+      if (reconnect && model_.WantOn()) {
+        Execute(model_, Action::Stop, std::nullopt, false);
       }
       if (toggleLanClosed || !lan.empty()) {
         if (toggleLanClosed) {
@@ -4201,7 +4208,10 @@ UiContent ContentFrom(const View& v) {
                         .summary = Widen(result.summary),
                         .detail = Widen(result.detail),
                         .status = static_cast<sovereign::tray::UiCheck::Status>(result.status),
-                        .hint = kCheckHints[i]});
+                        .hint = kCheckHints[i],
+                        .fix = result.status == sovereign::tray::CheckResult::Status::Fail
+                                   ? static_cast<sovereign::tray::UiCheck::Fix>(result.fix)
+                                   : sovereign::tray::UiCheck::Fix::None});
   }
   c.checksRunning = v.checksRunning;
   using sovereign::tray::RoutingSettings;
@@ -5408,6 +5418,15 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       } else {
         RequestRelay({.url = std::nullopt, .key = text});
       }
+      break;
+    }
+    case UiCommand::Reconnect: {
+      {
+        auto& shared = State();
+        const std::scoped_lock lock(shared.mutex);
+        shared.pendingReconnect = true;
+      }
+      Wake();
       break;
     }
     case UiCommand::ToggleKillSwitch:

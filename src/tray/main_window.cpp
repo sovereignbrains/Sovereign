@@ -2161,7 +2161,75 @@ class Painter {
         l.items.push_back(std::move(run));
       }
     }
-    return y + h;
+    y += h;
+
+    // The failed ones' way out, under the results: a banner an action, the
+    // checks it helps named in it (WebRTC and IPv6 both want the kill switch).
+    std::vector<FixAction> ways;
+    for (const UiCheck& check : c.checks) {
+      if (check.status != UiCheck::Status::Fail || check.fix == UiCheck::Fix::None) {
+        continue;
+      }
+      FixAction way = FixWay(check.fix, c);
+      const auto same =
+          std::find_if(ways.begin(), ways.end(), [&](const FixAction& w) { return w.label == way.label; });
+      if (same != ways.end()) {
+        same->titles += L", " + check.title;
+        continue;
+      }
+      way.titles = check.title;
+      ways.push_back(std::move(way));
+    }
+    for (const FixAction& way : ways) {
+      y += 8;
+      Item banner = Make(Kind::Banner, {x0, y, x1, y + 40}, way.titles + L" — " + way.label, kGlyphWarning);
+      banner.action = way.action;
+      banner.command = way.command;
+      banner.index = way.index;
+      l.items.push_back(std::move(banner));
+      y += 40;
+    }
+    return y;
+  }
+
+  // A failed check's way out on the page: what the banner says, and what a
+  // click does - a command, or a page opened; `titles`: the checks it helps.
+  struct FixAction {
+    std::wstring label;
+    ItemAction action = ItemAction::Command;
+    UiCommand command{};
+    int index = 0;
+    std::wstring titles;
+  };
+
+  // What the page offers for a failed check (UiCheck::Fix). The kill switch
+  // already on, a leak is the connection's: it's restarted.
+  static FixAction FixWay(UiCheck::Fix fix, const UiContent& c) {
+    const auto page = [](const wchar_t* label, UiPage to) {
+      return FixAction{
+          .label = label, .action = ItemAction::Page, .command = {}, .index = static_cast<int>(to), .titles = {}};
+    };
+    const auto reconnect = [] {
+      return FixAction{
+          .label = L"переподключить", .action = ItemAction::Command, .command = UiCommand::Reconnect, .index = 0, .titles = {}};
+    };
+    switch (fix) {
+      case UiCheck::Fix::KillSwitch:
+        if (!c.killSwitch) {
+          return FixAction{.label = L"включить Kill switch",
+                     .action = ItemAction::Command,
+                     .command = UiCommand::ToggleKillSwitch,
+                     .index = 0,
+                     .titles = {}};
+        }
+        return reconnect();
+      case UiCheck::Fix::Routing: return page(L"открыть маршруты", UiPage::Routing);
+      case UiCheck::Fix::Dns: return page(L"сменить DNS в маршрутах", UiPage::Routing);
+      case UiCheck::Fix::LocalNetwork: return page(L"открыть настройки локальной сети", UiPage::Settings);
+      case UiCheck::Fix::Reconnect:
+      case UiCheck::Fix::None: break;
+    }
+    return reconnect();
   }
 
   // The per-app list - a section of Routing: which programs go through the proxy.

@@ -18,11 +18,17 @@
 
 namespace sovereign::tray {
 
+// What can be done about a failed check, the page's way out of it: the
+// connection restarted, the kill switch on (anything going round the VPN
+// stops), the routing or its DNS opened, the local network's settings.
+enum class CheckFix : std::uint8_t { None, Reconnect, KillSwitch, Routing, Dns, LocalNetwork };
+
 struct CheckResult {
   enum class Status : std::uint8_t { NotRun, Running, Ok, Warn, Fail };
   Status status = Status::NotRun;
   std::string summary;  // one line: "5.83.147.210 · DE"
   std::string detail;   // what it means, what to do
+  CheckFix fix = CheckFix::None;  // with a Fail: the way out, if there's one
 };
 
 // Cloudflare's /cdn-cgi/trace: "ip=...\nloc=DE\n...".

@@ -207,6 +207,7 @@ struct Run {
       r.status = Status::Fail;
       r.summary = "нет ответа";
       r.detail = "Зарубежный сайт недоступен: подключение не работает или сервер не отвечает.";
+      r.fix = CheckFix::Reconnect;
       return r;
     }
     exitIp = trace->ip;
@@ -233,6 +234,7 @@ struct Run {
         (trace->loc.empty() || input.vpnCountry.empty() || trace->loc != input.vpnCountry)) {
       r.status = Status::Fail;
       r.detail = std::format("Сайты видят не адрес VPN ({}), а этот — трафик идёт мимо VPN.", input.vpnIp);
+      r.fix = CheckFix::KillSwitch;
       return r;
     }
     r.status = Status::Ok;
@@ -264,6 +266,7 @@ struct Run {
       r.status = same ? Status::Fail : Status::Ok;
       r.detail = same ? "Российские сайты видят адрес сервера, а не твой: правило «напрямую» не сработало."
                       : "Российские сайты видят твой адрес, не адрес сервера.";
+      r.fix = same ? CheckFix::Routing : CheckFix::None;
     } else {
       r.status = Status::Ok;
       r.detail = same ? "«Российское напрямую» выключено: российские сайты видят адрес сервера."
@@ -311,6 +314,7 @@ struct Run {
     } else if (!directIp.empty() && *mapped == directIp && *mapped != vpn) {
       r.status = Status::Fail;
       r.detail = "Утечка: через WebRTC сайты увидят твой настоящий адрес.";
+      r.fix = CheckFix::KillSwitch;
     } else if (!vpn.empty() && *mapped != vpn) {
       r.status = Status::Warn;
       r.detail = "WebRTC видит адрес, отличный от адреса VPN — у UDP другой выход.";
@@ -340,6 +344,7 @@ struct Run {
     }
     r.status = proxied ? Status::Ok : Status::Fail;
     r.detail = proxied ? "IPv6 идёт через VPN." : "IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.";
+    r.fix = proxied ? CheckFix::None : CheckFix::KillSwitch;
     return r;
   }
 
@@ -362,6 +367,7 @@ struct Run {
         r.detail = rtt ? "Фильтр не держит: выключи и включи «Закрыть компьютер от сети» в настройках."
                        : "Компьютер закрыт от локальной сети (настройки), роутер в том числе — так и задумано. "
                          "Интернет это не трогает.";
+        r.fix = rtt ? CheckFix::LocalNetwork : CheckFix::None;
         return r;
       }
       r.status = rtt ? Status::Ok : Status::Fail;
@@ -412,6 +418,7 @@ struct Run {
                : r.status == Status::Warn
                    ? "Новые имена узнаются медленно (знакомые берутся из кэша сразу). Попробуй другой DNS или сервер."
                    : "Новые имена: зарубежные — через VPN, российские — напрямую; знакомые — из кэша сразу.";
+    r.fix = r.status == Status::Fail ? CheckFix::Dns : CheckFix::None;
     return r;
   }
 
@@ -437,6 +444,7 @@ struct Run {
       r.status = Status::Fail;
       r.summary = "не удалось";
       r.detail = "Сервер замера недоступен: " + down.error();
+      r.fix = CheckFix::Reconnect;
       return r;
     }
     std::sort(pings.begin(), pings.end());
@@ -508,7 +516,8 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
     for (const CheckId id : which) {
       progress(id, CheckResult{.status = Status::Fail,
                                .summary = "сеть недоступна",
-                               .detail = std::format("Winsock не запустился (ошибка {}).", failed)});
+                               .detail = std::format("Winsock не запустился (ошибка {}).", failed),
+                               .fix = CheckFix::None});
     }
     return;
   }
@@ -517,7 +526,7 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
     if (stop.stop_requested()) {
       break;
     }
-    progress(id, CheckResult{.status = Status::Running, .summary = "проверяю...", .detail = {}});
+    progress(id, CheckResult{.status = Status::Running, .summary = "проверяю...", .detail = {}, .fix = CheckFix::None});
     CheckResult result;
     switch (id) {
       case CheckId::Exit: result = run.Exit(); break;

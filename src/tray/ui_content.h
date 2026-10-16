@@ -160,11 +160,14 @@ struct UiRouting {
 // The checks' page (diagnostics.h): one row each.
 struct UiCheck {
   enum class Status : std::uint8_t { NotRun, Running, Ok, Warn, Fail };
+  // A failed one's way out (diagnostics.h CheckFix): the page offers it under the results.
+  enum class Fix : std::uint8_t { None, Reconnect, KillSwitch, Routing, Dns, LocalNetwork };
   std::wstring title;
   std::wstring summary;
   std::wstring detail;
   Status status = Status::NotRun;
   std::wstring hint;  // what it checks and how - its "?"
+  Fix fix = Fix::None;
 };
 
 // What the tray's window shows; built by main.cpp from the worker's view.
@@ -341,6 +344,7 @@ enum class UiCommand : std::uint8_t {
   OpenWindow,    // index: the UiPage to show
   OpenFolder,
   Exit,
+  Reconnect,     // the connection stopped and started again with the config as it is (the checks' way out)
 };
 
 struct UiArgs {

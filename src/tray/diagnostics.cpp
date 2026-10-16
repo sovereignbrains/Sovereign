@@ -236,6 +236,7 @@ CheckResult JudgeDnsLeak(const std::vector<DnsResolverSeen>& resolvers) {
   if (russian) {
     result.status = CheckResult::Status::Fail;
     result.detail = "Зарубежные имена спрашивает DNS-сервер в России — скорее всего, провайдера: он видит, куда ты ходишь.";
+    result.fix = CheckFix::Dns;
   } else {
     result.status = CheckResult::Status::Ok;
     result.detail = "Зарубежные имена спрашиваются через VPN — провайдер их не видит.";
@@ -323,6 +324,7 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
     const bool direct = site.way && site.way->type == "direct";
     if (direct && !site.russian && !selective && ClientRuleFor(site.host, routing).empty()) {
       result.status = CheckResult::Status::Fail;
+      result.fix = CheckFix::Routing;
       why = std::format("{} идёт мимо VPN: заблокированные сайты не откроются, а сайт видит твой адрес.", site.host);
     } else if (result.status == CheckResult::Status::Ok) {
       if (!site.way) {
