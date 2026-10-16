@@ -79,6 +79,10 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/IM sovereign-tray.exe /F"; Flags: 
 Filename: "{app}\sovereign-core.exe"; Parameters: "--uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveService"
 Filename: "{sys}\reg.exe"; Parameters: "delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v Sovereign /f"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutostart"
 
+[UninstallDelete]
+; Whatever else turned up in the program's folder.
+Type: filesandordirs; Name: "{app}"
+
 [Code]
 // Before any file is replaced: the tray (in the user's session) and the
 // service hold sovereign-*.exe and the DLLs. The tray first gets a normal
@@ -98,4 +102,36 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   StopRunning();
   Result := '';
+end;
+
+// Nothing left behind, as Revo Uninstaller's leftover scan would find it
+// (16.10.2026): the logs, the box's cache, the lists, the updates downloaded,
+// Task Manager's autostart mark - always; the subscriptions and configs (the
+// servers' keys) when the user says so, yes by default - "no" keeps them for
+// a reinstall. Silent: all of it. An update never runs the uninstaller.
+var
+  KeepSettings: Boolean;
+
+procedure DeleteLeftovers();
+begin
+  // After --uninstall: the ETW session is stopped, its .etl files free.
+  DelTree(ExpandConstant('{commonappdata}\Sovereign'), True, True, True);
+  DelTree(AddBackslash(GetTempDir()) + 'Sovereign-Update', True, True, True);
+  RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', 'Sovereign');
+  if not KeepSettings then
+    DelTree(ExpandConstant('{localappdata}\Sovereign'), True, True, True);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  // Asked before anything goes, not after: the answer is all that's waited for.
+  if CurUninstallStep = usUninstall then
+    // Silent: no question - and no MsgBox evaluated for it.
+    if UninstallSilent then
+      KeepSettings := False
+    else
+      KeepSettings := (MsgBox('Удалить также подписки, конфигурации и настройки Sovereign?' + #13#10#13#10 +
+                      'Нет — оставить их на случай переустановки.', mbConfirmation, MB_YESNO) = IDNO);
+  if CurUninstallStep = usPostUninstall then
+    DeleteLeftovers();
 end;
