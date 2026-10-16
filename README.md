@@ -8,7 +8,7 @@ Third-party sing-box clients have a reputation for being thin, sloppy wrappers. 
 
 - **Servers are written from generated types, not by hand.** Every outbound and WireGuard endpoint the client writes (share links, subscriptions, WARP) is a C++ option struct generated from the pinned sing-box sources by `tools/codegen` (real Go type-checking, not regex; sing-box's discriminated unions read from its own schema). CI regenerates them and fails on any drift from upstream, and the import tests require our servers to come out of `sing-box format` unchanged - and to read back through the generated structs the same. The routing frame around them (DNS, rules, TUN) is still assembled by hand.
 - **What goes on the wire is compared with the reference, byte for byte.** A conformance harness captures the TLS ClientHello Sovereign's core sends and the one the official sing-box release sends, and diffs them outside the fields that are random by design.
-- **Clean C++.** RAII only, no `new`/`delete`, warnings as errors, MSVC `/analyze`, clang-tidy, AddressSanitizer.
+- **Clean C++.** RAII only, no `new`/`delete`, warnings as errors, MSVC `/analyze`, clang-tidy, AddressSanitizer, ThreadSanitizer, fuzzing.
 
 ## Status
 
@@ -20,41 +20,46 @@ The client works and is in daily use; the project is between its MVP and its con
 | P1 | Option structs generated from sing-box, golden tests | done — [#2](https://github.com/sovereignbrains/Sovereign/issues/2) |
 | P2 | Hybrid MVP: sing-box as a DLL inside the service, TUN, tray | feature-complete; acceptance on a clean Windows 11 and a week of daily use (G2) pending — [#3](https://github.com/sovereignbrains/Sovereign/issues/3) |
 | P2.5 | Per-UA subscription, ETW logging, system DNS left alone | done — [#4](https://github.com/sovereignbrains/Sovereign/issues/4) |
-| P3 | Conformance harness against the pinned reference | minimum met: byte-identical ClientHello for AnyTLS and AnyTLS+REALITY in CI; fuzzing in CI; TSan next — [#5](https://github.com/sovereignbrains/Sovereign/issues/5) |
+| P3 | Conformance harness against the pinned reference | minimum met: byte-identical ClientHello for AnyTLS and AnyTLS+REALITY in CI; fuzzing and ThreadSanitizer in CI — [#5](https://github.com/sovereignbrains/Sovereign/issues/5) |
 | P4 | NativeCore (own TLS/transport), optional | not started — [#6](https://github.com/sovereignbrains/Sovereign/issues/6) |
 | P5 | Upstream the harness, release | not started — [#7](https://github.com/sovereignbrains/Sovereign/issues/7) |
 
 ## What it does today
 
-**Tray** (`sovereign-tray.exe`) — one compact window (about 400×620), opened by a click on the notification-area icon, in the corner by it; a right click gives a short menu (on/off, open, log, quit). Its main screen: the state and speed in a line at the top, tiles into the subscription, the apps, the log and the settings, and a bar at the bottom with the on/off button, the server in use - a click on it opens the servers - and the exit IP with its country's flag (a click hides the address, leaving the country; looked up through the server itself, via Cloudflare's trace):
+The interface is in Russian. Paste a subscription, press the switch, forget about it — and everything past that is a click away when it's wanted.
 
-- on/off, with live speed and connection count;
-- **configurations**: as many as you add - subscriptions, sets of keys, config files - listed on the subscription page, each with an on/off switch. **All that are on run together**: the first one on gives the frame (its inbounds, DNS, routing, rule sets) and every other one adds its servers to the frame's proxy selector and its URL tests, so the server list and `auto` cover them all (tags that clash get the configuration's name). A click opens a configuration's page: rename it, turn auto-update on or off with any interval (the server's `Profile-Update-Interval`, a preset, or any number of hours), refresh, copy the link, carry edits over a new version, remove it (its `config.json` is kept in `history\`) - and its servers with their protocols (`VLESS · REALITY`, `Trojan · WS`...), each with a switch: a server switched off leaves the config with whatever was chained through it and groups left empty, and whatever pointed at it (rules, DNS detours, rule-set downloads, `route.final`) points at the selector instead. Every combined config is checked against the pinned sing-box in CI. Each configuration has its own folder (`profiles\<id>\`), named by the panel's `Profile-Title` until you rename it. Adding never replaces: a link already there is switched on and refreshed, the same keys again switch theirs on. A tray from before this keeps its configuration;
-- **routing and DNS are the client's**: in "own" mode (the default) Sovereign builds the TUN, DNS and routing itself and the configurations only give servers; in "subscription" mode one chosen configuration's routing and DNS stay. Either way the client's rules come first: **Russia directly** (on by default - a Russian site or app that sees the proxy server's address can tie it to you): the .ru/.рф/.su/... zones, the `category-ru`/`gov-ru` lists and Russian IPs go around the proxy, and their names resolve directly; ads blocked; QUIC blocked (browsers fall back to TCP, steadier through a proxy); your own rules - sites, IP ranges, programs - directly, through the proxy or blocked, added in place, and "copy from a subscription". DNS: remote through the proxy (Cloudflare/Google/Quad9 over HTTPS), direct names and the servers' own over encrypted DNS straight from here (Cloudflare or Google over HTTPS, or the system's), IPv4 only by default. The lists are SagerNet's `sing-geosite`/`sing-geoip` rule sets, downloaded by the tray and refreshed daily, given to the core as local files - a list that can't be fetched never stops a start (the zones still go directly meanwhile). Every combination is checked against the pinned sing-box in CI;
-- **checks** ("Проверка", a tile): the tray's own requests go through the TUN and the rules like any program's, so they meet what the user's programs meet - the exit address foreign sites see (Cloudflare's trace); the one Russian sites see (Yandex: your own with "Russia directly"); a DNS leak test (bash.ws: which resolvers ask for the test's names - one in Russia means the provider's); WebRTC (a STUN request, as a browser's: it must see the proxy's address, not yours); IPv6 (through the proxy or not at all); the local network (the router's ping); DNS latency for foreign names (through the proxy) and Russian ones (directly); on their own buttons, speed through the proxy (Cloudflare: download, upload, latency) and "where does this address go" (a real request, the outbound read off the core's log, the client rule that matches). `diagnose-probe` runs them from a console;
-- **adding one**: paste from the clipboard, open a file or scan the screen for a QR code - whatever it holds: an `https://` link (bare, or inside an app's deep link: `sing-box://import-remote-profile`, `clash://install-config`, `hiddify://import/`, `sub://`...), a whole sing-box config, proxy keys (`vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`/`hy2://`, `hysteria://`, `tuic://`, `anytls://`, `socks://`, `naive+https://`, `wireguard://`/`wg://`, `ssh://`, `snell://`: one or many, on lines, spaced, glued together, percent-encoded, in HTML or base64-encoded), other clients' formats (Clash/Mihomo YAML, Xray/v2rayN JSON, SIP008, bare sing-box outbounds), or a picture of QR codes (a screenshot or an image on the clipboard, an image file, several codes at once); servers become a config of your own, and every config built that way passes the pinned sing-box's `check` in CI; a subscription server that answers in any of these formats instead of a sing-box config works too, copy the link to share it, unsubscribe; refresh by hand or on the server's `Profile-Update-Interval`; the server sees as little of the user as can be: a `sing-box 1.x.y` User-Agent (the pinned core's version, nothing of Sovereign's), an `x-hwid` that is random per configuration (never the machine's, no OS or device model), and - while the box runs - the proxy's address, not the user's (the subscription hosts go through the proxy ahead of every routing rule);
-- **the config is yours to edit**: the subscription is kept as it arrived (`subscription.json`) and `config.json` starts as its copy. A new version replaces an unedited config silently; over your edits it waits (`subscription.new.json`) and you choose — carry your edits over to it (a three-way merge: objects key by key, tagged lists like `outbounds` by tag, route rules keeping your additions and removals in place; where both sides changed the same thing yours wins and it's listed), take the new one, or keep yours. "Back to the subscription" drops the edits. Whatever gets replaced goes to `history\` first (the last 20);
-- **servers**: pick any option of the subscription's selector (or `auto`) - switched in the running box, no restart - with each server's latency measured so that it means something: one connection through the server, then requests over it until the round trips settle (5 to 15 of them), shown as the median ± half their spread, with the losses and how long the connection took (sing-box's own URL test is one cold request a server, its number jumps from test to test). Run on each connect, on demand, and with `auto` every 10 minutes. `auto` is the tray's: the best server by those measurements (spread and losses count against it), and another one only once it has been clearly better (by a fifth and 20 ms) two tests in a row - or at once if the one in use stops answering;
-- **per-app routing**: everything except a list of programs, or only the list; each shown with its own icon (the exe path is remembered when it is added, or found among running processes);
-- **log**: the core's lines with their levels in color; filters by level (with counts), pause (new lines wait, counted), a click shows the line in full, right-click to copy, select all, save to a .txt or clear; what the core writes at all (debug/info/warn/error, or the config's) is picked there too;
-- **kill switch** (the overview and settings): while the connection is on, nothing goes out except through the proxy - if the core or the service falls over, or the machine reboots mid-session, the internet stays closed until it's back (the window says so); turning the connection off opens it. The local network (printers, NAS) can stay reachable, DNS there excepted;
-- start at sign-in, updates.
+**The main screen** — a cube for a switch (its colour and pose are the connection's state), the traffic drawn live around it (through the VPN, directly, through WARP, ads blocked on its face), the server in use with its country's flag (a click opens the servers), and a card per configuration: its name and till when it's paid, with "+" to add another (the clipboard, a QR code on the screen, a file). The title bar holds the tools (the speed test, the checks, where an address goes, the log) and the settings. A click on the notification-area icon opens the window by it; a right click gives on/off, open, the log, quit.
 
-Every page (servers, subscription, apps, the log and settings) opens in the window's place, back with the arrow or Esc. What waits for a click (a new version, a subscription meeting your edits) is one line above the tiles. Drawn with Direct2D, keyboard-navigable (Tab, Enter, Ctrl+1..6, Esc). Started by hand the tray opens the window; from the Run key (`--background`) it stays in the notification area; a second start brings the running tray's window up. Closing it only hides it.
+**Configurations** — subscriptions, sets of keys and config files, as many as you add, every one that's on running together: their servers go into one list with `auto`. Anything a provider or another client hands out is taken: an `https://` link (bare or inside an app's deep link), a whole sing-box config, proxy keys (`vless`, `vmess`, `trojan`, `ss`, `hysteria2`, `hysteria`, `tuic`, `anytls`, `socks`, `naive`, `wireguard`, `ssh`, `snell` — on lines, glued together, percent-encoded or base64), Clash/Mihomo YAML, Xray/v2rayN JSON, SIP008, or a picture of QR codes. Every config built that way passes the pinned sing-box's `check` in CI. A subscription server sees as little as can be: a `sing-box 1.x.y` User-Agent, an `x-hwid` that is random per configuration (never the machine's), and the VPN's address rather than yours; with no connection up, an optional relay (your own Cloudflare Worker, `tools/relay`) fetches it instead. A provider's "auto" balancer servers are hidden — the tray picks. When a subscription is in trouble (unpaid, out of traffic, its servers silent), the main screen says so and offers a report for the provider's support: only what concerns their service, nothing about you.
+
+**Servers** — each one's latency measured so that it means something: one connection, then requests over it until the round trips settle, shown as the median ± half their spread with losses (sing-box's own URL test is one cold request). `auto` takes the best and moves only once another has been clearly better twice in a row, or at once if the one in use stops answering. Switching never restarts the connection.
+
+**Routing and DNS are the client's** — a configuration gives servers; the TUN, the DNS and the rules are Sovereign's. On a board of four ways — through the VPN, directly, through WARP, blocked — sit services (28 of them: Netflix, YouTube, ChatGPT, Telegram — its desktop app by its IP ranges too —, Steam and Epic games…; a service can also go through a country — the fastest server whose exit is there), programs, sites, Russian sites, ads, cookie banners and the local network. Everything through the VPN but the exceptions, or only what's chosen. WARP is a Cloudflare WireGuard endpoint the client registers itself, over the VPN or directly. Fine settings, folded: QUIC (blocked automatically when the servers can't carry it as UDP), Hysteria 2's Brutal speed, IPv4 only, the DNS for sites through the VPN and for direct ones (encrypted, auto by default, or your own: plain, TLS, HTTPS, QUIC). The lists are SagerNet's `sing-geosite`/`sing-geoip` and AdGuard's, fetched by the tray, refreshed daily and given to the core as local files; every combination is checked against the pinned sing-box in CI. The config stays yours to edit: over your edits a new version of the subscription waits, and you take it, keep yours or carry your edits over (a three-way merge).
+
+**Protection** — a kill switch (on by default): while the connection is meant to be on nothing leaves the machine but through the VPN, and if the service falls over or the machine reboots, the internet stays shut until it's back. The local network can be closed both ways, the router included, with the devices you choose let through. With "start and connect" the service brings the tunnel up at boot, before anyone signs in — no browser in the Startup folder gets there first.
+
+**Checks** — the tray's own requests go through the TUN and the rules like any program's, so they meet what your programs meet: the VPN's exit, what Russian sites see, a DNS leak test (bash.ws), WebRTC (a STUN request, as a browser's), IPv6, the local network, DNS latency, where the Russian, European and American sites go (asked of the core's own connection tracker). They know the mode: with only chosen things through the VPN, a site going directly is as meant, not a leak. A failed one offers its way out — turn the kill switch on, reconnect, open the routing or the DNS. The speed test streams each way for a few seconds against Cloudflare and draws a graph as it goes. `diagnose-probe` runs the same checks from a console.
+
+**Log** — the core's lines in colour, filters by level, pause, save, a line in full on a click, scrolled with the middle button as in a browser; noise the core reports as errors (a stream closed without one) shown as what it is.
+
+**Updates and uninstalling** — the tray checks for a new release and updates in place (the installer checked against the release's `.sha256`). Uninstalling leaves nothing behind: the service, the filters, the logs, the cache, the boot config and the downloaded updates always go; the subscriptions and settings (your servers' keys) too, unless you say keep them.
+
+Drawn with Direct2D, keyboard-navigable (Tab, Enter, Esc, Ctrl+1..5 for the main screen, servers, configurations, log and settings). Started by hand the tray opens the window; from the Run key (`--background`) it stays in the notification area. Closing the window only hides it.
 
 **Service** (`sovereign-core.exe`, runs as SYSTEM):
 
 - hosts sing-box (`sovereign-gocore.dll`, the pinned version built with upstream's Windows release tags) behind an `ICore` interface;
 - TUN through wintun; system DNS settings are never touched — DNS is hijacked inside the route;
-- enforces the kill switch with Windows Filtering Platform filters of its own (persistent, in their own sublayer): only `sovereign-core.exe`, loopback, DHCP, the TUN's addresses and optionally the LAN get out;
-- restarts the box after sleep; keeps a cache file so remote rule-sets don't block a start without network;
+- enforces the kill switch and the closed local network with Windows Filtering Platform filters of its own (persistent, in their own sublayer);
+- starts the config kept for boot by itself (DPAPI-encrypted, readable by SYSTEM and Administrators only), restarts the box after sleep, keeps a cache file so remote rule sets don't block a start without network;
+- answers the checks from the core's traffic manager — where the newest connection to an address went, by which rule;
 - logs through ETW (TraceLogging provider `Sovereign.Core`) with an always-on flight recorder.
 
 ## How it fits together
 
 ```
 sovereign-tray.exe  (user session)                sovereign-core.exe  (Windows service, SYSTEM)
-  window, subscription, per-app rules,
+  window, configurations, routing,
   builds the effective config         ──JSON over \\.\pipe\sovereign-control──►  ControlHandler
                                                                                    │ ICore
                                                                                    ▼
@@ -64,37 +69,43 @@ sovereign-tray.exe  (user session)                sovereign-core.exe  (Windows s
                                                                           TUN (wintun) → outbounds
 ```
 
-The tray owns all state (settings, the subscription's config) and sends the service a complete config; the service keeps none. The pipe is the only link between them, and there is no pipe into the core — `ICore` is an in-process interface, so a native core (P4) can replace the Go one without changing anything around it.
+The tray owns the state (settings, configurations, routing) and sends the service a complete config; the service keeps only the one it's asked to start at boot. The pipe is the only link between them, and there is no pipe into the core — `ICore` is an in-process interface, so a native core (P4) can replace the Go one without changing anything around it.
 
 ## Repository layout
 
 ```
-src/service/      the service: pipe server, control protocol, GoCore bridge, ETW, power events
-src/tray/         the tray: its window (Direct2D), worker, subscription, per-app rules
+src/service/      the service: pipe server, control protocol, GoCore bridge, kill switch (WFP), boot config, ETW
+src/tray/         the tray: its window (Direct2D), worker, configurations, routing, checks
 src/common/       shared headers and the handwritten JSON adapters (Duration, Listable, ...)
 src/generated/    C++ option structs generated from sing-box — do not edit, regenerate
 src/conformance/  ClientHello parser and canonical form for the harness
 gocore/           the Go side: sing-box built as a c-shared DLL with a C ABI
+installer/        Inno Setup script and its build and smoke scripts
 tools/codegen/    Go -> C++ option-struct generator; pinned versions (sing-box, wintun)
 tools/goldengen/  emits golden JSON through sing-box's own marshaler
+tools/relay/      the subscription relay: a Cloudflare Worker
 tools/trace/      sovtrace.ps1 — start/stop/dump the ETW recording
 tests/unit/       unit tests (control protocol, tray logic, adapters)
 tests/golden/     generated structs and adapters against golden JSON
 tests/conformance/  the harness, golden ClientHellos, captured fixtures
 tests/fuzz/       libFuzzer targets, seed corpora, the JSON dictionary (run with tools/fuzz/run.ps1)
-tests/ui/         ui-snapshot: the main window's pages drawn into PNGs with sample content, no desktop needed
+tests/tsan/       the control plane's and the tray's threads raced under ThreadSanitizer
+tests/ui/         ui-snapshot: the window's pages drawn into PNGs and laid out as text, no desktop needed
 tests/smoke/      service smoke tests run by CI (GoCore, ETW, flight recorder)
 ```
 
 ## How quality is checked
 
-Every push (and a nightly run) goes through five jobs on `windows-latest`:
+Every push (and a nightly run) goes through eight jobs:
 
-- **build** — Debug build with warnings as errors, all tests, the real GoCore smoke test, the ETW flight-recorder test under the real SCM, the conformance harness against the official sing-box release (downloaded and sha256-pinned), and the main window's pages drawn to PNG (the `ui-snapshots` artifact);
+- **build** — Debug build with warnings as errors, all tests, the real GoCore smoke test, the ETW flight-recorder test under the real SCM, the conformance harness against the official sing-box release (downloaded and sha256-pinned), the window's pages drawn to PNG (the `ui-snapshots` artifact) and laid out as text (clickable things overlapping or past the edge fail), and typing in the real window driven by keys;
 - **analyze** — the whole tree under MSVC `/analyze`;
 - **asan** — everything under AddressSanitizer (the Go runtime can't share an ASan process, so GoCore's C++ side is exercised against a stub DLL with the same C ABI — [#9](https://github.com/sovereignbrains/Sovereign/issues/9));
+- **tsan** — the service's control plane and the tray's logic, built on Linux with clang, raced by threads under ThreadSanitizer;
 - **clang-tidy** — with the clang-tidy bundled with the runner's Visual Studio;
-- **fuzz** — four libFuzzer targets (MSVC `/fsanitize=fuzzer` with ASan), a minute each per push and twenty minutes each nightly: the ClientHello parser, the generated config structs and adapters, everything the tray reads that it didn't write (subscriptions, service answers), and the service's control protocol — what any local user can send a SYSTEM service. Besides "no crash" each checks properties: exact round trips, exactly one JSON answer per request. Seeds live in `tests/fuzz/corpus`, every past finding among them.
+- **fuzz** — four libFuzzer targets (MSVC `/fsanitize=fuzzer` with ASan), a minute each per push and twenty minutes each nightly: the ClientHello parser, the generated config structs and adapters, everything the tray reads that it didn't write (subscriptions, service answers), and the service's control protocol — what any local user can send a SYSTEM service. Besides "no crash" each checks properties: exact round trips, exactly one JSON answer per request. Seeds live in `tests/fuzz/corpus`, every past finding among them;
+- **codegen-drift** — the option structs regenerated from the pinned sing-box: any difference from what's committed fails;
+- **installer** — the installer built, then installed, updated and uninstalled on the runner.
 
 The conformance harness in short: five connections of the same client differ on the wire (randoms, GREASE, key shares, Chrome's extension order, ECH GREASE), so the harness first proves that the reference agrees with itself after masking exactly those fields — a mutation test checks that every other byte is compared — and only then compares Sovereign's core with it. Details: the plan and measurements in [#5](https://github.com/sovereignbrains/Sovereign/issues/5).
 
@@ -117,25 +128,25 @@ cmake --build --preset ci
 ctest --test-dir build/ci --output-on-failure
 ```
 
-Presets: `ci` (Debug), `ci-asan`, `ci-analyze`, `ci-fuzz` (then `pwsh tools/fuzz/run.ps1`), `release`. To also run the conformance reference locally, configure with `-DSOVEREIGN_REFERENCE_SINGBOX=<path to the official sing-box.exe of the pinned version>`.
+Presets: `ci` (Debug), `ci-asan`, `ci-analyze`, `ci-fuzz` (then `pwsh tools/fuzz/run.ps1`), `release`. To also run the conformance reference locally, configure with `-DSOVEREIGN_REFERENCE_SINGBOX=<path to the official sing-box.exe of the pinned version>`. The desktop test (typing in the real window) runs in CI by itself; locally set `SOVEREIGN_DESKTOP_TESTS=1`.
 
 ## Installing
 
-Download `Sovereign-Setup-<version>.exe` from [Releases](https://github.com/sovereignbrains/Sovereign/releases) and run it. It installs into Program Files, registers the service (starts with Windows, restarts itself after a crash), adds Sovereign to the Start menu and starts it; uninstall from Settings → Apps. The tray checks for a newer release a minute after start and every 12 hours, and updates in place when asked: it downloads the new installer, checks it against the release's `.sha256` and runs it (Windows asks for administrator rights). Your settings in `%LOCALAPPDATA%\Sovereign` survive updates and uninstalling.
+Download `Sovereign-Setup-<version>.exe` from [Releases](https://github.com/sovereignbrains/Sovereign/releases) and run it. It installs into Program Files, registers the service (starts with Windows, restarts itself after a crash), adds Sovereign to the Start menu and starts it; uninstall from Settings → Apps. The tray checks for a newer release a minute after start and every 12 hours, and updates in place when asked: it downloads the new installer, checks it against the release's `.sha256` and runs it (Windows asks for administrator rights). Your settings in `%LOCALAPPDATA%\Sovereign` survive updates; uninstalling asks whether to keep them.
 
-Releases are built by `.github/workflows/release.yml`: push a tag `vX.Y.Z` (or run the workflow with the version), and it builds the installer (`installer/build.ps1`: Release, the CRT linked in, Inno Setup), installs, updates and uninstalls it on the runner (`installer/smoke.ps1`) and publishes it with its checksum. The CI's `installer` job does the same on every push, without publishing.
+Releases are built by `.github/workflows/release.yml`: push a tag `vX.Y.Z` (or run the workflow with the version), and it builds the installer (`installer/build.ps1`: Release, the CRT linked in, Inno Setup), installs, updates and uninstalls it on the runner (`installer/smoke.ps1`) and publishes it with its checksum.
 
 ## Running from a build
 
 ```
 sovereign-core.exe --install     (admin) register and start the service and its ETW recorder
-sovereign-core.exe --uninstall   (admin) remove both, and the kill switch
+sovereign-core.exe --uninstall   (admin) remove both, the kill switch and the boot config
 sovereign-core.exe --unblock     (admin) lift the kill switch by hand, if the service can't
 sovereign-core.exe --run         run in a console instead, for debugging
-sovereign-tray.exe               the tray and its window; copy a subscription link and use "paste"
+sovereign-tray.exe               the tray and its window; copy a subscription link and use "+"
 ```
 
-Settings and the downloaded config live in `%LOCALAPPDATA%\Sovereign`, the service's logs and cache in `%ProgramData%\Sovereign`. `tools/trace/sovtrace.ps1 dump` decodes the flight recorder.
+Settings and the configurations live in `%LOCALAPPDATA%\Sovereign`; the service's logs, cache, rule sets and boot config in `%ProgramData%\Sovereign`. `tools/trace/sovtrace.ps1 dump` decodes the flight recorder.
 
 ## License
 
