@@ -165,6 +165,7 @@ constexpr const wchar_t* kGlyphClock = L"\xE917";
 constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
 constexpr const wchar_t* kGlyphShield = L"\xEA18";
 constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
+constexpr const wchar_t* kGlyphTools = L"\xE90F";  // Repair: a wrench
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -552,28 +553,9 @@ bool AnyWaiting(const UiContent& c) {
 UiPage BackOf(UiPage page) {
   switch (page) {
     case UiPage::Profile: return UiPage::Subscription;
-    case UiPage::Routing:
-    case UiPage::Checks:
-    case UiPage::Logs: return UiPage::Settings;
-    default: return UiPage::Overview;
+    case UiPage::Routing: return UiPage::Settings;
+    default: return UiPage::Overview;  // the checks and the log too: the main screen's tools open them
   }
-}
-
-// The checks' line in the settings.
-std::wstring ChecksLine(const UiContent& c) {
-  if (c.checksRunning) {
-    return L"проверяю…";
-  }
-  int run = 0;
-  int bad = 0;
-  for (const UiCheck& check : c.checks) {
-    run += check.status != UiCheck::Status::NotRun ? 1 : 0;
-    bad += check.status == UiCheck::Status::Fail || check.status == UiCheck::Status::Warn ? 1 : 0;
-  }
-  if (run == 0) {
-    return L"утечки, скорость, маршруты";
-  }
-  return bad == 0 ? L"всё в порядке" : std::format(L"замечаний: {}", bad);
 }
 
 // The routing's line in the settings.
@@ -1350,11 +1332,12 @@ class Painter {
 
   // Our own title bar (the system's is gone - Impl's WM_NCCALCSIZE): the
   // name on the left; on the right the cross, hiding the window to the tray,
-  // and where they belong - the main screen and the configurations' list -
-  // adding a configuration (the clipboard, a QR code, a file), and on the
-  // main screen the settings: inside the settings they were in the way (he
-  // asked them gone, 16.10.2026). The rest of it drags the window
-  // (WM_NCHITTEST).
+  // and where they belong: on the main screen the tools (the speed test, the
+  // checks, the log - run now and then, so a click away, not in the
+  // settings) and the settings; on the configurations' list adding one (the
+  // clipboard, a QR code, a file) - the main screen has it on its
+  // subscription card. Inside the settings they were in the way (he asked
+  // them gone, 16.10.2026). The rest of it drags the window (WM_NCHITTEST).
   void Caption(Layout& l, float width, UiPage page) const {
     float right = width - 46;  // the next key's right edge, leftwards from the cross
     Item close = Make(Kind::IconButton, {right, 0, width, kCaption}, L"Спрятать в трей", kGlyphClose);
@@ -1368,8 +1351,13 @@ class Painter {
       settings.scrolls = false;
       keys.push_back(std::move(settings));
       right -= 40;
+      Item tools = CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
+                               L"Инструменты: скорость, проверка, журнал", kGlyphTools, UiCommand::ToolsMenu);
+      tools.scrolls = false;
+      keys.push_back(std::move(tools));
+      right -= 40;
     }
-    if (page == UiPage::Overview || page == UiPage::Subscription) {
+    if (page == UiPage::Subscription) {
       Item add = CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Добавить: из буфера, QR-код, файл",
                              kGlyphAdd, UiCommand::AddMenu);
       add.scrolls = false;
@@ -1380,7 +1368,7 @@ class Painter {
     name.text2 = SelfPath();
     name.scrolls = false;
     l.items.push_back(std::move(name));
-    // Left to right, as Tab goes: "+", the settings, the cross.
+    // Left to right, as Tab goes: the tools or "+", the settings, the cross.
     for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
       l.items.push_back(std::move(*it));
     }
@@ -1538,11 +1526,19 @@ class Painter {
     card.glass = true;
     l.items.push_back(std::move(card));
 
+    // "+" on it: another configuration (the clipboard, a QR code, a file) -
+    // a list drops from it (he wanted it back here, 16.10.2026).
+    Item add = CommandItem(Kind::IconButton, {right - 32, y + 8, right, y + 40}, L"Добавить: из буфера, QR-код, файл",
+                           kGlyphAdd, UiCommand::AddMenu);
+    add.key = true;
+    l.items.push_back(std::move(add));
+
     float top = y + 12;
     for (const std::size_t i : shown) {
       const auto index = static_cast<int>(i);
       const UiProfile& p = c.profiles[i];
-      l.items.push_back(Make(Kind::Heading, {left, top, right, top + 26}, p.name));
+      // The first name stops short of the "+".
+      l.items.push_back(Make(Kind::Heading, {left, top, top == y + 12 ? right - 44 : right, top + 26}, p.name));
       float line = top + 28;
       if (p.paidTill.empty()) {
         // Not said by its panel, not by the user yet: a click to say it.
@@ -2499,9 +2495,10 @@ class Painter {
     };
 
     // Tabs, a group a page: more settings to come make a page longer, not a mash.
-    // They fill the row, the room left over shared out among them.
+    // They fill the row, the room left over shared out among them. (The
+    // diagnostics - the checks, the log - went to the main screen's tools.)
     {
-      static constexpr std::array<const wchar_t*, 4> kTabs = {L"Подключение", L"Сеть", L"Диагностика", L"Приложение"};
+      static constexpr std::array<const wchar_t*, 3> kTabs = {L"Подключение", L"Сеть", L"Приложение"};
       constexpr float kTabGap = 6;
       float text = 0;
       for (const wchar_t* tab : kTabs) {
@@ -2551,19 +2548,9 @@ class Painter {
       y = LocalNetwork(l, c, x0, x1, y);
     }
 
-    // When something's wrong: what to look at.
-    if (c.settingsTab == 2) {
-      const std::size_t card = open(y);
-      float top = page(y, L"Проверка", UiPage::Checks, ChecksLine(c));
-      line(top);
-      top = page(top, L"Журнал", UiPage::Logs,
-                 c.display == Display::Error ? std::wstring(L"есть ошибка") : std::wstring());
-      y = close(card, top);
-    }
-
     // The app itself: its version and updates, its files, what few need
     // (folded), and out.
-    if (c.settingsTab == 3) {
+    if (c.settingsTab == 2) {
       const std::size_t card = open(y);
       // The version: a line, the update's button only when there is one.
       l.items.push_back(Make(Kind::Text, {x0 + 20, y + 9, x1 - 56, y + 31}, L"Sovereign " + c.version));

@@ -5266,6 +5266,38 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     }
+    case UiCommand::ToolsMenu: {  // the title bar's tools: what's run now and then, not set (16.10.2026: out of the settings)
+      std::vector<wil::unique_hbitmap> icons;
+      for (const wchar_t* glyph : {L"\xEC4A", L"\xEA18", L"\xE8F0", L"\xE8A5"}) {  // speed, a shield, a route, the log
+        icons.push_back(GlyphMenuIcon(glyph));
+      }
+      const auto picked = PickFromMenu(
+          owner, args.anchor, {L"Замерить скорость", L"Проверить подключение", L"Куда пойдёт адрес…", L"Журнал"}, -1, icons);
+      if (!picked) {
+        break;
+      }
+      using sovereign::tray::CheckId;
+      switch (*picked) {
+        case 0:
+          ShowMainWindow(UiPage::Checks);
+          StartChecks({CheckId::Speed}, {});
+          break;
+        case 1:
+          ShowMainWindow(UiPage::Checks);
+          StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6,
+                       CheckId::Lan, CheckId::DnsLatency, CheckId::Route},
+                      {});
+          break;
+        case 2:
+          ShowMainWindow(UiPage::Checks);
+          if (g_mainWindow != nullptr) {  // the address typed over its row's button, as there
+            g_mainWindow->EditInPlace(UiCommand::CheckRoute, 0, UiCommand::CheckRouteText, L"", false);
+          }
+          break;
+        default: ShowMainWindow(UiPage::Logs); break;
+      }
+      break;
+    }
     case UiCommand::RunChecks: {
       using sovereign::tray::CheckId;
       // Route without an address: the Russian, European and American sites (kRouteProbes).
