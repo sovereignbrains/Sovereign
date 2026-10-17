@@ -1,0 +1,5 @@
+# the home address: never published
+results/home.txt
+results/smoke*
+# transcripts: the machine's and the user's names
+results/*.log

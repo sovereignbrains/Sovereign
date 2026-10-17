@@ -1,0 +1,2 @@
+﻿{"client":"v2rayn","at":"2026-10-17T17:40:46","core":{"samples":52,"leaked":0,"firstLeakMs":null,"viaVpn":52,"noInternet":0,"backAfterMs":null},"coreAlive":0,"server":{"samples":62,"leaked":0,"firstLeakMs":null,"viaVpn":53,"noInternet":9,"backAfterMs":21153},"serverBack":{"samples":53,"leaked":0,"firstLeakMs":null,"viaVpn":53,"noInternet":0,"backAfterMs":null}}
+{"client":"v2rayn","at":"2026-10-17T17:43:37","core":{"samples":77,"leaked":77,"firstLeakMs":1854,"viaVpn":0,"noInternet":0,"backAfterMs":null},"coreAlive":0}
