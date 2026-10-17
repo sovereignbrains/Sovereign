@@ -278,7 +278,6 @@ struct View {
   std::string warpServer;
   bool warpDirect = false;
   bool quicBlocked = true;  // RoutingSettings::quic as it came to with the servers (QuicBlocked)
-  bool hasHysteria = false;  // a Hysteria 2 server among them: its speed setting matters
   std::vector<std::string> rulesFrom;  // the configurations with rules the user hasn't taken yet (ids)
   std::vector<std::string> blockedAds;  // what the ads lists blocked lately, newest first
   std::size_t listsReady = 0;             // the routing's lists downloaded
@@ -965,7 +964,6 @@ class Worker {
     auto combined = sovereign::tray::CombineConfigs(parts, sovereign::tray::OwnFrame(routing));
     combineError_ = combined.error;
     rulesFrom_ = std::move(rulesFrom);
-    hasHysteria_ = combined.config && sovereign::tray::HasHysteria2(*combined.config);
     notes.insert(notes.end(), combined.notes.begin(), combined.notes.end());
     combineNotes_ = std::move(notes);
     if (combined.config) {
@@ -2630,7 +2628,6 @@ class Worker {
       v.warpServer = warpServer_;
       v.warpDirect = warpDirect_;
       v.quicBlocked = quicBlocked_;
-      v.hasHysteria = hasHysteria_;
       v.rulesFrom = rulesFrom_;
       v.blockedAds = {blocked_.begin(), blocked_.end()};
       v.listsReady = ruleFiles_.size();
@@ -2789,7 +2786,6 @@ class Worker {
   bool warpDirect_ = false;
   std::deque<std::string> blocked_;  // WatchBlocked's: what the ads lists blocked, newest first
   bool quicBlocked_ = true;  // View::quicBlocked
-  bool hasHysteria_ = false;  // View::hasHysteria
   std::vector<std::string> rulesFrom_;  // View::rulesFrom
   std::map<std::string, sovereign::tray::Delay> delays_;  // by outbound tag
   std::map<std::string, int> failedInRow_;                // by outbound tag: tests in a row it failed
@@ -4424,7 +4420,6 @@ UiContent ContentFrom(const View& v) {
   c.routing.blockAds = r.blockAds;
   c.routing.quic = static_cast<int>(r.quic);
   c.routing.quicBlocked = v.quicBlocked;
-  c.routing.hysteria = v.hasHysteria;
   c.routing.hysteriaMbps = r.hysteriaMbps;
   c.routing.finalDirect = r.finalDirect;
   c.routing.ipv4Only = r.ipv4Only;
@@ -4901,19 +4896,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     case UiCommand::SetRouteMode: send(What::FinalDirect, args.index == 1); break;
-    case UiCommand::ChooseHysteriaSpeed: {
-      static constexpr std::array kSpeeds = {0, 50, 100, 200, 300, 500, 1000};
-      std::vector<std::wstring> items;
-      int current = -1;
-      for (std::size_t i = 0; i < kSpeeds.size(); ++i) {
-        items.push_back(kSpeeds.at(i) == 0 ? std::wstring(L"Авто (BBR)") : std::format(L"{} Мбит/с", kSpeeds.at(i)));
-        current = kSpeeds.at(i) == r.hysteriaMbps ? static_cast<int>(i) : current;
-      }
-      if (const auto picked = PickFromMenu(owner, args.anchor, items, current)) {
-        send(What::HysteriaMbps, false, kSpeeds.at(*picked));
-      }
-      break;
-    }
+    case UiCommand::SetHysteriaMbps: send(What::HysteriaMbps, false, args.index); break;
     case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
     case UiCommand::ToggleWarp: send(What::Warp, !r.warp); break;
     case UiCommand::AddWarpSite:  // typed over WARP's button, no menu: it goes through WARP
@@ -5523,7 +5506,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleRussiaDirect:
     case UiCommand::ToggleBlockAds:
     case UiCommand::ChooseQuic:
-    case UiCommand::ChooseHysteriaSpeed:
+    case UiCommand::SetHysteriaMbps:
     case UiCommand::SetRouteMode:
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:

@@ -1671,15 +1671,6 @@ std::optional<CustomDns> ParseCustomDns(std::string_view text) {
   return dns;
 }
 
-bool HasHysteria2(std::string_view config) {
-  const Json c = Json::parse(config, nullptr, false);
-  if (!c.is_object() || !c.contains("outbounds") || !c["outbounds"].is_array()) {
-    return false;
-  }
-  return std::any_of(c["outbounds"].begin(), c["outbounds"].end(),
-                     [](const Json& o) { return o.is_object() && Str(o, "type") == "hysteria2"; });
-}
-
 std::vector<std::string> WarpViaServers(std::string_view config) {
   const Json c = Json::parse(config, nullptr, false);
   if (!c.is_object() || !c.contains("outbounds") || !c["outbounds"].is_array()) {

@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 
+#include <array>
 #include <cstdint>
 #include <format>
 #include <string>
@@ -135,7 +136,6 @@ struct UiRouting {
   bool blockAds = true;
   int quic = 0;             // RoutingSettings::Quic's number: 0 auto, 1 blocked, 2 let through
   bool quicBlocked = true;  // what it comes to - auto: by the servers
-  bool hysteria = false;    // a Hysteria 2 server there: its speed row shown
   int hysteriaMbps = 0;     // RoutingSettings::hysteriaMbps
   bool finalDirect = false;
   bool ipv4Only = true;
@@ -284,7 +284,7 @@ enum class UiCommand : std::uint8_t {
   ToggleRussiaDirect,
   ToggleBlockAds,
   ChooseQuic,         // anchor: where to open the menu
-  ChooseHysteriaSpeed,  // anchor: where to open the menu
+  SetHysteriaMbps,      // index: Hysteria 2's speed, Mbit/s (kHysteriaSpeeds); 0: auto (BBR)
   SetRouteMode,        // index: 0 everything through the VPN but what's sent elsewhere, 1 only what's sent through it
   ToggleRoutingMore,   // the fine settings and DNS, unfolded or not
   ToggleIpv4Only,
@@ -358,6 +358,9 @@ struct UiArgs {
   std::wstring text;  // what was typed in place (MainWindow::EditInPlace)
   HWND owner = nullptr;  // the window a menu or a dialog belongs to
 };
+
+// Hysteria 2's speeds to pick from (UiCommand::SetHysteriaMbps), Mbit/s; 0: auto (BBR).
+inline constexpr std::array kHysteriaSpeeds = {0, 50, 100, 200, 300, 500, 1000};
 
 // "48 ±3 мс" (`detailed`) or "50 мс" - rounded to 5 ms: two measurements of
 // one server a moment apart differ by more than that (09.10.2026, four

@@ -275,9 +275,6 @@ struct CustomDns {
 };
 std::optional<CustomDns> ParseCustomDns(std::string_view text);
 
-// Whether a config has a Hysteria 2 server (its speed setting matters then).
-bool HasHysteria2(std::string_view config);
-
 // The servers WARP may go out through (kWarpViaTag in `config`), in their
 // order - the first is the one it starts on; empty when it goes directly.
 std::vector<std::string> WarpViaServers(std::string_view config);

@@ -484,9 +484,8 @@ int LayoutTest(const std::wstring& dir) {
   routed.routing.warpRegistered = true;
   routed.routing.services = {{.name = L"Netflix", .way = L"через WARP"}, {.name = L"ChatGPT", .way = L"через WARP"}};
   routed.routing.board = SampleBoard();
-  // The fine settings open, Hysteria 2's row among them.
+  // The fine settings open.
   routed.routingMore = true;
-  routed.routing.hysteria = true;
   routed.routing.remoteDns = L"авто · Cloudflare";
   routed.routing.localDns = L"свой · dns.adguard-dns.com";
   const std::array<std::pair<UiPage, const wchar_t*>, 8> pages = {{{UiPage::Overview, L"overview"},

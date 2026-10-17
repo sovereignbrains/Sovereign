@@ -119,6 +119,7 @@ constexpr UINT kMenuCopyAll = 113;
 constexpr UINT kMenuToggleExitIp = 114;
 constexpr UINT kMenuCopyValue = 115;
 constexpr UINT kMenuRefreshDirect = 116;
+constexpr UINT kMenuHysteriaSpeed = 120;  // + its index in kHysteriaSpeeds
 
 // An icon button's name shows when it's pointed at this long; a "?" at once.
 constexpr UINT_PTR kTipTimer = 1;
@@ -2097,7 +2098,7 @@ class Painter {
       Item more = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Тонкая настройка",
                               c.routingMore ? kGlyphChevronUp : kGlyphChevronDown, UiCommand::ToggleRoutingMore);
       if (!c.routingMore) {
-        more.detail = r.hysteria ? L"QUIC, Hysteria 2, IPv4, DNS" : L"QUIC, IPv4, DNS";
+        more.detail = L"QUIC, IPv4, DNS";
       }
       l.items.push_back(Make(Kind::Card, more.rect));
       more.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
@@ -2108,9 +2109,10 @@ class Painter {
       return c.appsInclude ? Apps(l, c, x0, x1, y) : y;
     }
 
-    // QUIC, Hysteria 2's speed (with a Hysteria 2 server only), IPv4: one card, a row each.
+    // QUIC, IPv4: one card, a row each. (Hysteria 2's speed is its servers'
+    // menu's since 17.10.2026.)
     {
-      const float h = (r.hysteria ? 2.0f : 1.0f) * kRow + kSwitchRow;
+      const float h = kRow + kSwitchRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
       float top = y;
       Item quic = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, L"QUIC", nullptr,
@@ -2125,20 +2127,6 @@ class Painter {
                 L"тогда Sovereign его выключает, и браузеры сразу переходят на TCP. Через Hysteria2 и TUIC он "
                 L"идёт хорошо — тогда включён.\n\n«Авто» решает по твоим серверам сам.");
       top += kRow;
-      if (r.hysteria) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-        Item speed = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, L"Hysteria 2", nullptr,
-                                 UiCommand::ChooseHysteriaSpeed);
-        speed.detail =
-            r.hysteriaMbps > 0 ? std::format(L"{} Мбит/с, Brutal", r.hysteriaMbps) : std::wstring(L"авто (BBR)");
-        speed.logo = "hysteria";
-        l.items.push_back(std::move(speed));
-        HintAfter(l, L"Hysteria 2", body_.get(), x0 + 20 + 22, x1 - 160, top + kRow / 2,
-                  L"Скорость твоего канала, как в договоре. Сервер шлёт ровно с ней и не сбавляет при потерях "
-                  L"(Brutal): по Wi-Fi с потерями скорость держится. Больше, чем тянет канал, не ставь — забьёт "
-                  L"его, и всё начнёт тормозить.\n\nАвто — сервер подбирает скорость сам (BBR).");
-        top += kRow;
-      }
       l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
       Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSwitchRow - 2}, L"Только IPv4", nullptr,
                             UiCommand::ToggleIpv4Only);
@@ -3706,6 +3694,28 @@ struct MainWindow::Impl {
                                                 : std::wstring();
         add(kMenuSelect, L"Подключаться через этот", !item.checked);
         add(kMenuTestDelays, L"Проверить задержку", content.canTestDelays && !content.delaysTesting);
+        // A Hysteria 2 server: the speed (RoutingSettings::hysteriaMbps,
+        // every Hysteria 2 server's) in a submenu, the one set ticked; where
+        // the server is, not in the routing's fine settings (17.10.2026).
+        if (const std::size_t i = static_cast<std::size_t>(item.index);
+            i < content.protocolTitles.size() && content.protocolTitles[i].starts_with(L"Hysteria 2")) {
+          if (HMENU speeds = CreatePopupMenu(); speeds != nullptr) {  // the menu owns it once appended
+            const int mbps = content.routing.hysteriaMbps;
+            for (std::size_t s = 0; s < kHysteriaSpeeds.size(); ++s) {
+              const int speed = kHysteriaSpeeds.at(s);
+              const std::wstring text = speed == 0 ? std::wstring(L"Авто (BBR) — сервер подбирает сам")
+                                                   : std::format(L"{} Мбит/с (Brutal)", speed);
+              AppendMenuW(speeds, MF_STRING | (speed == mbps ? MF_CHECKED : 0U),
+                          kMenuHysteriaSpeed + static_cast<UINT>(s), text.c_str());
+            }
+            AppendMenuW(speeds, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(speeds, MF_STRING | MF_GRAYED, 0, L"Brutal шлёт ровно с этой скоростью и не сбавляет при");
+            AppendMenuW(speeds, MF_STRING | MF_GRAYED, 0, L"потерях — ставь не больше скорости своего канала.");
+            AppendMenuW(speeds, MF_STRING | MF_GRAYED, 0, L"Действует на все серверы Hysteria 2.");
+            const std::wstring title = mbps > 0 ? std::format(L"Скорость: {} Мбит/с", mbps) : L"Скорость: авто (BBR)";
+            AppendMenuW(menu.get(), MF_POPUP, reinterpret_cast<UINT_PTR>(speeds), title.c_str());
+          }
+        }
         separator();
         add(kMenuCopyName, L"Копировать имя");
         add(kMenuCopyIp, ip.empty() ? std::wstring(L"Копировать IP выхода") : L"Копировать IP выхода: " + ip,
@@ -3769,6 +3779,11 @@ struct MainWindow::Impl {
     }
     const auto command = static_cast<UINT>(TrackPopupMenu(menu.get(), TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
                                                           screen.x, screen.y, 0, hwnd, nullptr));
+    if (command >= kMenuHysteriaSpeed && command < kMenuHysteriaSpeed + kHysteriaSpeeds.size()) {
+      args.index = kHysteriaSpeeds.at(command - kMenuHysteriaSpeed);
+      onCommand(UiCommand::SetHysteriaMbps, args);
+      return;
+    }
     switch (command) {
       case kMenuSelect: onCommand(UiCommand::SetProtocol, args); break;
       case kMenuTestDelays: onCommand(UiCommand::TestDelays, args); break;
