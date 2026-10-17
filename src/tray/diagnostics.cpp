@@ -302,6 +302,45 @@ std::string SiteLine(const SiteWay& site, const RoutingSettings& routing) {
   return line;
 }
 
+CheckResult JudgeExpected(const SiteWay& site, std::string_view expect, const RoutingSettings& routing) {
+  // Where it went, in the board's words: nothing at all is a block (its name
+  // answered empty, or no connection kept).
+  const bool blocked = !site.resolved || !site.way || site.way->type == "block";
+  const std::string text = blocked ? std::string() : WayText(*site.way);
+  const std::string went = blocked                 ? "block"
+                           : text == "напрямую"    ? "direct"
+                           : text == "через WARP"  ? "warp"
+                                                   : "proxy";
+  const char* board = expect == "direct" ? "Напрямую"
+                      : expect == "warp" ? "Через WARP"
+                      : expect == "block" ? "Блок"
+                                          : "Через VPN";
+  CheckResult result;
+  const std::string outcome = blocked ? (site.resolved ? std::string("не видно") : std::string("не находится")) : text;
+  if (went == expect) {
+    result.status = CheckResult::Status::Ok;
+    result.summary = std::format("{} → {} ✓", site.host, blocked ? std::string("заблокировано") : outcome);
+    result.detail = "Идёт так, как стоит на доске.\n" + SiteLine(site, routing);
+    return result;
+  }
+  if (blocked) {
+    // Meant to go somewhere, seen going nowhere: the site, or the check, may be down.
+    result.status = CheckResult::Status::Warn;
+    result.summary = std::format("{} → {}", site.host, outcome);
+    result.detail = std::format("На доске — «{}», но соединения не видно: сайт не ответил или его что-то "
+                                "блокирует.\n{}",
+                                board, SiteLine(site, routing));
+    return result;
+  }
+  result.status = CheckResult::Status::Fail;
+  result.summary = std::format("{} → {} ✗", site.host, outcome);
+  result.detail = std::format("На доске — «{}», а идёт {}. Только что поменял — проверь ещё раз через пару "
+                              "секунд; не помогло — переподключи.\n{}",
+                              board, outcome, SiteLine(site, routing));
+  result.fix = CheckFix::Reconnect;
+  return result;
+}
+
 CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing, bool selective) {
   CheckResult result;
   result.status = CheckResult::Status::Ok;

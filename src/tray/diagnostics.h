@@ -111,6 +111,13 @@ struct SiteWay {
   bool resolved = false;
   std::optional<RouteWay> way;  // nullopt: the core kept no connection to it
 };
+// A routing board's tile checked (its "Проверить"): whether `site` went where
+// the board sends it - `expect`: "proxy", "direct", "warp" or "block". Its
+// line ("netflix.com → через WARP ✓"); a different way fails (the way out:
+// reconnect - a change not yet taken), nothing seen where it should go
+// somewhere warns.
+CheckResult JudgeExpected(const SiteWay& site, std::string_view expect, const RoutingSettings& routing);
+
 // A site's line for the detail: "chatgpt.com — через VPN (AnyTLS), правило
 // ядра: …" - the user's own rule, if one names it, before the core's.
 std::string SiteLine(const SiteWay& site, const RoutingSettings& routing);

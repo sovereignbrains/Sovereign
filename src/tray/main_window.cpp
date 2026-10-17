@@ -2038,6 +2038,25 @@ class Painter {
       y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0 + 4, x1, y) + 4;
     }
     y += kGap;
+    // Set up, then seen going: an address typed, or a tile's "Проверить" -
+    // held to its bucket; a way out under it when it went elsewhere.
+    if (c.checks.size() > kCheckRoute) {
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kCheckRow}));
+      CheckLine(l, c, kCheckRoute, x0, x1, y);
+      y += kCheckRow;
+      const UiCheck& route = c.checks[kCheckRoute];
+      if (route.status == UiCheck::Status::Fail && route.fix != UiCheck::Fix::None) {
+        const FixAction way = FixWay(route.fix, c);
+        y += 8;
+        Item banner = Make(Kind::Banner, {x0, y, x1, y + 40}, L"Не так, как на доске — " + way.label, kGlyphWarning);
+        banner.action = way.action;
+        banner.command = way.command;
+        banner.index = way.index;
+        l.items.push_back(std::move(banner));
+        y += 40;
+      }
+      y += kGap;
+    }
     // The fine settings, folded: one row opening them in place - God Mode's,
     // once it's there.
     {
@@ -2142,42 +2161,22 @@ class Painter {
     l.items.push_back(std::move(all));
 
     // One card, a line each: status, title and "?", the result on the right.
-    // Speed and an address make traffic or need one: a button of their own.
-    const std::size_t count = c.checks.size();
-    const float h = static_cast<float>(count) * kCheckRow;
+    // Speed makes traffic: a button of its own. Where an address goes is the
+    // routing page's - by the board it's checked against (16.10.2026).
+    std::vector<std::size_t> shown;
+    for (std::size_t i = 0; i < c.checks.size(); ++i) {
+      if (i != kCheckRoute) {
+        shown.push_back(i);
+      }
+    }
+    const float h = static_cast<float>(shown.size()) * kCheckRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-    for (std::size_t i = 0; i < count; ++i) {
-      const float top = y + static_cast<float>(i) * kCheckRow;
-      if (i > 0) {
+    for (std::size_t k = 0; k < shown.size(); ++k) {
+      const float top = y + static_cast<float>(k) * kCheckRow;
+      if (k > 0) {
         l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
       }
-      const UiCheck& check = c.checks[i];
-      const UiCommand own = i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute;
-      const bool hasButton = i == kCheckSpeed || i == kCheckRoute;
-      Item row = Make(Kind::CheckRow, {x0 + 4, top + 1, x1 - 4, top + kCheckRow - 1}, check.title);
-      row.detail = check.status == UiCheck::Status::NotRun ? std::wstring(L"—") : check.summary;
-      row.index = static_cast<int>(check.status);
-      row.sub = static_cast<int>(i);
-      row.text2 = check.detail;
-      row.checked = hasButton;  // the result stops short of the button
-      l.items.push_back(std::move(row));
-
-      std::wstring hint = check.hint;
-      if (check.status != UiCheck::Status::NotRun && check.status != UiCheck::Status::Running) {
-        hint += L"\n\nСейчас: " + check.summary;
-        if (!check.detail.empty()) {
-          hint += L"\n" + check.detail;
-        }
-      }
-      HintAfter(l, check.title, body_.get(), x0 + 4 + 30, x1 - 120, top + kCheckRow / 2, std::move(hint));
-
-      if (hasButton) {
-        Item run = CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
-                               i == kCheckSpeed ? L"Замерить скорость" : L"Куда пойдёт адрес…",
-                               i == kCheckSpeed ? kGlyphSpeed : kGlyphRoute, own);
-        run.enabled = !c.checksRunning;
-        l.items.push_back(std::move(run));
-      }
+      CheckLine(l, c, shown[k], x0, x1, top);
     }
     y += h;
 
@@ -2195,9 +2194,10 @@ class Painter {
     // The failed ones' way out, under the results: a banner an action, the
     // checks it helps named in it (WebRTC and IPv6 both want the kill switch).
     std::vector<FixAction> ways;
-    for (const UiCheck& check : c.checks) {
-      if (check.status != UiCheck::Status::Fail || check.fix == UiCheck::Fix::None) {
-        continue;
+    for (std::size_t i = 0; i < c.checks.size(); ++i) {
+      const UiCheck& check = c.checks[i];
+      if (i == kCheckRoute || check.status != UiCheck::Status::Fail || check.fix == UiCheck::Fix::None) {
+        continue;  // the address's way out is under its row, by the board
       }
       FixAction way = FixWay(check.fix, c);
       const auto same =
@@ -2219,6 +2219,39 @@ class Painter {
       y += 40;
     }
     return y;
+  }
+
+  // A check's line (c.checks[i]) at `top`: its status dot, its title and
+  // "?" (what it does, and the last result in full), the result on the
+  // right; the speed test and an address with a button of their own.
+  void CheckLine(Layout& l, const UiContent& c, std::size_t i, float x0, float x1, float top) const {
+    const UiCheck& check = c.checks[i];
+    const bool hasButton = i == kCheckSpeed || i == kCheckRoute;
+    Item row = Make(Kind::CheckRow, {x0 + 4, top + 1, x1 - 4, top + kCheckRow - 1}, check.title);
+    row.detail = check.status == UiCheck::Status::NotRun ? std::wstring(L"—") : check.summary;
+    row.index = static_cast<int>(check.status);
+    row.sub = static_cast<int>(i);
+    row.text2 = check.detail;
+    row.checked = hasButton;  // the result stops short of the button
+    l.items.push_back(std::move(row));
+
+    std::wstring hint = check.hint;
+    if (check.status != UiCheck::Status::NotRun && check.status != UiCheck::Status::Running) {
+      hint += L"\n\nСейчас: " + check.summary;
+      if (!check.detail.empty()) {
+        hint += L"\n" + check.detail;
+      }
+    }
+    HintAfter(l, check.title, body_.get(), x0 + 4 + 30, x1 - 120, top + kCheckRow / 2, std::move(hint));
+
+    if (hasButton) {
+      Item run = CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
+                             i == kCheckSpeed ? L"Замерить скорость" : L"Куда пойдёт адрес…",
+                             i == kCheckSpeed ? kGlyphSpeed : kGlyphRoute,
+                             i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute);
+      run.enabled = !c.checksRunning;
+      l.items.push_back(std::move(run));
+    }
   }
 
   // A failed check's way out on the page: what the banner says, and what a

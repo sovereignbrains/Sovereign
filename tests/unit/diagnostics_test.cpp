@@ -133,6 +133,25 @@ void TestRoutes() {
     }
     CHECK(JudgeRoutes(probes, routing).summary == "Россия → напрямую · Европа, США → через VPN");
   }
+  // A board tile checked: held to its bucket.
+  {
+    const RouteWay warp{.outbound = "warp", .type = "wireguard", .chain = {"warp"}, .rule = {}};
+    CheckResult e = JudgeExpected(site("netflix.com", false, warp), "warp", routing);
+    CHECK(e.status == CheckResult::Status::Ok && e.summary == "netflix.com → через WARP ✓");
+    e = JudgeExpected(site("netflix.com", false, vpn), "warp", routing);
+    CHECK(e.status == CheckResult::Status::Fail && e.summary == "netflix.com → через VPN ✗");
+    CHECK(e.fix == CheckFix::Reconnect && e.detail.starts_with("На доске — «Через WARP», а идёт через VPN"));
+    CHECK(JudgeExpected(site("ya.ru", true, direct), "direct", routing).status == CheckResult::Status::Ok);
+    CHECK(JudgeExpected(site("spiegel.de", false, vpn), "proxy", routing).status == CheckResult::Status::Ok);
+    // Blocked: the name answered empty, or no connection - as the block bucket wants.
+    const SiteWay gone{.host = "doubleclick.net", .where = {}, .russian = false, .resolved = false, .way = std::nullopt};
+    e = JudgeExpected(gone, "block", routing);
+    CHECK(e.status == CheckResult::Status::Ok && e.summary == "doubleclick.net → заблокировано ✓");
+    // Meant to go somewhere, nothing seen: can't tell - a warning, no way out offered.
+    e = JudgeExpected(site("chatgpt.com", false, std::nullopt), "proxy", routing);
+    CHECK(e.status == CheckResult::Status::Warn && e.fix == CheckFix::None);
+  }
+
   // Only chosen things through the VPN: a foreign site directly is the mode, not a failure.
   r = JudgeRoutes({site("ya.ru", true, direct), site("spiegel.de", false, direct), site("chatgpt.com", false, direct)},
                   routing, /*selective=*/true);

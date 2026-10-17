@@ -91,6 +91,8 @@ struct ServiceInfo {
   // program of its own, dialing its servers' addresses - neither the
   // service's names nor its app catch it. Empty: none.
   std::string_view games;
+  // Its site, opened to check where it goes (the routing board's "Проверить").
+  std::string_view site;
 };
 // A service's apps, one name each.
 std::vector<std::string> ServiceApps(const ServiceInfo& service);

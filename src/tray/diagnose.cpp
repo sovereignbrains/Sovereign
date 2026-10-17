@@ -611,11 +611,15 @@ struct Run {
     }
     host = host.substr(0, host.find_first_of("/:?#"));
     const SiteWay site = Visit(host, {}, false);
+    // A board tile's check: held to where the board sends it.
+    if (!input.expect.empty()) {
+      return JudgeExpected(site, input.expect, input.routing);
+    }
     CheckResult r;
     r.status = site.way ? Status::Ok : Status::Warn;
-    r.summary = host + ": " + (!site.resolved ? std::string("имя не находится")
-                               : !site.way    ? std::string("не видно")
-                                              : WayText(*site.way));
+    r.summary = host + " → " + (!site.resolved ? std::string("имя не находится")
+                                : !site.way    ? std::string("не видно")
+                                               : WayText(*site.way));
     r.detail = SiteLine(site, input.routing);
     return r;
   }

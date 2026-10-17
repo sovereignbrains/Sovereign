@@ -25,6 +25,10 @@ inline constexpr std::size_t kCheckCount = 9;
 struct DiagnoseInput {
   RoutingSettings routing;
   std::string host;  // Route: the address to look up (UTF-8); empty - kRouteProbes
+  // Route: where the routing board sends `host` - "proxy", "direct", "warp",
+  // "block" (routing.h's buckets); the result says whether it went so. Empty:
+  // nothing to hold it to (an address typed by hand).
+  std::string expect;
   std::wstring userAgent;
   // Where the newest connection to one of the addresses went (the service's
   // box_route): Route and Speed ask it after their requests.
