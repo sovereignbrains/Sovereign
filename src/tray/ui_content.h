@@ -349,6 +349,7 @@ enum class UiCommand : std::uint8_t {
   Exit,
   Reconnect,     // the connection stopped and started again with the config as it is (the checks' way out)
   ToolsMenu,     // anchor: the main screen's tools - the speed test, the checks, where an address goes, the log
+  ReportProblem, // a GitHub issue opened with the client's report filled in (problem_report.h)
 };
 
 struct UiArgs {

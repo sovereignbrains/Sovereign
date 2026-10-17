@@ -80,6 +80,7 @@
 #include "share_links.h"
 #include "sha256.h"
 #include "subscription.h"
+#include "problem_report.h"
 #include "support_report.h"
 #include "tray_model.h"
 #include "ui_content.h"
@@ -3232,6 +3233,88 @@ int UtcOffsetMinutes() {
   return static_cast<int>(-(zone.Bias + extra));
 }
 
+// "Windows 11 24H2 (26100)" - from the registry: GetVersionEx lies to an
+// unmanifested exe, and Windows 11 still calls itself 10 in ProductName.
+std::string WindowsVersion() {
+  const auto value = [](const wchar_t* name) {
+    std::array<wchar_t, 64> text{};
+    DWORD size = static_cast<DWORD>(text.size() * sizeof(wchar_t));
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", name, RRF_RT_REG_SZ,
+                     nullptr, text.data(), &size) != ERROR_SUCCESS) {
+      return std::wstring();
+    }
+    return std::wstring(text.data());
+  };
+  const std::wstring build = value(L"CurrentBuild");
+  const std::wstring release = value(L"DisplayVersion");
+  int number = 0;
+  for (const wchar_t c : build) {
+    if (c >= L'0' && c <= L'9') {
+      number = number * 10 + (c - L'0');
+    }
+  }
+  std::string windows = number >= 22000 ? "Windows 11" : "Windows 10";
+  if (!release.empty()) {
+    windows += " " + Narrow(release);
+  }
+  if (!build.empty()) {
+    windows += " (" + Narrow(build) + ")";
+  }
+  return windows;
+}
+
+View CurrentView();  // below: the UI thread's copy of the worker's view
+
+// "Сообщить о проблеме" (the settings' app tab): the client's report
+// (problem_report.h - nothing of where the user goes or through what) put on
+// the clipboard whole, and a new issue opened on GitHub with it filled in -
+// as much of it as a link carries.
+void ReportProblem(HWND owner) {
+  const View v = CurrentView();
+  sovereign::tray::ProblemInput input;
+  input.version = Narrow(SOVEREIGN_VERSION_W);
+  input.windows = WindowsVersion();
+  input.state = Narrow(StatusLine(v));
+  input.selective = v.routing.finalDirect || v.appsMode == AppsMode::Include;
+  input.killSwitch = v.killSwitch;
+  input.lanClosed = v.lanClosed;
+  input.warp = v.routing.warp;
+  for (const auto& profile : v.profiles) {
+    if (!profile.enabled) {
+      continue;
+    }
+    for (const auto& server : profile.servers) {
+      if (server.enabled) {
+        input.protocols.push_back(server.label);
+      }
+    }
+  }
+  {
+    // The core's (and the tray's) warnings and errors, the last twenty: by
+    // the level's column FormatLogLine writes ("13:42:02  ERROR  ...").
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    for (auto it = shared.logs.rbegin(); it != shared.logs.rend() && input.logLines.size() < 20; ++it) {
+      const std::wstring_view level = it->size() > 15 ? std::wstring_view(*it).substr(10, 5) : std::wstring_view();
+      if (level == L"ERROR" || level == L"WARN " || level == L"FATAL" || level == L"PANIC") {
+        input.logLines.push_back(Narrow(*it));
+      }
+    }
+  }
+  std::reverse(input.logLines.begin(), input.logLines.end());
+  const std::string report = sovereign::tray::BuildProblemReport(input);
+  CopyText(owner, Widen(report));
+  // A link of a few kilobytes opens anywhere; the clipboard has the rest.
+  const std::string url = sovereign::tray::IssueUrl(input.version, report, 4000);
+  ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  if (g_trayIcon != nullptr) {
+    g_trayIcon->Balloon(L"Sovereign: сообщить о проблеме",
+                        L"Открыта форма на GitHub с отчётом клиента — в нём нет ваших адресов, ссылок и ключей. "
+                        L"Опишите, что случилось. Отчёт ещё и в буфере обмена.",
+                        NIIF_INFO);
+  }
+}
+
 // The report for a configuration's support (support_report.h): built from
 // what the window already shows - the servers' measurements and exits, what
 // the panel said; nothing of the user's - saved where the user picks (the desktop
@@ -5718,6 +5801,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::OpenWindow:
       ShowMainWindow(args.index >= 0 && args.index < sovereign::tray::kUiPageCount ? static_cast<UiPage>(args.index)
                                                                                    : UiPage::Overview);
+      break;
+    case UiCommand::ReportProblem:
+      ReportProblem(owner);
       break;
     case UiCommand::OpenFolder:
       try {

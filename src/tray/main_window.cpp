@@ -166,6 +166,7 @@ constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
 constexpr const wchar_t* kGlyphShield = L"\xEA18";
 constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
 constexpr const wchar_t* kGlyphTools = L"\xE90F";  // Repair: a wrench
+constexpr const wchar_t* kGlyphFeedback = L"\xED15";  // Feedback: a speech bubble
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -2601,6 +2602,17 @@ class Painter {
       }
       line(top);
       l.items.push_back(CommandItem(Kind::ValueRow, row(top), L"Папка данных", kGlyphFolder, UiCommand::OpenFolder));
+      top += kRow;
+      line(top);
+      // Something wrong with the client itself (not the provider's service:
+      // that's the subscription card's report) - a GitHub issue, the report filled in.
+      l.items.push_back(
+          CommandItem(Kind::ValueRow, row(top), L"Сообщить о проблеме", kGlyphFeedback, UiCommand::ReportProblem));
+      HintAfter(l, L"Сообщить о проблеме", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+                L"Если глючит сам клиент. Откроется форма на GitHub с отчётом: версия, Windows, состояние, "
+                L"протоколы серверов и последние ошибки — без ваших адресов, ссылок, ключей и названий серверов. "
+                L"Если не работает сервер или кончилась подписка — это к провайдеру: отчёт для него на карточке "
+                L"подписки.");
       top += kRow;
       line(top);
       // The subscription relay (relay.h), folded: the address and the key, each

@@ -43,6 +43,8 @@ add_library(sovereign_tray_lib STATIC
   diagnostics.h
   support_report.cpp
   support_report.h
+  problem_report.cpp
+  problem_report.h
   lan.cpp
   lan.h
   other_vpn.cpp
