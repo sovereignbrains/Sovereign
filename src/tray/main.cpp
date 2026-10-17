@@ -104,6 +104,8 @@ using sovereign::tray::TrayModel;
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
 constexpr UINT kViewChangedMessage = WM_APP + 2;
 constexpr UINT kUpdateChangedMessage = WM_APP + 3;
+// The worker to the window: the protection's quiet check after a connect is due (StartChecks quiet).
+constexpr UINT kAutoCheckMessage = WM_APP + 4;
 constexpr wchar_t kTrayClassName[] = L"SovereignTrayWindow";
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
@@ -489,6 +491,9 @@ struct Shared {
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
   bool pendingReconnect = false;
+  // The quiet check after a connect found something wrong: what, for the
+  // worker's balloon (StartChecks quiet).
+  std::optional<std::wstring> pendingProtectionAlert;
   bool pendingToggleLanClosed = false;
   std::vector<std::pair<sovereign::tray::LanHost, bool>> pendingLan;  // an address let in (true) or not, in order
   std::optional<AppsChange> pendingApps;
@@ -505,7 +510,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingProtectionAlert.has_value() ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -694,6 +699,7 @@ class Worker {
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
       bool reconnect = false;
+      std::optional<std::wstring> protectionAlert;
       bool toggleLanClosed = false;
       std::vector<std::pair<sovereign::tray::LanHost, bool>> lan;
       {
@@ -718,6 +724,7 @@ class Worker {
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
         reconnect = std::exchange(shared.pendingReconnect, false);
+        protectionAlert = std::exchange(shared.pendingProtectionAlert, std::nullopt);
         toggleLanClosed = std::exchange(shared.pendingToggleLanClosed, false);
         lan = std::exchange(shared.pendingLan, {});
       }
@@ -797,6 +804,7 @@ class Worker {
       const Action action = model_.OnPoll(stats, TrayModel::Clock::now());
       Execute(model_, action, config, AtBoot());
       SyncBoot();
+      ScheduleProtectionCheck(stats);
       // The box runs this very config: its subscription hosts go through the proxy.
       if (stats && stats->running && !expected.empty() && stats->configSha256 == expected) {
         runningHosts_ = combinedHosts_;
@@ -835,6 +843,11 @@ class Worker {
       // Stopped while wanted on: the next poll starts it again, with the config as it is now.
       if (reconnect && model_.WantOn()) {
         Execute(model_, Action::Stop, std::nullopt, false);
+      }
+      if (protectionAlert) {
+        Notify(L"Sovereign: защита под вопросом",
+               L"Проверка после подключения: " + *protectionAlert + L". Подробности и что сделать — в «Проверке».",
+               true, UiPage::Checks);
       }
       if (toggleLanClosed || !lan.empty()) {
         if (toggleLanClosed) {
@@ -1261,6 +1274,31 @@ class Worker {
       current = find(choices.configDefault);
     }
     return {std::move(choices), current};
+  }
+
+  // The protection checked quietly once a connection is up (16.10.2026: the
+  // checks run by themselves, the user hears of them only when one fails):
+  // a few seconds after the box starts running, the window is asked to run
+  // them (the checks' thread is the window's); a failure comes back as a
+  // balloon (pendingProtectionAlert).
+  void ScheduleProtectionCheck(const std::optional<sovereign::tray::Stats>& stats) {
+    const bool running = stats && stats->running;
+    const auto now = TrayModel::Clock::now();
+    if (running && !wasRunning_ && model_.WantOn()) {
+      protectionCheckAt_ = now + std::chrono::seconds(8);
+    }
+    wasRunning_ = running;
+    if (!running) {
+      protectionCheckAt_.reset();
+    } else if (protectionCheckAt_ && now >= *protectionCheckAt_) {
+      protectionCheckAt_.reset();
+      HWND window = nullptr;
+      {
+        const std::scoped_lock lock(State().mutex);
+        window = State().window;
+      }
+      PostMessageW(window, kAutoCheckMessage, 0, 0);
+    }
   }
 
   // Whether the service connects by itself at the next boot (boot_store.h),
@@ -2698,6 +2736,8 @@ class Worker {
   TraySettings settings_;
   TrayModel model_;
   std::optional<bool> bootTold_;  // what box_boot last said (SyncBoot); none yet this run
+  bool wasRunning_ = false;       // the box ran at the last poll (ScheduleProtectionCheck)
+  std::optional<TrayModel::Clock::time_point> protectionCheckAt_;  // the quiet check is due then
   std::string cacheFile_;  // UTF-8; empty: no cache file
   std::map<std::string, ProfileRuntime> runtime_;  // by profile id
   unsigned noticeId_ = 0;
@@ -3327,8 +3367,9 @@ std::optional<sovereign::tray::RouteWay> RouteOf(const std::vector<std::string>&
   return response ? sovereign::tray::ParseRouteAnswer(*response) : std::nullopt;
 }
 
-void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, std::string expect = {},
-                 std::vector<sovereign::tray::TileProbe> tiles = {}) {
+// `quiet`: the check after a connect - nobody asked, so a failure is said in
+// a balloon (pendingProtectionAlert), nothing else.
+void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, bool quiet = false) {
   auto& shared = State();
   sovereign::tray::RoutingSettings routing;
   bool lanClosed = false;
@@ -3356,9 +3397,8 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, 
     }
   }
   g_checks.reset();  // the last run's thread, finished
-  g_checks.emplace([which = std::move(which), host = std::move(host), expect = std::move(expect), tiles = std::move(tiles),
-                    routing, lanClosed, lanAllowed = std::move(lanAllowed), vpn = std::move(vpn),
-                    selective](const std::stop_token& stop) {
+  g_checks.emplace([which = std::move(which), host = std::move(host), quiet, routing, lanClosed,
+                    lanAllowed = std::move(lanAllowed), vpn = std::move(vpn), selective](const std::stop_token& stop) {
     const auto post = [] {
       auto& s = State();
       HWND window = nullptr;
@@ -3370,8 +3410,6 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, 
     };
     const sovereign::tray::DiagnoseInput input{.routing = routing,
                                                .host = host,
-                                               .expect = expect,
-                                               .tiles = tiles,
                                                .userAgent = kUserAgent,
                                                .routeOf = RouteOf,
                                                .lanClosed = lanClosed,
@@ -3388,10 +3426,29 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, 
                                  }
                                  post();
                                });
+    bool alert = false;
     {
       auto& s = State();
       const std::scoped_lock lock(s.mutex);
       s.view.checksRunning = false;
+      if (quiet) {
+        using sovereign::tray::CheckId;
+        static constexpr std::array<std::pair<CheckId, const wchar_t*>, 3> kGuarded = {
+            {{CheckId::Exit, L"выход через VPN"}, {CheckId::WebRtc, L"WebRTC"}, {CheckId::Ipv6, L"IPv6"}}};
+        std::wstring trouble;
+        for (const auto& [id, name] : kGuarded) {
+          if (s.view.checks[static_cast<std::size_t>(id)].status == sovereign::tray::CheckResult::Status::Fail) {
+            trouble += (trouble.empty() ? L"" : L", ") + std::wstring(name);
+          }
+        }
+        if (!trouble.empty()) {
+          s.pendingProtectionAlert = std::move(trouble);
+          alert = true;
+        }
+      }
+    }
+    if (alert) {
+      Wake();
     }
     post();
   });
@@ -3611,19 +3668,6 @@ std::wstring LanDetail(const View& v) {
   return L"кроме: " + who;
 }
 
-// A tile's name for the board's check (TileProbe::key, UiChip::check).
-std::string ChipKey(const sovereign::tray::UiChip& chip) {
-  using Kind = sovereign::tray::UiChip::Kind;
-  switch (chip.kind) {
-    case Kind::Service: return "service:" + std::to_string(chip.index);
-    case Kind::Rule: return "rule:" + std::to_string(chip.index);
-    case Kind::Russia: return "russia";
-    case Kind::Ads: return "ads";
-    case Kind::Cookies: return "cookies";
-    case Kind::Lan: break;
-  }
-  return "lan";
-}
 // The routing board's things (ui_content.h UiChip): the two lists, the
 // services, then the sites and programs, last everything else - each in the
 // bucket it goes to.
@@ -4073,6 +4117,69 @@ struct PendingReport {
 };
 std::optional<PendingReport> g_pendingReport;
 
+// The leaks as one line - DNS, WebRTC, IPv6: the worst of the three, what
+// each said in the detail, the way out of the first that failed. "Нет" is
+// all a user needs to read; the names come only with something wrong.
+sovereign::tray::UiCheck LeaksLine(const View& v) {
+  using sovereign::tray::CheckId;
+  using sovereign::tray::CheckResult;
+  using sovereign::tray::UiCheck;
+  using Status = CheckResult::Status;
+  static constexpr std::array<std::pair<CheckId, const char*>, 3> kParts = {
+      {{CheckId::DnsLeak, "DNS"}, {CheckId::WebRtc, "WebRTC"}, {CheckId::Ipv6, "IPv6"}}};
+  UiCheck line{.title = L"Утечки",
+               .summary = {},
+               .detail = {},
+               .status = UiCheck::Status::NotRun,
+               .hint = L"Не уходит ли что-то мимо VPN: DNS-запросы (кто узнаёт адреса сайтов), WebRTC (адрес, "
+                       L"который браузер может выдать сайту) и IPv6. «Нет» — всё идёт как надо.",
+               .fix = UiCheck::Fix::None,
+               .speedDown = {},
+               .speedUp = {}};
+  bool any = false;
+  bool running = false;
+  std::string failed;
+  std::string warned;
+  std::string detail;
+  for (const auto& [id, name] : kParts) {
+    const CheckResult& r = v.checks[static_cast<std::size_t>(id)];
+    if (r.status == Status::NotRun) {
+      continue;
+    }
+    any = true;
+    if (r.status == Status::Running) {
+      running = true;
+      continue;
+    }
+    detail += std::format("{}{}: {} — {}", detail.empty() ? "" : "\n", name, r.summary, r.detail);
+    if (r.status == Status::Fail) {
+      failed += std::format("{}{}", failed.empty() ? "" : ", ", name);
+      if (line.fix == UiCheck::Fix::None) {
+        line.fix = static_cast<UiCheck::Fix>(r.fix);
+      }
+    } else if (r.status == Status::Warn) {
+      warned += std::format("{}{}", warned.empty() ? "" : ", ", name);
+    }
+  }
+  line.detail = Widen(detail);
+  if (running) {
+    line.status = UiCheck::Status::Running;
+    line.summary = L"проверяю...";
+  } else if (!any) {
+    line.status = UiCheck::Status::NotRun;
+  } else if (!failed.empty()) {
+    line.status = UiCheck::Status::Fail;
+    line.summary = L"есть: " + Widen(failed);
+  } else if (!warned.empty()) {
+    line.status = UiCheck::Status::Warn;
+    line.summary = L"не вышло проверить: " + Widen(warned);
+  } else {
+    line.status = UiCheck::Status::Ok;
+    line.summary = L"нет";
+  }
+  return line;
+}
+
 // What the window shows, from the worker's view.
 UiContent ContentFrom(const View& v) {
   UiContent c;
@@ -4198,43 +4305,36 @@ UiContent ContentFrom(const View& v) {
     }
     c.profiles.push_back(std::move(shown));
   }
-  static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckTitles = {
-      L"Выход через VPN", L"Российское напрямую", L"Утечка DNS",        L"WebRTC / UDP", L"IPv6",
-      L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Проверка маршрутов"};
-  // What each check does - its "?" on the page.
-  static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckHints = {
-      L"Какой адрес и страну видят зарубежные сайты (Cloudflare). Должен быть адрес сервера, а не твой.",
-      L"Какой адрес видят российские сайты (Яндекс). С «Российское напрямую» — твой собственный: сайты не "
-      L"видят адрес сервера и не свяжут его с тобой.",
-      L"Чьи DNS-серверы на самом деле узнают адреса сайтов, которые ты открываешь (bash.ws). Российский "
-      L"резолвер провайдера — утечка: он видит, куда ты ходишь.",
-      L"Какой адрес браузер может выдать через WebRTC — запросом к STUN-серверам Google и Cloudflare по UDP. "
-      L"Должен совпадать с адресом VPN.",
-      L"Есть ли IPv6 и идёт ли он через VPN: IPv6 мимо VPN раскрывает твой адрес.",
-      L"Доступен ли роутер — ping шлюза. С kill switch'ем локальная сеть открыта, только если это включено в "
-      L"настройках.",
-      L"Сколько занимает узнать адрес сайта: зарубежного (через VPN) и российского (напрямую).",
-      L"Скорость скачивания и отдачи через текущий маршрут (speed.cloudflare.com). Гоняет десятки мегабайт — "
-      L"поэтому своей кнопкой.",
-      L"Щит — проверить все плашки доски разом: у каждой открывается её сайт (у сервиса — его, у правила — "
-      L"первый сайт в нём, у рекламы — рекламный домен) и сверяется с корзиной, где она лежит. Зелёная рамка — "
-      L"идёт как настроено, красная — иначе, жёлтая — соединения не видно. Стрелка — свой адрес: почему не "
-      L"открылся сайт, куда он идёт и по какому правилу. Одну плашку — «Проверить» в её меню. Программу так не "
-      L"проверить: запрос делает сам клиент, а не она."};
-  for (std::size_t i = 0; i < sovereign::tray::kCheckCount; ++i) {
-    const auto& result = v.checks[i];
-    c.checks.push_back({.title = kCheckTitles[i],
-                        .summary = Widen(result.summary),
-                        .detail = Widen(result.detail),
-                        .status = static_cast<sovereign::tray::UiCheck::Status>(result.status),
-                        .hint = kCheckHints[i],
-                        .fix = result.status == sovereign::tray::CheckResult::Status::Fail
-                                   ? static_cast<sovereign::tray::UiCheck::Fix>(result.fix)
-                                   : sovereign::tray::UiCheck::Fix::None,
-                        .speedDown = result.speedDown,
-                        .speedUp = result.speedUp});
-  }
-  c.checksRunning = v.checksRunning;
+  // The page's lines (16.10.2026, his pass over the tools): what the internet
+  // sees of the VPN, the leaks as one line, the speed; where an address goes
+  // is the routing page's. The Russian sites' check runs unseen - WebRTC
+  // tells a leak by the address they see.
+  using sovereign::tray::CheckId;
+  using sovereign::tray::UiCheck;
+  const auto line = [&](CheckId id, const wchar_t* title, const wchar_t* hint) {
+    const auto& result = v.checks[static_cast<std::size_t>(id)];
+    return UiCheck{.title = title,
+                   .summary = Widen(result.summary),
+                   .detail = Widen(result.detail),
+                   .status = static_cast<UiCheck::Status>(result.status),
+                   .hint = hint,
+                   .fix = result.status == sovereign::tray::CheckResult::Status::Fail
+                              ? static_cast<UiCheck::Fix>(result.fix)
+                              : UiCheck::Fix::None,
+                   .speedDown = result.speedDown,
+                   .speedUp = result.speedUp};
+  };
+  c.checks.push_back(line(CheckId::Exit, L"Выход через VPN",
+                          L"Какой адрес и страну видят сайты, которые идут через VPN. Должен быть адрес сервера, а "
+                          L"не твой."));
+  c.checks.push_back(LeaksLine(v));
+  c.checks.push_back(line(CheckId::Speed, L"Скорость интернета",
+                          L"Скорость скачивания и отдачи до ближайшего узла Cloudflare: несколько секунд в каждую "
+                          L"сторону, график по ходу. Меряет путь самого клиента — в режиме «только выбранное» это "
+                          L"твой канал напрямую, а не VPN."));
+  c.checks.push_back(line(CheckId::Route, L"Не открывается сайт?",
+                          L"Введи адрес — клиент откроет его и спросит ядро, как он пошёл: напрямую, через VPN, через "
+                          L"WARP или заблокирован, и по какому правилу."));  c.checksRunning = v.checksRunning;
   using sovereign::tray::RoutingSettings;
   const RoutingSettings& r = v.routing;
   c.routing.russiaDirect = r.russiaDirect;
@@ -4324,16 +4424,6 @@ UiContent ContentFrom(const View& v) {
                                   .way = std::move(way)});
   }
   c.routing.board = BoardOf(v);
-  // The board's last check, on its tiles: each marked as it went.
-  if (const auto& tiles = v.checks[static_cast<std::size_t>(sovereign::tray::CheckId::Route)].tiles; !tiles.empty()) {
-    for (sovereign::tray::UiChip& chip : c.routing.board) {
-      const std::string key = ChipKey(chip);
-      const auto result = std::find_if(tiles.begin(), tiles.end(), [&](const auto& t) { return t.key == key; });
-      if (result != tiles.end()) {
-        chip.check = static_cast<int>(result->status);
-      }
-    }
-  }
   if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
     c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
     c.routing.listsFailed = true;
@@ -4708,64 +4798,6 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   }
 }
 
-// The way a bucket of the routing board sends things, as the checks hold it.
-const char* ExpectOf(int bucket) {
-  return bucket == sovereign::tray::kBucketDirect  ? "direct"
-         : bucket == sovereign::tray::kBucketBlock ? "block"
-         : bucket == sovereign::tray::kBucketWarp  ? "warp"
-                                                   : "proxy";
-}
-
-// A routing board's tile checked ("Проверить" in its menu): its address
-// opened, held to the way of the bucket it sits in - the result in the
-// page's row under the board: set it up, see it go (16.10.2026).
-void CheckTile(const std::string& host, int bucket) {
-  StartChecks({sovereign::tray::CheckId::Route}, host, ExpectOf(bucket));
-}
-
-
-// Every tile the board shows that a request of the tray's can check: a
-// service by its site, a rule by its first site, the Russian sites, ads and
-// cookie banners by a name their lists hold - each held to its bucket's way
-// (a service through a country: the VPN's). Programs alone and the local
-// network can't be: the request is the tray's own.
-std::vector<sovereign::tray::TileProbe> BoardProbes(const View& v, const std::vector<sovereign::tray::UiChip>& board) {
-  using Kind = sovereign::tray::UiChip::Kind;
-  std::vector<sovereign::tray::TileProbe> tiles;
-  for (const sovereign::tray::UiChip& chip : board) {
-    if (chip.idle) {
-      continue;
-    }
-    std::string host;
-    int bucket = chip.bucket;
-    switch (chip.kind) {
-      case Kind::Service: {
-        const auto& s = v.routing.services[static_cast<std::size_t>(chip.index)];
-        if (const auto* info = sovereign::tray::FindService(s.id); info != nullptr) {
-          host = std::string(info->site);
-        }
-        if (s.way == sovereign::tray::ServiceRoute::Way::Country) {
-          bucket = sovereign::tray::kBucketProxy;
-        }
-        break;
-      }
-      case Kind::Rule:
-        if (const auto& rule = v.routing.rules[static_cast<std::size_t>(chip.index)]; !rule.domains.empty()) {
-          host = rule.domains.front();
-        }
-        break;
-      case Kind::Russia: host = "ya.ru"; break;
-      case Kind::Ads: host = "doubleclick.net"; break;
-      case Kind::Cookies: host = "cdn.cookielaw.org"; break;
-      case Kind::Lan: break;
-    }
-    if (!host.empty()) {
-      tiles.push_back({.key = ChipKey(chip), .name = Narrow(chip.text), .host = std::move(host), .expect = ExpectOf(bucket)});
-    }
-  }
-  return tiles;
-}
-
 // A command from the routing's page.
 void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiArgs& args, const View& view) {
   using What = RoutingChange::What;
@@ -5067,13 +5099,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       const UiChip& chip = board[static_cast<std::size_t>(args.index)];
       if (chip.kind == UiChip::Kind::Russia) {
-        if (const auto picked =
-                PickFromMenu(owner, cursor, {L"Проверить: ya.ru", L"", L"Убрать: пусть идут как всё остальное"}, -1)) {
-          if (*picked == 0) {
-            CheckTile("ya.ru", chip.bucket);
-          } else {
-            send(What::RussiaDirect, false);
-          }
+        if (PickFromMenu(owner, cursor, {L"Убрать: пусть идут как всё остальное"}, -1)) {
+          send(What::RussiaDirect, false);
         }
         break;
       }
@@ -5102,9 +5129,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           }
         }
         items.emplace_back();
-        // A name the list holds - a cookie window's script, an ad network.
-        const char* probe = cookies ? "cdn.cookielaw.org" : "doubleclick.net";
-        items.push_back(L"Проверить: " + Widen(probe));
         items.emplace_back(cookies ? L"Не убирать баннеры cookie" : L"Не блокировать рекламу");
         const auto picked = PickFromMenu(owner, cursor, items, -1, {}, labels);
         if (!picked) {
@@ -5112,8 +5136,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         if (*picked == items.size() - 1) {
           send(cookies ? What::CookieWindows : What::BlockAds, false);
-        } else if (*picked == items.size() - 2) {
-          CheckTile(probe, chip.bucket);
         } else if (*picked > first && *picked - first - 1 < view.blockedAds.size()) {
           send(What::AddRule, false, r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
                0, view.blockedAds[*picked - first - 1]);
@@ -5142,7 +5164,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         // and its app, a service of the user's own - a name; or away. Named,
         // what the name stands for is said first.
         const sovereign::tray::RouteRule& rule = r.rules[static_cast<std::size_t>(chip.index)];
-        enum class Do : std::uint8_t { Nothing, Way, Check, Edit, AddApp, Name, Away };
+        enum class Do : std::uint8_t { Nothing, Way, Edit, AddApp, Name, Away };
         std::vector<std::wstring> items;
         std::vector<std::pair<Do, int>> does;  // per item: what, and for a way its bucket
         std::vector<std::size_t> labels;
@@ -5164,11 +5186,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         items.emplace_back();
         does.emplace_back(Do::Nothing, 0);
-        // Its first site opened to see it go (a program alone can't be: the check is the tray's own request).
-        if (!rule.domains.empty()) {
-          items.push_back(L"Проверить: " + Widen(rule.domains.front()));
-          does.emplace_back(Do::Check, 0);
-        }
         for (const auto& [text, what] : std::initializer_list<std::pair<const wchar_t*, Do>>{
                  {L"Изменить…", Do::Edit},
                  {L"Добавить программу…", Do::AddApp},
@@ -5184,7 +5201,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         switch (does.at(*picked).first) {
           case Do::Nothing: break;
           case Do::Way: send(What::SetRuleAction, false, does.at(*picked).second, chip.index); break;
-          case Do::Check: CheckTile(rule.domains.front(), chip.bucket); break;
           case Do::Edit:
             if (g_mainWindow != nullptr) {
               g_mainWindow->EditInPlace(UiCommand::ChipMenu, args.index, UiCommand::ChipRuleText,
@@ -5221,7 +5237,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       for (const std::string& app : apps) {
         appNames += (appNames.empty() ? L"" : L", ") + Widen(app);
       }
-      enum class Do : std::uint8_t { Nothing, Way, Country, Check, Apart, Away };
+      enum class Do : std::uint8_t { Nothing, Way, Country, Apart, Away };
       std::vector<std::wstring> items;
       std::vector<std::pair<Do, std::size_t>> does;  // per item: what, and which way or country
       std::vector<std::size_t> labels;
@@ -5247,10 +5263,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       items.emplace_back();
       does.emplace_back(Do::Nothing, 0);
-      if (info != nullptr && !info->site.empty()) {
-        items.push_back(L"Проверить: " + Widen(std::string(info->site)));
-        does.emplace_back(Do::Check, 0);
-      }
       if (!apps.empty()) {
         items.emplace_back(L"Приложение — отдельно…");
         does.emplace_back(Do::Apart, 0);
@@ -5273,11 +5285,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
           break;
         }
         case Do::Country: send(What::SetServiceWay, true, 0, chip.index, countries.at(which)); break;
-        case Do::Check:
-          // Through a country is through the VPN, on that country's server.
-          CheckTile(std::string(info->site),
-                    s.way == sovereign::tray::ServiceRoute::Way::Country ? sovereign::tray::kBucketProxy : chip.bucket);
-          break;
         case Do::Apart: {
           // Its app a rule of its own, in a bucket of its own: before the
           // service (routing.cpp), so it goes there whatever its names say.
@@ -5383,7 +5390,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         icons.push_back(GlyphMenuIcon(glyph));
       }
       const auto picked = PickFromMenu(
-          owner, args.anchor, {L"Замерить скорость", L"Проверить подключение", L"Куда пойдёт адрес…", L"Журнал"}, -1, icons);
+          owner, args.anchor, {L"Замерить скорость", L"Проверить подключение", L"Почему не открывается сайт?", L"Журнал"}, -1, icons);
       if (!picked) {
         break;
       }
@@ -5395,8 +5402,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
           break;
         case 1:
           ShowMainWindow(UiPage::Checks);
-          StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6,
-                       CheckId::Lan, CheckId::DnsLatency},
+          StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6},
                       {});
           break;
         case 2:
@@ -5412,8 +5418,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::RunChecks: {
       using sovereign::tray::CheckId;
       // Where sites go is the routing page's (its row and its tiles' "Проверить"), not here.
-      StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6, CheckId::Lan,
-                   CheckId::DnsLatency},
+      StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6},
                   {});
       break;
     }
@@ -5425,11 +5430,6 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         g_mainWindow->EditInPlace(UiCommand::CheckRoute, 0, UiCommand::CheckRouteText, L"", false);
       }
       break;
-    case UiCommand::CheckBoard: {  // the routing board, every tile it shows
-      const View v = CurrentView();
-      StartChecks({sovereign::tray::CheckId::Route}, {}, {}, BoardProbes(v, BoardOf(v)));
-      break;
-    }
     case UiCommand::CheckRouteText:
       StartChecks({sovereign::tray::CheckId::Route}, Narrow(args.text));
       break;
@@ -5816,6 +5816,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_CREATE: {
       static TrayIcon icon(window);
       g_trayIcon = &icon;
+      return 0;
+    }
+    case kAutoCheckMessage: {  // the worker: a connection came up - the protection, quietly
+      using sovereign::tray::CheckId;
+      StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::WebRtc, CheckId::Ipv6}, {}, true);
       return 0;
     }
     case kViewChangedMessage: {

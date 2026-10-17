@@ -43,10 +43,10 @@ std::vector<sovereign::tray::UiChip> SampleBoard() {
       // Closed, the printer let in (SampleContent's lanClosed and lanHosts).
       {.kind = UiChip::Kind::Lan, .index = 0, .bucket = 2, .text = L"Локальная сеть", .detail = L"кроме 1", .icon = {},
        .logo = "lan"},
-      {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia", .check = 2},
-      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads", .check = 3},
-      {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}, .logo = "netflix", .check = 2},
-      {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}, .logo = "chatgpt", .check = 4},
+      {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"},
+      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads"},
+      {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}, .logo = "netflix"},
+      {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}, .logo = "chatgpt"},
       {.kind = UiChip::Kind::Service, .index = 2, .bucket = 1, .text = L"YouTube", .detail = L"США", .icon = {}, .logo = "youtube"},
       {.kind = UiChip::Kind::Service, .index = 3, .bucket = 0, .text = L"Steam", .detail = {}, .icon = {}, .logo = "steam"},
       // Its app's old rule folded into it (Telegram.exe).
@@ -153,23 +153,19 @@ std::vector<std::wstring> SampleLogs() {
 }
 
 // The checks: run, one warning, one failing, one running, speed and an address.
+// As main.cpp's ContentFrom lays them: the exit, the leaks as one line, the
+// speed, why a site won't open (the routing page's).
 std::vector<sovereign::tray::UiCheck> SampleChecks() {
   using Check = sovereign::tray::UiCheck;
   return {
       {L"Выход через VPN", L"5.83.147.210 · DE", L"Этот адрес видят зарубежные сайты.", Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}},
-      {L"Российское напрямую", L"46.148.140.142", L"Российские сайты видят твой адрес, не адрес сервера.", Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}},
-      {L"Утечка DNS", L"i3D.net B.V (DE)", L"Зарубежные имена спрашиваются через VPN — провайдер их не видит.",
-       Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}},
-      {L"WebRTC / UDP", L"UDP не проходит",
-       L"STUN не ответил: звонки в браузере и игры через UDP могут не работать (утечки при этом нет).", Check::Status::Warn, L"Что проверяет и как.", Check::Fix::None, {}, {}},
-      {L"IPv6", L"2a01:db8::1 · RU", L"IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.", Check::Status::Fail, L"Что проверяет и как.", Check::Fix::KillSwitch, {}, {}},
-      {L"Локальная сеть", L"проверяю...", L"", Check::Status::Running, L"Что проверяет и как.", Check::Fix::None, {}, {}},
-      {L"Задержка DNS", L"нет ответа", L"DNS не отвечает — сайты не откроются.", Check::Status::Fail, L"Что проверяет и как.", Check::Fix::Dns, {}, {}},
+      {L"Утечки", L"есть: IPv6", L"DNS: CloudFlare Inc (DE) — нет\nWebRTC: 5.83.147.210 — нет\nIPv6: 2a01:db8::1 · RU — уходит мимо VPN",
+       Check::Status::Fail, L"Что проверяет и как.", Check::Fix::KillSwitch, {}, {}},
       {L"Скорость интернета", L"↓ 151 · ↑ 98 Мбит/с · 84 мс", L"Через VPN, до ближайшего узла Cloudflare.",
        Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None,
        {39, 169, 350, 521, 340, 312, 404, 310, 462, 338, 217, 111, 503, 311, 276, 409, 291, 132, 55, 84, 392, 229},
        {25, 221, 728, 506, 12, 177, 636, 523, 177, 139, 390, 718, 257, 118, 206, 603, 366, 18, 158, 684, 454}},
-      {L"Куда пойдёт адрес", L"vk.com -> напрямую", L"Ни одно из твоих правил не подошло — решили списки.",
+      {L"Не открывается сайт?", L"vk.com: напрямую", L"Ни одно из твоих правил не подошло — решили списки.",
        Check::Status::Ok, L"Что проверяет и как.", Check::Fix::None, {}, {}}};
 }
 

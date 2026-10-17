@@ -597,26 +597,6 @@ struct Run {
   // The address typed - or, with none, a Russian, a European and an American
   // site at once (kRouteProbes), judged against where each should go.
   CheckResult Route() const {
-    if (!input.tiles.empty()) {
-      // The board: tile by tile, the results shown as they come.
-      CheckResult r;
-      r.status = Status::Running;
-      for (std::size_t i = 0; i < input.tiles.size(); ++i) {
-        const TileProbe& tile = input.tiles[i];
-        r.summary = std::format("проверяю {} из {}: {}…", i + 1, input.tiles.size(), tile.name);
-        if (live) {
-          live(r);
-        }
-        const CheckResult one = JudgeExpected(Visit(tile.host, {}, false), tile.expect, input.routing);
-        const char* mark = one.status == Status::Ok ? "✓" : one.status == Status::Fail ? "✗" : "?";
-        r.tiles.push_back(TileResult{.key = tile.key,
-                                     .status = one.status,
-                                     .line = std::format("{} {}: {}", mark, tile.name, one.summary)});
-      }
-      CheckResult board = JudgeBoard(input.tiles, r.tiles);
-      board.tiles = std::move(r.tiles);
-      return board;
-    }
     if (input.host.empty()) {
       std::vector<SiteWay> sites;
       sites.reserve(kRouteProbes.size());
@@ -631,15 +611,11 @@ struct Run {
     }
     host = host.substr(0, host.find_first_of("/:?#"));
     const SiteWay site = Visit(host, {}, false);
-    // A board tile's check: held to where the board sends it.
-    if (!input.expect.empty()) {
-      return JudgeExpected(site, input.expect, input.routing);
-    }
     CheckResult r;
     r.status = site.way ? Status::Ok : Status::Warn;
-    r.summary = host + " → " + (!site.resolved ? std::string("имя не находится")
-                                : !site.way    ? std::string("не видно")
-                                               : WayText(*site.way));
+    r.summary = host + ": " + (!site.resolved ? std::string("имя не находится")
+                               : !site.way    ? std::string("не видно")
+                                              : WayText(*site.way));
     r.detail = SiteLine(site, input.routing);
     return r;
   }
@@ -657,7 +633,7 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
                                .detail = std::format("Winsock не запустился (ошибка {}).", failed),
                                .fix = CheckFix::None,
                                .speedDown = {},
-                               .speedUp = {}, .tiles = {}});
+                               .speedUp = {}});
     }
     return;
   }
@@ -671,7 +647,7 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
                              .detail = {},
                              .fix = CheckFix::None,
                              .speedDown = {},
-                             .speedUp = {}, .tiles = {}});
+                             .speedUp = {}});
     run.live = [&progress, id](const CheckResult& partial) { progress(id, partial); };
     CheckResult result;
     switch (id) {
