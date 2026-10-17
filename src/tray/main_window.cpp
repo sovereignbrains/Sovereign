@@ -104,7 +104,6 @@ constexpr UINT kLogMenuClear = 5;
 
 // A right-click menu's items, on anything but the log (ItemMenu).
 constexpr UINT kMenuOpen = 101;
-constexpr UINT kMenuSelect = 102;
 constexpr UINT kMenuTestDelays = 103;
 constexpr UINT kMenuCopyName = 104;
 constexpr UINT kMenuCopyIp = 105;
@@ -2036,9 +2035,9 @@ class Painter {
   // the user's rules - first, whatever the source.
   float Routing(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const UiRouting& r = c.routing;
-    y = PageTitle(l, L"Маршруты и DNS", nullptr, x0, x1, y, BackOf(UiPage::Routing),
-                  L"Куда идёт трафик и через какой DNS узнаются адреса. Всё это решает Sovereign: из подписок "
-                  L"берутся только серверы, их правила и DNS не используются.\n\n«Всё» — через VPN идёт всё, а "
+    y = PageTitle(l, L"Маршруты", nullptr, x0, x1, y, BackOf(UiPage::Routing),
+                  L"Куда идёт трафик. Это решает Sovereign: из подписок берутся только серверы, их правила "
+                  L"и DNS не используются.\n\n«Всё» — через VPN идёт всё, а "
                   L"ниже исключения: то, что идёт иначе. «Только выбранное» — через VPN идёт лишь то, что "
                   L"лежит в «Через VPN», остальное напрямую. Списки для обоих режимов хранятся: программы "
                   L"одного не видны в другом, потому что там ничего не меняют.");
@@ -2066,8 +2065,8 @@ class Painter {
         y += 20 + 6;
       }
     }
-    // Where everything goes: the board; under it, folded, the fine settings -
-    // God Mode's, once it's there.
+    // Where everything goes: the board. (The fine settings - QUIC, IPv4, DNS -
+    // are the settings' since 17.10.2026: nothing of where a site goes.)
     y = Board(l, r, x0, x1, y);
     if (!r.lists.empty()) {  // only while the lists are downloading, or failed
       y = Paragraph(l, r.listsFailed ? Kind::ErrorText : Kind::Caption, r.lists, x0 + 4, x1, y) + 4;
@@ -2091,74 +2090,6 @@ class Painter {
         y += 40;
       }
       y += kGap;
-    }
-    // The fine settings, folded: one row opening them in place - God Mode's,
-    // once it's there.
-    {
-      Item more = CommandItem(Kind::ValueRow, {x0, y, x1, y + kRow}, L"Тонкая настройка",
-                              c.routingMore ? kGlyphChevronUp : kGlyphChevronDown, UiCommand::ToggleRoutingMore);
-      if (!c.routingMore) {
-        more.detail = L"QUIC, IPv4, DNS";
-      }
-      l.items.push_back(Make(Kind::Card, more.rect));
-      more.rect = {x0 + 4, y + 2, x1 - 4, y + kRow - 2};
-      l.items.push_back(std::move(more));
-      y += kRow + kGap + 4;
-    }
-    if (!c.routingMore) {
-      return c.appsInclude ? Apps(l, c, x0, x1, y) : y;
-    }
-
-    // QUIC, IPv4: one card, a row each. (Hysteria 2's speed is its servers'
-    // menu's since 17.10.2026.)
-    {
-      const float h = kRow + kSwitchRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      float top = y;
-      Item quic = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, L"QUIC", nullptr,
-                              UiCommand::ChooseQuic);
-      quic.detail = r.quic == 1     ? L"выкл."
-                    : r.quic == 2   ? L"вкл."
-                    : r.quicBlocked ? L"авто (сейчас выкл.)"
-                                    : L"авто (сейчас вкл.)";
-      l.items.push_back(std::move(quic));
-      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
-                L"QUIC — HTTP/3 по UDP. Через серверы на TCP (VLESS, Trojan, AnyTLS) он идёт хуже обычного TCP: "
-                L"тогда Sovereign его выключает, и браузеры сразу переходят на TCP. Через Hysteria2 и TUIC он "
-                L"идёт хорошо — тогда включён.\n\n«Авто» решает по твоим серверам сам.");
-      top += kRow;
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-      Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSwitchRow - 2}, L"Только IPv4", nullptr,
-                            UiCommand::ToggleIpv4Only);
-      v4.checked = r.ipv4Only;
-      l.items.push_back(std::move(v4));
-      HintAfter(l, L"Только IPv4", body_.get(), x0 + 20, x1 - 80, top + kSwitchRow / 2,
-                L"Адреса IPv6 не выдаются программам — их трафик не уйдёт мимо VPN.");
-      y += h + kGap + 4;
-    }
-
-    // DNS: who answers for the names of each kind - auto, a pick, or a
-    // server of the user's own (typed over its row).
-    {
-      y = Heading(l, L"DNS", x0, x1, y,
-                  L"Для сайтов через VPN — имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его "
-                  L"не видит. Для прямых сайтов — российские, твои прямые и адреса самих серверов.\n\n«Авто» "
-                  L"подходит почти всем: не ответит один — возьмётся следующий. Свой адрес понимается так: "
-                  L"77.88.8.8, tls://dns.example, https://dns.example/dns-query, quic://dns.example.");
-      const float h = 2 * kRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Для сайтов через VPN",
-                                nullptr, UiCommand::ChooseRemoteDns);
-      remote.detail = r.remoteDns;
-      remote.detailLogo = r.remoteDnsLogo;
-      l.items.push_back(std::move(remote));
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
-      Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Для прямых сайтов",
-                               nullptr, UiCommand::ChooseLocalDns);
-      local.detail = r.localDns;
-      local.detailLogo = r.localDnsLogo;
-      l.items.push_back(std::move(local));
-      y += h + kGap + 4;
     }
     // Only the listed programs through the VPN: a mode of its own (the
     // others are on the board).
@@ -2423,14 +2354,72 @@ class Painter {
     return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
+  // The fine settings, the settings' fold: QUIC and IPv4, a card; DNS, a
+  // heading and a card. Returns under them.
+  float FineSettings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+    const UiRouting& r = c.routing;
+    // QUIC, IPv4: one card, a row each. (Hysteria 2's speed is its servers'
+    // menu's since 17.10.2026.)
+    {
+      const float h = kRow + kSwitchRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      float top = y;
+      Item quic = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, L"QUIC", nullptr,
+                              UiCommand::ChooseQuic);
+      quic.detail = r.quic == 1     ? L"выкл."
+                    : r.quic == 2   ? L"вкл."
+                    : r.quicBlocked ? L"авто (сейчас выкл.)"
+                                    : L"авто (сейчас вкл.)";
+      l.items.push_back(std::move(quic));
+      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
+                L"QUIC — HTTP/3 по UDP. Через серверы на TCP (VLESS, Trojan, AnyTLS) он идёт хуже обычного TCP: "
+                L"тогда Sovereign его выключает, и браузеры сразу переходят на TCP. Через Hysteria2 и TUIC он "
+                L"идёт хорошо — тогда включён.\n\n«Авто» решает по твоим серверам сам.");
+      top += kRow;
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSwitchRow - 2}, L"Только IPv4", nullptr,
+                            UiCommand::ToggleIpv4Only);
+      v4.checked = r.ipv4Only;
+      l.items.push_back(std::move(v4));
+      HintAfter(l, L"Только IPv4", body_.get(), x0 + 20, x1 - 80, top + kSwitchRow / 2,
+                L"Адреса IPv6 не выдаются программам — их трафик не уйдёт мимо VPN.");
+      y += h + kGap + 4;
+    }
+
+    // DNS: who answers for the names of each kind - auto, a pick, or a
+    // server of the user's own (typed over its row).
+    {
+      y = Heading(l, L"DNS", x0, x1, y,
+                  L"Для сайтов через VPN — имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его "
+                  L"не видит. Для прямых сайтов — российские, твои прямые и адреса самих серверов.\n\n«Авто» "
+                  L"подходит почти всем: не ответит один — возьмётся следующий. Свой адрес понимается так: "
+                  L"77.88.8.8, tls://dns.example, https://dns.example/dns-query, quic://dns.example.");
+      const float h = 2 * kRow;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Для сайтов через VPN",
+                                nullptr, UiCommand::ChooseRemoteDns);
+      remote.detail = r.remoteDns;
+      remote.detailLogo = r.remoteDnsLogo;
+      l.items.push_back(std::move(remote));
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
+      Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Для прямых сайтов",
+                               nullptr, UiCommand::ChooseLocalDns);
+      local.detail = r.localDns;
+      local.detailLogo = r.localDnsLogo;
+      l.items.push_back(std::move(local));
+      y += h + kGap + 4;
+    }
+    return y;
+  }
+
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Настройки", nullptr, x0, x1, y, UiPage::Overview,
                   L"Значок папки внизу — %LOCALAPPDATA%\\Sovereign: настройки, конфиги, их история.\n\nЗакрыть "
                   L"клиент совсем — «Выход» в меню значка в трее; подключение останется: им управляет служба.");
 
-    // Only what's set, two cards: where traffic goes (a page of its own), and
-    // how the connection behaves - it holds when the VPN drops, the local
-    // network shut, it starts with Windows. Rows in a card a line apart: the
+    // Only what's set: where traffic goes (a page of its own), how the
+    // connection behaves (it holds when the VPN drops, it starts with Windows,
+    // the local network shut), the fine settings folded. Rows in a card a line apart: the
     // card goes in first (drawn under its rows), its foot set once they're
     // in. The rest went where it belongs (17.10.2026, he: "не стакаются"):
     // the problem report to the tools, the subscription relay to the
@@ -2449,7 +2438,7 @@ class Painter {
 
     {
       const std::size_t card = open(y);
-      Item routing = Make(Kind::ValueRow, row(y), L"Маршруты и DNS");
+      Item routing = Make(Kind::ValueRow, row(y), L"Маршруты");
       routing.detail = RoutingLine(c);
       routing.action = ItemAction::Page;
       routing.index = static_cast<int>(UiPage::Routing);
@@ -2516,6 +2505,22 @@ class Painter {
     }
     if (!c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
+    }
+
+    // The fine settings, folded: QUIC, IPv4, DNS - auto by default, seldom
+    // touched (the routing page's till 17.10.2026).
+    {
+      Item more = CommandItem(Kind::ValueRow, row(y), L"Тонкая настройка",
+                              c.routingMore ? kGlyphChevronUp : kGlyphChevronDown, UiCommand::ToggleRoutingMore);
+      if (!c.routingMore) {
+        more.detail = L"QUIC, IPv4, DNS";
+      }
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kRow}));
+      l.items.push_back(std::move(more));
+      y += kRow + kGap;
+    }
+    if (c.routingMore) {
+      y = FineSettings(l, c, x0, x1, y) - 4;
     }
 
     // The foot, no card - it's about the app, nothing to set: the version and
@@ -3685,42 +3690,30 @@ struct MainWindow::Impl {
     std::wstring ip;
     const UiProfile* profile = nullptr;
     switch (item.kind) {
-      case Kind::Choice:
-        if (item.command != UiCommand::SetProtocol || !at(content.protocols, item.index)) {
+      case Kind::Choice: {
+        // Only a Hysteria 2 server has a menu: its speed - every Hysteria 2
+        // server's (RoutingSettings::hysteriaMbps), the one set ticked. The
+        // rest went (17.10.2026, he saw no use): picking is the row's click,
+        // the latency the stopwatch's, copying its name or exit nobody's.
+        const auto i = static_cast<std::size_t>(item.index);
+        if (item.command != UiCommand::SetProtocol || i >= content.protocolTitles.size() ||
+            !content.protocolTitles[i].starts_with(L"Hysteria 2")) {
           return;
         }
-        name = content.protocols[static_cast<std::size_t>(item.index)];
-        ip = at(content.locations, item.index) ? content.locations[static_cast<std::size_t>(item.index)].ip
-                                                : std::wstring();
-        add(kMenuSelect, L"Подключаться через этот", !item.checked);
-        add(kMenuTestDelays, L"Проверить задержку", content.canTestDelays && !content.delaysTesting);
-        // A Hysteria 2 server: the speed (RoutingSettings::hysteriaMbps,
-        // every Hysteria 2 server's) in a submenu, the one set ticked; where
-        // the server is, not in the routing's fine settings (17.10.2026).
-        if (const std::size_t i = static_cast<std::size_t>(item.index);
-            i < content.protocolTitles.size() && content.protocolTitles[i].starts_with(L"Hysteria 2")) {
-          if (HMENU speeds = CreatePopupMenu(); speeds != nullptr) {  // the menu owns it once appended
-            const int mbps = content.routing.hysteriaMbps;
-            for (std::size_t s = 0; s < kHysteriaSpeeds.size(); ++s) {
-              const int speed = kHysteriaSpeeds.at(s);
-              const std::wstring text = speed == 0 ? std::wstring(L"Авто (BBR) — сервер подбирает сам")
-                                                   : std::format(L"{} Мбит/с (Brutal)", speed);
-              AppendMenuW(speeds, MF_STRING | (speed == mbps ? MF_CHECKED : 0U),
-                          kMenuHysteriaSpeed + static_cast<UINT>(s), text.c_str());
-            }
-            AppendMenuW(speeds, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(speeds, MF_STRING | MF_GRAYED, 0, L"Brutal шлёт ровно с этой скоростью и не сбавляет при");
-            AppendMenuW(speeds, MF_STRING | MF_GRAYED, 0, L"потерях — ставь не больше скорости своего канала.");
-            AppendMenuW(speeds, MF_STRING | MF_GRAYED, 0, L"Действует на все серверы Hysteria 2.");
-            const std::wstring title = mbps > 0 ? std::format(L"Скорость: {} Мбит/с", mbps) : L"Скорость: авто (BBR)";
-            AppendMenuW(menu.get(), MF_POPUP, reinterpret_cast<UINT_PTR>(speeds), title.c_str());
-          }
+        AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"Скорость Hysteria 2 (на все её серверы)");
+        separator();
+        for (std::size_t s = 0; s < kHysteriaSpeeds.size(); ++s) {
+          const int speed = kHysteriaSpeeds.at(s);
+          const std::wstring text = speed == 0 ? std::wstring(L"Авто (BBR) — сервер подбирает сам")
+                                               : std::format(L"{} Мбит/с (Brutal)", speed);
+          AppendMenuW(menu.get(), MF_STRING | (speed == content.routing.hysteriaMbps ? MF_CHECKED : 0U),
+                      kMenuHysteriaSpeed + static_cast<UINT>(s), text.c_str());
         }
         separator();
-        add(kMenuCopyName, L"Копировать имя");
-        add(kMenuCopyIp, ip.empty() ? std::wstring(L"Копировать IP выхода") : L"Копировать IP выхода: " + ip,
-            !ip.empty());
+        AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"Brutal шлёт ровно с этой скоростью и не сбавляет");
+        AppendMenuW(menu.get(), MF_STRING | MF_GRAYED, 0, L"при потерях: не ставь больше скорости своего канала.");
         break;
+      }
       case Kind::ProfileRow:
         if (item.action != ItemAction::OpenProfile || !at(content.profiles, item.index)) {
           return;
@@ -3751,13 +3744,6 @@ struct MainWindow::Impl {
         add(kMenuCopyAll, L"Копировать все результаты");
         break;
       }
-      case Kind::Switch:
-        if (item.command != UiCommand::ToggleServer) {
-          return;
-        }
-        add(kMenuToggle, item.checked ? L"Выключить сервер" : L"Включить сервер");
-        add(kMenuCopyName, L"Копировать имя");
-        break;
       case Kind::AppRow:
         add(kMenuRemove, L"Убрать из списка");
         add(kMenuCopyName, L"Копировать имя");
@@ -3785,7 +3771,6 @@ struct MainWindow::Impl {
       return;
     }
     switch (command) {
-      case kMenuSelect: onCommand(UiCommand::SetProtocol, args); break;
       case kMenuTestDelays: onCommand(UiCommand::TestDelays, args); break;
       case kMenuCopyName: CopyToClipboard(hwnd, name); break;
       case kMenuCopyIp: CopyToClipboard(hwnd, ip); break;
@@ -3799,7 +3784,7 @@ struct MainWindow::Impl {
         }
         break;
       case kMenuToggle:
-        onCommand(item.kind == Kind::Switch ? UiCommand::ToggleServer : UiCommand::ToggleProfile, args);
+        onCommand(UiCommand::ToggleProfile, args);
         break;
       case kMenuRefresh: onCommand(UiCommand::RefreshProfile, args); break;
       case kMenuRefreshDirect: onCommand(UiCommand::RefreshDirect, args); break;

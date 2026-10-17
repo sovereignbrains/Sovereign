@@ -3722,31 +3722,6 @@ bool SameName(const std::string& a, const std::string& b) {
   return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
-// The local network's chip, closed: said so, and who's let in anyway - the one
-// by its name (the router as such, else its address), more by their count;
-// "кроме 1" said little.
-std::wstring LanDetail(const View& v) {
-  if (!v.lanClosed) {
-    return {};
-  }
-  const std::size_t n = v.lanAllowed.size();
-  if (n == 0) {
-    return L"закрыта";
-  }
-  if (n > 1) {
-    return std::format(L"кроме {} {}", n, n % 10 == 1 && n % 100 != 11 ? L"устройства" : L"устройств");
-  }
-  const sovereign::tray::LanHost& host = v.lanAllowed.front();
-  const bool router = std::any_of(v.lanDevices.begin(), v.lanDevices.end(), [&](const sovereign::tray::LanDevice& d) {
-    return d.router && d.address == host.address;
-  });
-  std::wstring who = !host.name.empty() ? Widen(host.name) : router ? L"роутер" : Widen(host.address);
-  if (who.size() > 24) {
-    who = who.substr(0, 23) + L"…";
-  }
-  return L"кроме: " + who;
-}
-
 // The routing board's things (ui_content.h UiChip): the two lists, the
 // services, then the sites and programs, last everything else - each in the
 // bucket it goes to.
@@ -3754,13 +3729,7 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   using sovereign::tray::ServiceRoute;
   using sovereign::tray::UiChip;
   const auto& r = v.routing;
-  // The local network: directly before any rule (OwnFrame), or closed both
-  // ways - but for the devices let in - by the service's filter (lanClosed).
-  std::vector<UiChip> board = {
-      {.kind = UiChip::Kind::Lan, .index = 0,
-       .bucket = v.lanClosed ? sovereign::tray::kBucketBlock : sovereign::tray::kBucketDirect, .text = L"Локальная сеть",
-       .detail = LanDetail(v),
-       .icon = {}, .logo = "lan"}};
+  std::vector<UiChip> board;
   if (r.russiaDirect) {
     board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
                      .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"});
@@ -4661,16 +4630,6 @@ void ShowMainWindow(UiPage page) {
   }
 }
 
-// The local network closed both ways, or open again (settings' lanClosed).
-void RequestToggleLanClosed() {
-  {
-    auto& shared = State();
-    const std::scoped_lock lock(shared.mutex);
-    shared.pendingToggleLanClosed = true;
-  }
-  Wake();
-}
-
 // An address let into the closed local network (true) or shut out again.
 void RequestLan(sovereign::tray::LanHost host, bool allow) {
   {
@@ -5028,14 +4987,10 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::BoardAdd: {
       // What can go to this bucket: a list that's off, a service, a program, a site.
-      enum class Add : std::uint8_t { Lan, Russia, Ads, Cookies, Service, Program, Site, Import };
+      enum class Add : std::uint8_t { Russia, Ads, Cookies, Service, Program, Site, Import };
       const int bucket = args.index;
       std::vector<std::wstring> items;
       std::vector<Add> adds;
-      if (bucket == (view.lanClosed ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketBlock)) {
-        items.emplace_back(L"Локальная сеть");
-        adds.push_back(Add::Lan);
-      }
       if (bucket == sovereign::tray::kBucketDirect && !r.russiaDirect) {
         items.emplace_back(L"Российские сайты");
         adds.push_back(Add::Russia);
@@ -5071,7 +5026,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
       switch (adds[*picked]) {
-        case Add::Lan: RequestToggleLanClosed(); break;
         case Add::Russia: send(What::RussiaDirect, true); break;
         case Add::Ads: send(What::BlockAds, true); break;
         case Add::Cookies: send(What::CookieWindows, true); break;
@@ -5205,18 +5159,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         } else if (*picked > first && *picked - first - 1 < view.blockedAds.size()) {
           send(What::AddRule, false, r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
                0, view.blockedAds[*picked - first - 1]);
-        }
-        break;
-      }
-      if (chip.kind == UiChip::Kind::Lan) {
-        // Open or closed (the settings' switch, here too); who's let in is said there.
-        const std::vector<std::wstring> items = {
-            view.lanClosed ? L"Открыть компьютер для сети" : L"Закрыть компьютер от сети: никто к нему, он ни к кому",
-            L"Кому разрешить связь…"};
-        if (const auto picked = PickFromMenu(owner, cursor, items, -1); picked && *picked == 0) {
-          RequestToggleLanClosed();
-        } else if (picked) {
-          ShowMainWindow(UiPage::Settings);
         }
         break;
       }

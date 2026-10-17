@@ -40,9 +40,6 @@ using sovereign::tray::UiPage;
 std::vector<sovereign::tray::UiChip> SampleBoard() {
   using sovereign::tray::UiChip;
   return {
-      // Closed, the printer let in (SampleContent's lanClosed and lanHosts).
-      {.kind = UiChip::Kind::Lan, .index = 0, .bucket = 2, .text = L"Локальная сеть", .detail = L"кроме 1", .icon = {},
-       .logo = "lan"},
       {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"},
       {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads"},
       {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}, .logo = "netflix"},
@@ -238,6 +235,14 @@ int Snapshots(const std::wstring& dir) {
   // The settings whole, one page: every group, the printer let in, an update waiting.
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Settings, logs, 400, 860, 96,
                                             dir + L"\\settings-full.png");
+  // ...and the fine settings unfolded under it: QUIC, IPv4, DNS.
+  variant([&](UiContent& fine) {
+    fine.routingMore = true;
+    fine.routing.remoteDns = L"авто · Cloudflare";
+    fine.routing.localDns = L"авто · Cloudflare";
+    sovereign::tray::RenderMainWindowSnapshot(fine, UiPage::Settings, logs, 400, 1000, 96,
+                                              dir + L"\\settings-fine.png");
+  });
 
   // The states that look different: off with no subscription, and an error.
   UiContent empty;

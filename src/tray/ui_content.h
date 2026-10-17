@@ -101,13 +101,12 @@ struct UiService {
   std::wstring way;   // "через WARP"
 };
 // A thing on the routing board: a service, a site or a program (a rule), one
-// of the lists - Russian sites, ads, cookie windows - or the local network
-// (directly, or blocked when the computer is closed from it: a click
-// toggles that). Its bucket is where it goes, a
+// of the lists - Russian sites, ads, cookie windows (the local network is the
+// settings', since 17.10.2026). Its bucket is where it goes, a
 // RouteRule::Action's number: 0 directly, 1 through the proxy, 2 blocked,
 // 3 through WARP.
 struct UiChip {
-  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Cookies, Lan };
+  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Cookies };
   Kind kind = Kind::Rule;
   int index = 0;        // Service: into the routing's services; Rule: into its rules
   int bucket = 1;
@@ -246,7 +245,7 @@ struct UiContent {
   std::wstring killSwitchError;         // why the service couldn't apply it
   bool autostart = false;               // the tray starts when the user signs in
   bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
-  bool routingMore = false;             // the routing page's fine settings and DNS unfolded
+  bool routingMore = false;             // the settings' fine settings (QUIC, IPv4, DNS) unfolded
   bool settingsMore = false;            // the configurations' relay fold open (the window's own)
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through

@@ -70,7 +70,7 @@ struct TraySettings {
   // Started at sign-in (--background): connects if it was on when the PC went
   // off. False: starts turned off whatever it was.
   bool connectAtStartup = true;
-  bool routingMore = false;  // the routing page's fine settings and DNS unfolded
+  bool routingMore = false;  // the settings' fine settings (QUIC, IPv4, DNS) unfolded
   std::string logLevel;     // what the core writes (log_level.h); empty = the config's
   // The kill switch (the service's kill_switch.h): in force while the
   // connection is meant to be on, so a drop doesn't let traffic around it.
