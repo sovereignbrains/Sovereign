@@ -3265,7 +3265,7 @@ std::string WindowsVersion() {
 
 View CurrentView();  // below: the UI thread's copy of the worker's view
 
-// "Сообщить о проблеме" (the settings' app tab): the client's report
+// "Сообщить о проблеме" (the tools' menu): the client's report
 // (problem_report.h - nothing of where the user goes or through what) put on
 // the clipboard whole, and a new issue opened on GitHub with it filled in -
 // as much of it as a link carries.
@@ -5469,11 +5469,14 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::ToolsMenu: {  // the title bar's tools: what's run now and then, not set (16.10.2026: out of the settings)
       std::vector<wil::unique_hbitmap> icons;
-      for (const wchar_t* glyph : {L"\xEC4A", L"\xEA18", L"\xE8F0", L"\xE8A5"}) {  // speed, a shield, a route, the log
+      // speed, a shield, a route, the log, a speech bubble (the report: out of the settings 17.10.2026)
+      for (const wchar_t* glyph : {L"\xEC4A", L"\xEA18", L"\xE8F0", L"\xE8A5", L"\xED15"}) {
         icons.push_back(GlyphMenuIcon(glyph));
       }
-      const auto picked = PickFromMenu(
-          owner, args.anchor, {L"Замерить скорость", L"Проверить подключение", L"Почему не открывается сайт?", L"Журнал"}, -1, icons);
+      const auto picked = PickFromMenu(owner, args.anchor,
+                                       {L"Замерить скорость", L"Проверить подключение", L"Почему не открывается сайт?",
+                                        L"Журнал", L"Сообщить о проблеме"},
+                                       -1, icons);
       if (!picked) {
         break;
       }
@@ -5494,7 +5497,8 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
             g_mainWindow->EditInPlace(UiCommand::CheckRoute, 0, UiCommand::CheckRouteText, L"", false);
           }
           break;
-        default: ShowMainWindow(UiPage::Logs); break;
+        case 3: ShowMainWindow(UiPage::Logs); break;
+        default: ReportProblem(owner); break;
       }
       break;
     }
@@ -5674,18 +5678,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       Wake();
       break;
     }
-    case UiCommand::LanChipMenu: {  // the other bucket: everyone else - the switch; a device - closed again
-      if (args.index < 0) {
-        if (PickFromMenu(owner, args.anchor,
-                         {view.lanClosed ? L"В «Разрешено»: компьютер открыт для сети, как обычно"
-                                         : L"В «Закрыто»: никто в сети к компьютеру, он ни к кому"},
-                         -1)) {
-          RequestToggleLanClosed();
-        }
-        break;
-      }
+    case UiCommand::LanChipMenu: {  // a device let in: closed again
       const auto entries = LanEntriesOf(view);
-      if (static_cast<std::size_t>(args.index) >= entries.size()) {
+      if (args.index < 0 || static_cast<std::size_t>(args.index) >= entries.size()) {
         break;
       }
       const sovereign::tray::LanEntry& e = entries[static_cast<std::size_t>(args.index)];
@@ -5697,20 +5692,14 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       if (!e.seen) {
         said += L" · не в сети";
       }
-      const std::vector<std::wstring> items = {said, L"", L"В «Закрыто»"};
+      const std::vector<std::wstring> items = {said, L"", L"Больше не разрешать"};
       if (const auto picked = PickFromMenu(owner, args.anchor, items, -1, {}, {0}); picked && *picked == 2) {
         RequestLan({.address = e.address, .name = e.name}, false);
       }
       break;
     }
     case UiCommand::LanAdd: {
-      if (!view.lanClosed) {
-        // Open, one can't be shut apart: the service lets some in, it doesn't shut some out.
-        const std::vector<std::wstring> items = {L"Пока открыты все, отдельное устройство не закрыть", L"",
-                                                 L"Все остальные — закрыть компьютер от сети"};
-        if (const auto picked = PickFromMenu(owner, args.anchor, items, -1, {}, {0}); picked && *picked == 2) {
-          RequestToggleLanClosed();
-        }
+      if (!view.lanClosed) {  // its row is the closed network's: open, everyone's in already
         break;
       }
       // The devices around not let in yet (the router first), then one by its address.

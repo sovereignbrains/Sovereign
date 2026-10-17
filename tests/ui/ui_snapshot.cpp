@@ -235,6 +235,9 @@ int Snapshots(const std::wstring& dir) {
   });
   // A configuration's page: the first one's.
   sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Profile, logs, 400, 620, 96, dir + L"\\profile.png");
+  // The settings whole, one page: every group, the printer let in, an update waiting.
+  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Settings, logs, 400, 860, 96,
+                                            dir + L"\\settings-full.png");
 
   // The states that look different: off with no subscription, and an error.
   UiContent empty;

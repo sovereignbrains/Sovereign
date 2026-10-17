@@ -147,7 +147,6 @@ constexpr const wchar_t* kGlyphAdd = L"\xE710";
 constexpr const wchar_t* kGlyphFile = L"\xE8E5";
 constexpr const wchar_t* kGlyphFolder = L"\xE8B7";
 constexpr const wchar_t* kGlyphCopy = L"\xE8C8";
-constexpr const wchar_t* kGlyphExit = L"\xE8BB";
 constexpr const wchar_t* kGlyphCheck = L"\xE73E";
 constexpr const wchar_t* kGlyphWarning = L"\xE7BA";
 constexpr const wchar_t* kGlyphProgram = L"\xE7C4";
@@ -166,7 +165,6 @@ constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
 constexpr const wchar_t* kGlyphShield = L"\xEA18";
 constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
 constexpr const wchar_t* kGlyphTools = L"\xE90F";  // Repair: a wrench
-constexpr const wchar_t* kGlyphFeedback = L"\xED15";  // Feedback: a speech bubble
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -214,9 +212,8 @@ enum class ItemAction : std::uint8_t {
   ToggleLevel,
   PauseLogs,
   SaveLogs,
-  ToggleMore,  // the settings' "Дополнительно", folded or not (the window's own)
+  ToggleMore,  // the configurations' relay fold, folded or not (the window's own)
   Hide,        // our title bar's cross: the window away to the tray
-  SettingsTab, // index: the settings' tab to show (the window's own)
   Hint
 };
 
@@ -1799,6 +1796,42 @@ class Painter {
       y = Paragraph(l, Kind::Caption, L"Не вошло: " + note, x0, x1, y) + 6;
     }
 
+    // The subscription relay (relay.h), folded: the address and the key, each
+    // typed over its row; the key is never shown. Folded, only whether it's
+    // on - its address is the fold's. (In the settings till 17.10.2026: it's
+    // how subscriptions download, so here.)
+    {
+      const auto row = [&](float top) { return D2D1_RECT_F{x0 + 4, top + 2, x1 - 4, top + kRow - 2}; };
+      const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1})); };
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y}));
+      const std::size_t card = l.items.size() - 1;
+      Item relay = Make(Kind::ValueRow, row(y), L"Скачивать без подключения",
+                        c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
+      relay.action = ItemAction::ToggleMore;
+      relay.detail = c.relayHost.empty() ? L"выключено" : L"включено";
+      l.items.push_back(std::move(relay));
+      HintAfter(l, L"Скачивать без подключения", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
+                L"Пока подключение работает, подписки скачиваются через него. Когда его нет, напрямую их сервер "
+                L"увидел бы твой настоящий IP — поэтому они скачиваются через пересыльщик: твой Cloudflare Worker "
+                L"(tools/relay в репозитории). Сервер подписки видит адрес Cloudflare.\n\nБез пересыльщика подписка "
+                L"ждёт подключения; скачать напрямую можно из её меню.\n\nПустой адрес — пересыльщик выключен.");
+      float top = y + kRow;
+      if (c.settingsMore) {
+        line(top);
+        Item url = CommandItem(Kind::ValueRow, row(top), L"Адрес", nullptr, UiCommand::EditRelayUrl);
+        url.detail = c.relayHost.empty() ? std::wstring(L"не задан") : c.relayHost;
+        l.items.push_back(std::move(url));
+        top += kRow;
+        line(top);
+        Item key = CommandItem(Kind::ValueRow, row(top), L"Ключ", nullptr, UiCommand::EditRelayKey);
+        key.detail = c.relaySet ? L"задан" : L"не задан";
+        key.enabled = !c.relayHost.empty();
+        l.items.push_back(std::move(key));
+        top += kRow;
+      }
+      l.items[card].rect.bottom = top;
+      y = top;
+    }
     // Adding one is the main screen's: its "+" (the clipboard, a file, a QR code).
     return y;
   }
@@ -2402,113 +2435,19 @@ class Painter {
     return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
-  // The local network: open, or closed both ways but for what the user lets
-  // in - the router, a device around, or an address typed in.
-  float LocalNetwork(Layout& l, const UiContent& c, float x0, float x1, float y) const {
-    y = Heading(l, L"Локальная сеть", x0, x1, y,
-                L"Фильтр только на этом компьютере. Роутер, телефоны и другие устройства работают как обычно и "
-                L"пользуются интернетом — они просто не могут связаться с этим компьютером, а он с ними: общие "
-                L"папки, принтер, трансляция на телевизор, передача файлов с телефона.\n\nИнтернет этого "
-                L"компьютера тоже идёт через роутер, но зашифрованным: роутер не видит, какие сайты открыты. "
-                L"Закрытый роутер — это только его настройки и его DNS.\n\nСовсем спрятаться нельзя: роутер "
-                L"видит, что компьютер подключён, а сканер сети на телефоне — что по его адресу есть устройство. "
-                L"Связаться с ним никто не сможет.\n\nДействует, пока подключение включено.");
-    y += 6;
-    // As the routing board has it: a bucket each - let in, closed - and
-    // "Все остальные" in one of them (the switch, lanClosed); the devices let
-    // in are the closed network's exceptions. An open one has none: the
-    // service lets some in, it doesn't shut some out. A click on one: the
-    // other bucket (LanChipMenu); the "+" of the one without everyone else:
-    // who can go there (LanAdd).
-    struct Chip {
-      std::wstring text;
-      std::wstring detail;
-      int index;  // into lanHosts; -1: everyone else
-    };
-    // Side by side - let in on the left - and as tall as the taller one.
-    constexpr float kHead = 42;
-    constexpr float kChipGap = 6;
-    const float mid = (x0 + x1) / 2;
-    struct Column {
-      float x0;
-      float x1;
-      std::vector<Chip> chips;
-      std::vector<D2D1_RECT_F> placed;  // per chip, from the first row's top
-      float height = 0;
-    };
-    std::array<Column, 2> columns = {{{x0, mid - 4, {}, {}, 0}, {mid + 4, x1, {}, {}, 0}}};
-    for (const bool open : {true, false}) {
-      Column& column = columns[open ? 0 : 1];
-      std::vector<Chip>& chips = column.chips;
-      if (open == !c.lanClosed) {
-        chips.push_back({L"Все остальные", {}, -1});
-      }
-      if (open && c.lanClosed) {
-        for (std::size_t i = 0; i < c.lanHosts.size(); ++i) {
-          const UiLanHost& h = c.lanHosts[i];
-          if (!h.allowed) {
-            continue;
-          }
-          const std::wstring title = h.router ? L"Роутер" : h.name.empty() ? h.address : h.name;
-          chips.push_back({title, !h.seen ? L"не в сети" : title != h.address && !h.router ? h.address : L"",
-                           static_cast<int>(i)});
-        }
-      }
-      // In rows from the card's left, wrapped at its right.
-      const float left = column.x0 + 12;
-      const float right = column.x1 - 12;
-      float cx = left;
-      float cy = 0;
-      for (const Chip& chip : chips) {
-        float w = 20 + TextWidth(chip.text, body_.get()) + (chip.index < 0 ? 22.0f : 0.0f) +
-                  (chip.detail.empty() ? 0.0f : 6 + TextWidth(chip.detail, caption_.get()));
-        w = std::min(w, right - left);
-        if (cx > left && cx + w > right) {
-          cx = left;
-          cy += kTag + kChipGap;
-        }
-        column.placed.push_back({cx, cy, cx + w, cy + kTag});
-        cx += w + kChipGap;
-      }
-      column.height = chips.empty() ? kHead + 2 : kHead + cy + kTag + 12;
-    }
-    const float h = std::max(columns[0].height, columns[1].height);
-    for (std::size_t side = 0; side < columns.size(); ++side) {
-      const Column& column = columns[side];
-      const bool open = side == 0;
-      const float left = column.x0 + 12;
-      const float right = column.x1 - 12;
-      l.items.push_back(Make(Kind::Card, {column.x0, y, column.x1, y + h}));
-      const wchar_t* name = open ? L"Разрешено" : L"Закрыто";
-      l.items.push_back(
-          Make(Kind::Heading, {left + 2, y + 6, left + 2 + TextWidth(name, heading_.get()) + 4, y + kHead - 4}, name));
-      if (open == c.lanClosed) {  // where everyone else isn't
-        l.items.push_back(
-            CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd, UiCommand::LanAdd));
-      }
-      for (std::size_t n = 0; n < column.chips.size(); ++n) {
-        const Chip& chip = column.chips[n];
-        const D2D1_RECT_F& at = column.placed[n];
-        Item tag = CommandItem(Kind::Tag, {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom}, chip.text,
-                               nullptr, UiCommand::LanChipMenu, chip.index);
-        tag.detail = chip.detail;
-        if (chip.index < 0) {
-          tag.logo = "lan";
-        }
-        l.items.push_back(std::move(tag));
-      }
-    }
-    return y + h + kGap + 4;
-  }
-
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Настройки", nullptr, x0, x1, y, UiPage::Overview,
-                  L"«Папка данных» — %LOCALAPPDATA%\\Sovereign: настройки, конфиги, их история.\n\n«Выйти» "
-                  L"закрывает трей; подключение остаётся — им управляет служба, и следующий запуск продолжит с того "
-                  L"же места.");
+                  L"Значок папки внизу — %LOCALAPPDATA%\\Sovereign: настройки, конфиги, их история.\n\nЗакрыть "
+                  L"клиент совсем — «Выход» в меню значка в трее; подключение останется: им управляет служба.");
 
-    // Groups, a heading and a card each, rows in a card a line apart: the
-    // card goes in first (drawn under its rows), its foot set once they're in.
+    // Only what's set, two cards: where traffic goes (a page of its own), and
+    // how the connection behaves - it holds when the VPN drops, the local
+    // network shut, it starts with Windows. Rows in a card a line apart: the
+    // card goes in first (drawn under its rows), its foot set once they're
+    // in. The rest went where it belongs (17.10.2026, he: "не стакаются"):
+    // the problem report to the tools, the subscription relay to the
+    // configurations, quitting to the tray's menu; the version and the data
+    // folder are the page's foot.
     const auto open = [&](float top) {
       l.items.push_back(Make(Kind::Card, {x0, top, x1, top}));
       return l.items.size() - 1;
@@ -2519,45 +2458,20 @@ class Painter {
     };
     const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1})); };
     const auto row = [&](float top) { return D2D1_RECT_F{x0 + 4, top + 2, x1 - 4, top + kRow - 2}; };
-    const auto page = [&](float top, const wchar_t* title, UiPage to, std::wstring state) {
-      Item link = Make(Kind::ValueRow, row(top), title);
-      link.detail = std::move(state);
-      link.action = ItemAction::Page;
-      link.index = static_cast<int>(to);
-      l.items.push_back(std::move(link));
-      return top + kRow;
-    };
 
-    // Tabs, a group a page: more settings to come make a page longer, not a mash.
-    // They fill the row, the room left over shared out among them. (The
-    // diagnostics - the checks, the log - went to the main screen's tools.)
     {
-      static constexpr std::array<const wchar_t*, 3> kTabs = {L"Подключение", L"Сеть", L"Приложение"};
-      constexpr float kTabGap = 6;
-      float text = 0;
-      for (const wchar_t* tab : kTabs) {
-        text += TextWidth(tab, chip_.get());
-      }
-      const float pad = std::max(
-          8.0f, (x1 - x0 - text - kTabGap * static_cast<float>(kTabs.size() - 1)) / static_cast<float>(kTabs.size()));
-      float left = x0;
-      for (std::size_t i = 0; i < kTabs.size(); ++i) {
-        const float w = TextWidth(kTabs[i], chip_.get()) + pad;
-        Item tab = Make(Kind::Chip, {left, y, left + w, y + 30}, kTabs[i]);
-        tab.action = ItemAction::SettingsTab;
-        tab.index = static_cast<int>(i);
-        tab.checked = c.settingsTab == static_cast<int>(i);
-        l.items.push_back(std::move(tab));
-        left += w + kTabGap;
-      }
-      y += 30 + 16;
+      const std::size_t card = open(y);
+      Item routing = Make(Kind::ValueRow, row(y), L"Маршруты и DNS");
+      routing.detail = RoutingLine(c);
+      routing.action = ItemAction::Page;
+      routing.index = static_cast<int>(UiPage::Routing);
+      l.items.push_back(std::move(routing));
+      y = close(card, y + kRow);
     }
 
-    // The connection: where traffic goes, what holds it when the VPN drops, how it starts.
-    if (c.settingsTab == 0) {
+    {
       const std::size_t card = open(y);
-      float top = page(y, L"Маршруты и DNS", UiPage::Routing, RoutingLine(c));
-      line(top);
+      float top = y;
       Item kill = CommandItem(Kind::Switch, row(top), L"Kill switch", nullptr, UiCommand::ToggleKillSwitch);
       kill.checked = c.killSwitch;
       l.items.push_back(std::move(kill));
@@ -2572,82 +2486,71 @@ class Painter {
       HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
                 L"При входе в Windows клиент запускается в области уведомлений, без окна. «С подключением» — "
                 L"подключается сам, если был включён; «без подключения» — ждёт, пока включишь.");
-      y = close(card, top + kRow);
+      top += kRow;
+      // The local network: open, or closed both ways but for what the user
+      // lets in - the router, a device around, an address typed in. Closed, a
+      // row per device let in (a click: shut again, LanChipMenu) and one to
+      // let another in (LanAdd). Open, none: the service lets some in, it
+      // doesn't shut some out.
+      line(top);
+      Item lan = CommandItem(Kind::Switch, row(top), L"Закрыть от локальной сети", nullptr, UiCommand::ToggleLanClosed);
+      lan.checked = c.lanClosed;
+      l.items.push_back(std::move(lan));
+      HintAfter(l, L"Закрыть от локальной сети", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+                L"Фильтр только на этом компьютере. Роутер, телефоны и другие устройства работают как обычно и "
+                L"пользуются интернетом — они просто не могут связаться с этим компьютером, а он с ними: общие "
+                L"папки, принтер, трансляция на телевизор, передача файлов с телефона.\n\nИнтернет этого "
+                L"компьютера тоже идёт через роутер, но зашифрованным: роутер не видит, какие сайты открыты. "
+                L"Закрытый роутер — это только его настройки и его DNS.\n\nСовсем спрятаться нельзя: роутер "
+                L"видит, что компьютер подключён, а сканер сети на телефоне — что по его адресу есть устройство. "
+                L"Связаться с ним никто не сможет.\n\nДействует, пока подключение включено.");
+      top += kRow;
+      if (c.lanClosed) {
+        for (std::size_t i = 0; i < c.lanHosts.size(); ++i) {
+          const UiLanHost& h = c.lanHosts[i];
+          if (!h.allowed) {
+            continue;
+          }
+          line(top);
+          const std::wstring title = h.router ? L"Роутер" : h.name.empty() ? h.address : h.name;
+          Item host = CommandItem(Kind::ValueRow, row(top), title, nullptr, UiCommand::LanChipMenu,
+                                  static_cast<int>(i));
+          host.detail = !h.seen ? L"не в сети" : title != h.address ? h.address : L"";
+          host.logo = "lan";
+          l.items.push_back(std::move(host));
+          top += kRow;
+        }
+        line(top);
+        l.items.push_back(CommandItem(Kind::ValueRow, row(top), L"Разрешить устройство", kGlyphAdd, UiCommand::LanAdd));
+        top += kRow;
+      }
+      y = close(card, top);
     }
-    if (c.settingsTab == 0 && !c.killSwitchError.empty()) {
+    if (!c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
-    if (c.settingsTab == 1) {
-      y = LocalNetwork(l, c, x0, x1, y);
+    // The foot, no card - it's about the app, nothing to set: the version and
+    // whether it's the last, the data folder and the update check beside it;
+    // an update waiting, its button under them.
+    y += 8;
+    l.items.push_back(Make(Kind::Muted, {x0 + 4, y, x1 - 88, y + 20}, L"Sovereign " + c.version));
+    l.items.push_back(Make(Kind::Muted, {x0 + 4, y + 20, x1 - 88, y + 40},
+                           c.update == UiUpdate::Downloading ? std::wstring(L"скачиваю обновление…") : UpdateStatus(c)));
+    l.items.push_back(
+        CommandItem(Kind::IconButton, {x1 - 80, y + 2, x1 - 44, y + 38}, L"Папка данных", kGlyphFolder, UiCommand::OpenFolder));
+    Item check = CommandItem(Kind::IconButton, {x1 - 40, y + 2, x1 - 4, y + 38}, L"Проверить обновления",
+                             kGlyphRefresh, UiCommand::CheckUpdate);
+    check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
+    l.items.push_back(std::move(check));
+    y += 40;
+    if (c.update == UiUpdate::Available) {
+      y += 10;
+      l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Обновить до " + c.updateVersion,
+                                    kGlyphDownload, UiCommand::InstallUpdate));
+      y += kButton;
     }
-
-    // The app itself: its version and updates, its files, what few need
-    // (folded), and out.
-    if (c.settingsTab == 2) {
-      const std::size_t card = open(y);
-      // The version: a line, the update's button only when there is one.
-      l.items.push_back(Make(Kind::Text, {x0 + 20, y + 9, x1 - 56, y + 31}, L"Sovereign " + c.version));
-      l.items.push_back(Make(Kind::Muted, {x0 + 20, y + 31, x1 - 56, y + 51},
-                             c.update == UiUpdate::Downloading ? std::wstring(L"скачиваю обновление…") : UpdateStatus(c)));
-      Item check = CommandItem(Kind::IconButton, {x1 - 48, y + 12, x1 - 12, y + 48}, L"Проверить обновления",
-                               kGlyphRefresh, UiCommand::CheckUpdate);
-      check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
-      l.items.push_back(std::move(check));
-      float top = y + 60;
-      if (c.update == UiUpdate::Available) {
-        l.items.push_back(CommandItem(Kind::AccentButton, {x0 + 16, top, x1 - 16, top + kButton},
-                                      L"Обновить до " + c.updateVersion, kGlyphDownload, UiCommand::InstallUpdate));
-        top += kButton + 10;
-      }
-      line(top);
-      l.items.push_back(CommandItem(Kind::ValueRow, row(top), L"Папка данных", kGlyphFolder, UiCommand::OpenFolder));
-      top += kRow;
-      line(top);
-      // Something wrong with the client itself (not the provider's service:
-      // that's the subscription card's report) - a GitHub issue, the report filled in.
-      l.items.push_back(
-          CommandItem(Kind::ValueRow, row(top), L"Сообщить о проблеме", kGlyphFeedback, UiCommand::ReportProblem));
-      HintAfter(l, L"Сообщить о проблеме", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
-                L"Если глючит сам клиент. Откроется форма на GitHub с отчётом: версия, Windows, состояние, "
-                L"протоколы серверов и последние ошибки — без ваших адресов, ссылок, ключей и названий серверов. "
-                L"Если не работает сервер или кончилась подписка — это к провайдеру: отчёт для него на карточке "
-                L"подписки.");
-      top += kRow;
-      line(top);
-      // The subscription relay (relay.h), folded: the address and the key, each
-      // typed over its row; the key is never shown.
-      Item relay = Make(Kind::ValueRow, row(top), L"Подписки без подключения",
-                        c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
-      relay.action = ItemAction::ToggleMore;
-      relay.detail = c.relayHost.empty() ? std::wstring(L"выключено") : c.relayHost;
-      l.items.push_back(std::move(relay));
-      HintAfter(l, L"Подписки без подключения", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
-                L"Пока подключение работает, подписки скачиваются через него. Когда его нет, напрямую их сервер "
-                L"увидел бы твой настоящий IP — поэтому они скачиваются через пересыльщик: твой Cloudflare Worker "
-                L"(tools/relay в репозитории). Сервер подписки видит адрес Cloudflare.\n\nБез пересыльщика подписка "
-                L"ждёт подключения; скачать напрямую можно из её меню.\n\nПустой адрес — пересыльщик выключен.");
-      top += kRow;
-      if (c.settingsMore) {
-        line(top);
-        Item url = CommandItem(Kind::ValueRow, row(top), L"Адрес", nullptr, UiCommand::EditRelayUrl);
-        url.detail = c.relayHost.empty() ? std::wstring(L"не задан") : c.relayHost;
-        l.items.push_back(std::move(url));
-        top += kRow;
-        line(top);
-        Item key = CommandItem(Kind::ValueRow, row(top), L"Ключ", nullptr, UiCommand::EditRelayKey);
-        key.detail = c.relaySet ? L"задан" : L"не задан";
-        key.enabled = !c.relayHost.empty();
-        l.items.push_back(std::move(key));
-        top += kRow;
-      }
-      line(top);
-      Item exit = CommandItem(Kind::ValueRow, row(top), L"Выйти", kGlyphExit, UiCommand::Exit);
-      exit.warn = true;
-      l.items.push_back(std::move(exit));
-      y = close(card, top + kRow);
-    }
-    return y - kGap;
+    return y;
   }
 
   /* ---- drawing ---- */
@@ -3331,8 +3234,7 @@ struct MainWindow::Impl {
   Interaction in;
   LogView log;
   bool selecting = false;      // dragging a selection over the log
-  bool settingsMore = false;   // the settings' "Дополнительно" unfolded (UiContent::settingsMore)
-  int settingsTab = 0;         // the settings' tab shown (UiContent::settingsTab)
+  bool settingsMore = false;   // the configurations' relay fold open (UiContent::settingsMore)
   std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
   ULONGLONG panSince = 0;        // the middle button went down (log.pan)
   bool panMoved = false;         // the pointer left the still zone since
@@ -3699,7 +3601,6 @@ struct MainWindow::Impl {
       state.detail = log.Line(log.caret);
     }
     content.settingsMore = settingsMore;
-    content.settingsTab = settingsTab;
     layout = painter.Build(content, page, openProfile, size.width, size.height, scroll, state);
     ClampLog();
     // The same spot may hold another item now: a tip stays only on one of
@@ -3722,7 +3623,7 @@ struct MainWindow::Impl {
       const bool button = it.action == ItemAction::Command && it.command == anchor && it.index == index;
       if (title || button) {
         D2D1_RECT_F rect = it.rect;
-        if (anchor == UiCommand::BoardAdd || anchor == UiCommand::ChipMenu || anchor == UiCommand::LanAdd) {
+        if (anchor == UiCommand::BoardAdd || anchor == UiCommand::ChipMenu) {
           // A "+" in a bucket's corner: a site is typed across the bucket, up
           // to the "+"; a chip: what's in it, or its name, across the bucket.
           for (const Item& card : layout.items) {
@@ -3979,11 +3880,6 @@ struct MainWindow::Impl {
       case ItemAction::SaveLogs: SaveLogs(); return;
       case ItemAction::ToggleMore:
         settingsMore = !settingsMore;
-        Relayout();
-        return;
-      case ItemAction::SettingsTab:
-        settingsTab = item.index;
-        scroll = 0;
         Relayout();
         return;
       case ItemAction::Hide: PostMessageW(hwnd, WM_CLOSE, 0, 0); return;

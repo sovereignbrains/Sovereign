@@ -247,8 +247,7 @@ struct UiContent {
   bool autostart = false;               // the tray starts when the user signs in
   bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
   bool routingMore = false;             // the routing page's fine settings and DNS unfolded
-  bool settingsMore = false;            // the settings' "Дополнительно" unfolded (the window's own)
-  int settingsTab = 0;                  // the settings' tab (the window's own): connection, network, diagnostics, the app
+  bool settingsMore = false;            // the configurations' relay fold open (the window's own)
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through
   std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
@@ -322,8 +321,8 @@ enum class UiCommand : std::uint8_t {
   ChooseLogLevel,      // anchor: where to open the menu of levels
   ToggleKillSwitch,
   ToggleLanClosed,
-  LanChipMenu,        // index into lanHosts (-1: everyone else); anchor: the other bucket
-  LanAdd,             // anchor: who can go where everyone else isn't - a device around, an address typed
+  LanChipMenu,        // index into lanHosts: a device let in; anchor: shut again
+  LanAdd,             // anchor: who to let into the closed network - a device around, an address typed
   AddLanHostText,     // text: the address
   PaidMenu,           // index: a configuration; what the user paid its server till - typed, a month more, none
   PaidDateText,       // index: a configuration; text: the date, "15.11" or "15.11.2026"

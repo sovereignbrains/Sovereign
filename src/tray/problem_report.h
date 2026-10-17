@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-// "Сообщить о проблеме" (the settings' app tab): a report of the client for
+// "Сообщить о проблеме" (the tools' menu): a report of the client for
 // a GitHub issue - public, so stricter than the provider's (support_report.h):
 // nothing of where the user goes or what they use. The version, Windows, the
 // state and the settings that change behaviour, the protocols of the servers
