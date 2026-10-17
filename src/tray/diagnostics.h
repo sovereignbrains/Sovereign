@@ -23,6 +23,8 @@ namespace sovereign::tray {
 // stops), the routing or its DNS opened, the local network's settings.
 enum class CheckFix : std::uint8_t { None, Reconnect, KillSwitch, Routing, Dns, LocalNetwork };
 
+struct TileResult;  // below: a routing board tile's result, in CheckResult::tiles
+
 struct CheckResult {
   enum class Status : std::uint8_t { NotRun, Running, Ok, Warn, Fail };
   Status status = Status::NotRun;
@@ -33,6 +35,8 @@ struct CheckResult {
   // the page draws them as they come (a speed test's graph).
   std::vector<float> speedDown;
   std::vector<float> speedUp;
+  // The routing board's check: each tile's result, as they come (JudgeBoard).
+  std::vector<TileResult> tiles;
 };
 
 // The speed test: a download and an upload, each this long at most, the
@@ -111,6 +115,26 @@ struct SiteWay {
   bool resolved = false;
   std::optional<RouteWay> way;  // nullopt: the core kept no connection to it
 };
+// The routing board checked at once ("Проверить все плашки"): a tile, the
+// address it's checked by and the bucket's way it's held to; `key` names the
+// tile for the board ("service:3", "rule:5", "russia", "ads", "cookies").
+struct TileProbe {
+  std::string key;
+  std::string name;    // as the board shows it: "Netflix"
+  std::string host;    // "netflix.com"
+  std::string expect;  // "proxy", "direct", "warp", "block"
+};
+// A tile's result: its status (Ok, Warn, Fail) and its line for the detail.
+struct TileResult {
+  std::string key;
+  CheckResult::Status status = CheckResult::Status::NotRun;
+  std::string line;  // "✗ Netflix: netflix.com → через VPN ✗ - на доске «Через WARP»"
+};
+// The board's results summed up: "все 7 как настроено ✓", or "5 из 7 как
+// настроено · не так: Netflix, YouTube"; failing if any tile went elsewhere
+// (the way out: reconnect), warning if any couldn't be seen.
+CheckResult JudgeBoard(const std::vector<TileProbe>& tiles, const std::vector<TileResult>& results);
+
 // A routing board's tile checked (its "Проверить"): whether `site` went where
 // the board sends it - `expect`: "proxy", "direct", "warp" or "block". Its
 // line ("netflix.com → через WARP ✓"); a different way fails (the way out:

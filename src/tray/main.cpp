@@ -3327,7 +3327,8 @@ std::optional<sovereign::tray::RouteWay> RouteOf(const std::vector<std::string>&
   return response ? sovereign::tray::ParseRouteAnswer(*response) : std::nullopt;
 }
 
-void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, std::string expect = {}) {
+void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, std::string expect = {},
+                 std::vector<sovereign::tray::TileProbe> tiles = {}) {
   auto& shared = State();
   sovereign::tray::RoutingSettings routing;
   bool lanClosed = false;
@@ -3355,8 +3356,9 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, 
     }
   }
   g_checks.reset();  // the last run's thread, finished
-  g_checks.emplace([which = std::move(which), host = std::move(host), expect = std::move(expect), routing, lanClosed,
-                    lanAllowed = std::move(lanAllowed), vpn = std::move(vpn), selective](const std::stop_token& stop) {
+  g_checks.emplace([which = std::move(which), host = std::move(host), expect = std::move(expect), tiles = std::move(tiles),
+                    routing, lanClosed, lanAllowed = std::move(lanAllowed), vpn = std::move(vpn),
+                    selective](const std::stop_token& stop) {
     const auto post = [] {
       auto& s = State();
       HWND window = nullptr;
@@ -3369,6 +3371,7 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, 
     const sovereign::tray::DiagnoseInput input{.routing = routing,
                                                .host = host,
                                                .expect = expect,
+                                               .tiles = tiles,
                                                .userAgent = kUserAgent,
                                                .routeOf = RouteOf,
                                                .lanClosed = lanClosed,
@@ -3608,6 +3611,19 @@ std::wstring LanDetail(const View& v) {
   return L"кроме: " + who;
 }
 
+// A tile's name for the board's check (TileProbe::key, UiChip::check).
+std::string ChipKey(const sovereign::tray::UiChip& chip) {
+  using Kind = sovereign::tray::UiChip::Kind;
+  switch (chip.kind) {
+    case Kind::Service: return "service:" + std::to_string(chip.index);
+    case Kind::Rule: return "rule:" + std::to_string(chip.index);
+    case Kind::Russia: return "russia";
+    case Kind::Ads: return "ads";
+    case Kind::Cookies: return "cookies";
+    case Kind::Lan: break;
+  }
+  return "lan";
+}
 // The routing board's things (ui_content.h UiChip): the two lists, the
 // services, then the sites and programs, last everything else - each in the
 // bucket it goes to.
@@ -4184,7 +4200,7 @@ UiContent ContentFrom(const View& v) {
   }
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckTitles = {
       L"Выход через VPN", L"Российское напрямую", L"Утечка DNS",        L"WebRTC / UDP", L"IPv6",
-      L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Куда пойдёт адрес"};
+      L"Локальная сеть",     L"Задержка DNS",        L"Скорость интернета", L"Проверка маршрутов"};
   // What each check does - its "?" on the page.
   static constexpr std::array<const wchar_t*, sovereign::tray::kCheckCount> kCheckHints = {
       L"Какой адрес и страну видят зарубежные сайты (Cloudflare). Должен быть адрес сервера, а не твой.",
@@ -4200,10 +4216,11 @@ UiContent ContentFrom(const View& v) {
       L"Сколько занимает узнать адрес сайта: зарубежного (через VPN) и российского (напрямую).",
       L"Скорость скачивания и отдачи через текущий маршрут (speed.cloudflare.com). Гоняет десятки мегабайт — "
       L"поэтому своей кнопкой.",
-      L"Открывает адрес и спрашивает ядро, как он пошёл: напрямую, через VPN, через WARP или заблокирован, и "
-      L"по какому правилу. Свой адрес — кнопкой справа. «Проверить» в меню плашки на доске открывает её сайт и "
-      L"сверяет с корзиной, где она лежит: ✓ — идёт как настроено, ✗ — иначе. Программу так не проверить: "
-      L"запрос делает сам клиент, а не она."};
+      L"Щит — проверить все плашки доски разом: у каждой открывается её сайт (у сервиса — его, у правила — "
+      L"первый сайт в нём, у рекламы — рекламный домен) и сверяется с корзиной, где она лежит. Зелёная рамка — "
+      L"идёт как настроено, красная — иначе, жёлтая — соединения не видно. Стрелка — свой адрес: почему не "
+      L"открылся сайт, куда он идёт и по какому правилу. Одну плашку — «Проверить» в её меню. Программу так не "
+      L"проверить: запрос делает сам клиент, а не она."};
   for (std::size_t i = 0; i < sovereign::tray::kCheckCount; ++i) {
     const auto& result = v.checks[i];
     c.checks.push_back({.title = kCheckTitles[i],
@@ -4307,6 +4324,16 @@ UiContent ContentFrom(const View& v) {
                                   .way = std::move(way)});
   }
   c.routing.board = BoardOf(v);
+  // The board's last check, on its tiles: each marked as it went.
+  if (const auto& tiles = v.checks[static_cast<std::size_t>(sovereign::tray::CheckId::Route)].tiles; !tiles.empty()) {
+    for (sovereign::tray::UiChip& chip : c.routing.board) {
+      const std::string key = ChipKey(chip);
+      const auto result = std::find_if(tiles.begin(), tiles.end(), [&](const auto& t) { return t.key == key; });
+      if (result != tiles.end()) {
+        chip.check = static_cast<int>(result->status);
+      }
+    }
+  }
   if (!v.listsError.empty() && v.listsReady < v.listsNeeded) {
     c.routing.lists = L"Списки правил не скачались: " + Widen(v.listsError) + L". Пока работают зоны .ru/.рф/.su.";
     c.routing.listsFailed = true;
@@ -4681,15 +4708,62 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   }
 }
 
+// The way a bucket of the routing board sends things, as the checks hold it.
+const char* ExpectOf(int bucket) {
+  return bucket == sovereign::tray::kBucketDirect  ? "direct"
+         : bucket == sovereign::tray::kBucketBlock ? "block"
+         : bucket == sovereign::tray::kBucketWarp  ? "warp"
+                                                   : "proxy";
+}
+
 // A routing board's tile checked ("Проверить" in its menu): its address
 // opened, held to the way of the bucket it sits in - the result in the
-// page's "Куда пойдёт адрес" row: set it up, see it go (16.10.2026).
+// page's row under the board: set it up, see it go (16.10.2026).
 void CheckTile(const std::string& host, int bucket) {
-  const char* expect = bucket == sovereign::tray::kBucketDirect  ? "direct"
-                       : bucket == sovereign::tray::kBucketBlock ? "block"
-                       : bucket == sovereign::tray::kBucketWarp  ? "warp"
-                                                                 : "proxy";
-  StartChecks({sovereign::tray::CheckId::Route}, host, expect);
+  StartChecks({sovereign::tray::CheckId::Route}, host, ExpectOf(bucket));
+}
+
+
+// Every tile the board shows that a request of the tray's can check: a
+// service by its site, a rule by its first site, the Russian sites, ads and
+// cookie banners by a name their lists hold - each held to its bucket's way
+// (a service through a country: the VPN's). Programs alone and the local
+// network can't be: the request is the tray's own.
+std::vector<sovereign::tray::TileProbe> BoardProbes(const View& v, const std::vector<sovereign::tray::UiChip>& board) {
+  using Kind = sovereign::tray::UiChip::Kind;
+  std::vector<sovereign::tray::TileProbe> tiles;
+  for (const sovereign::tray::UiChip& chip : board) {
+    if (chip.idle) {
+      continue;
+    }
+    std::string host;
+    int bucket = chip.bucket;
+    switch (chip.kind) {
+      case Kind::Service: {
+        const auto& s = v.routing.services[static_cast<std::size_t>(chip.index)];
+        if (const auto* info = sovereign::tray::FindService(s.id); info != nullptr) {
+          host = std::string(info->site);
+        }
+        if (s.way == sovereign::tray::ServiceRoute::Way::Country) {
+          bucket = sovereign::tray::kBucketProxy;
+        }
+        break;
+      }
+      case Kind::Rule:
+        if (const auto& rule = v.routing.rules[static_cast<std::size_t>(chip.index)]; !rule.domains.empty()) {
+          host = rule.domains.front();
+        }
+        break;
+      case Kind::Russia: host = "ya.ru"; break;
+      case Kind::Ads: host = "doubleclick.net"; break;
+      case Kind::Cookies: host = "cdn.cookielaw.org"; break;
+      case Kind::Lan: break;
+    }
+    if (!host.empty()) {
+      tiles.push_back({.key = ChipKey(chip), .name = Narrow(chip.text), .host = std::move(host), .expect = ExpectOf(bucket)});
+    }
+  }
+  return tiles;
 }
 
 // A command from the routing's page.
@@ -5351,6 +5425,11 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         g_mainWindow->EditInPlace(UiCommand::CheckRoute, 0, UiCommand::CheckRouteText, L"", false);
       }
       break;
+    case UiCommand::CheckBoard: {  // the routing board, every tile it shows
+      const View v = CurrentView();
+      StartChecks({sovereign::tray::CheckId::Route}, {}, {}, BoardProbes(v, BoardOf(v)));
+      break;
+    }
     case UiCommand::CheckRouteText:
       StartChecks({sovereign::tray::CheckId::Route}, Narrow(args.text));
       break;

@@ -29,6 +29,9 @@ struct DiagnoseInput {
   // "block" (routing.h's buckets); the result says whether it went so. Empty:
   // nothing to hold it to (an address typed by hand).
   std::string expect;
+  // Route: the whole routing board instead - every tile checked in turn,
+  // each held to its bucket (JudgeBoard); `host` and `expect` aside then.
+  std::vector<TileProbe> tiles;
   std::wstring userAgent;
   // Where the newest connection to one of the addresses went (the service's
   // box_route): Route and Speed ask it after their requests.

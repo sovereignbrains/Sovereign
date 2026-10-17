@@ -238,6 +238,7 @@ struct Item {
   bool glass = false;   // a Card on the main screen: see-through - the light and the streams behind it show
   bool scrolls = true;  // lives in the page (scrolls, clipped), not in the rail
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
+  int check = 0;        // a Tag's routing check (UiChip::check): 0 none, 2 as set, 3 unseen, 4 elsewhere
 };
 
 struct Layout {
@@ -1315,6 +1316,7 @@ class Painter {
         tag.detail = chip.detail;
         tag.text2 = chip.icon;
         tag.logo = chip.logo;
+        tag.check = chip.check;
         l.items.push_back(std::move(tag));
       }
       y += h + 8;
@@ -2245,8 +2247,15 @@ class Painter {
     HintAfter(l, check.title, body_.get(), x0 + 4 + 30, x1 - 120, top + kCheckRow / 2, std::move(hint));
 
     if (hasButton) {
+      // The routing board's check: every tile at once first, an address of one's own beside it.
+      if (i == kCheckRoute) {
+        Item board = CommandItem(Kind::IconButton, {x1 - 4 - 76, top + 3, x1 - 4 - 40, top + kCheckRow - 3},
+                                 L"Проверить все плашки", kGlyphShield, UiCommand::CheckBoard);
+        board.enabled = !c.checksRunning;
+        l.items.push_back(std::move(board));
+      }
       Item run = CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
-                             i == kCheckSpeed ? L"Замерить скорость" : L"Куда пойдёт адрес…",
+                             i == kCheckSpeed ? L"Замерить скорость" : L"Свой адрес…",
                              i == kCheckSpeed ? kGlyphSpeed : kGlyphRoute,
                              i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute);
       run.enabled = !c.checksRunning;
@@ -2815,7 +2824,9 @@ class Painter {
         const float titleRight = r.left + 30 + TextWidth(it.text, body_.get());
         k.Text(it.text, body_.get(), {r.left + 30, r.top, titleRight + 2, r.bottom}, primary);
         const float resultLeft = titleRight + 6 + kHint + 8;
-        const float resultRight = r.right - (it.checked ? 44.0f : 12.0f);
+        // Short of its button - or its two: the routing board's check has "all" and "an address".
+        const float resultRight =
+            r.right - (!it.checked ? 12.0f : static_cast<std::size_t>(it.sub) == kCheckRoute ? 84.0f : 44.0f);
         const bool quiet = it.index <= 1;  // not run, running
         k.Text(it.detail, trailing_.get(), {resultLeft, r.top, resultRight, r.bottom},
                quiet ? secondary : (it.index >= 3 ? status : primary));
@@ -2881,7 +2892,15 @@ class Painter {
       }
       case Kind::Tag: {
         k.Round(r, 8, Rgb(255, 255, 255, 0.05f + hoverAlpha * 0.6f));
-        k.Outline(r, 8, Rgb(255, 255, 255, 0.10f));
+        // The board's check on it: its edge and a dot on its corner in the
+        // result's colour - green as set, amber unseen, red elsewhere.
+        if (it.check >= 2) {
+          const COLORREF mark = it.check == 2 ? ui::kUpload : it.check == 3 ? ui::kWarning : ui::kDanger;
+          k.Outline(r, 8, FromColorRef(mark, 0.75f), 1.5f);
+          k.t->FillEllipse(D2D1::Ellipse({r.right - 3, r.top + 3}, 4, 4), k.Color(FromColorRef(mark)));
+        } else {
+          k.Outline(r, 8, Rgb(255, 255, 255, 0.10f));
+        }
         const float cy = (r.top + r.bottom) / 2;
         float left = r.left + 10;
         if (ID2D1Bitmap* icon = it.logo.empty() ? ProgramIcon(k.t, it.text2) : Logo(k.t, it.logo); icon != nullptr) {
@@ -3717,10 +3736,11 @@ struct MainWindow::Impl {
           }
         }
         if (anchor == UiCommand::CheckRoute) {
-          // Its button is an icon: the address is typed over the line's result.
+          // Its button is an icon: the address is typed over the line's result,
+          // short of the "all the tiles" button before it.
           for (const Item& row : layout.items) {
             if (row.kind == Kind::CheckRow && row.rect.top < it.rect.bottom && row.rect.bottom > it.rect.top) {
-              rect = {row.rect.left + 30 + TitleWidth(row) + kHint + 16, it.rect.top, it.rect.left - 4,
+              rect = {row.rect.left + 30 + TitleWidth(row) + kHint + 16, it.rect.top, it.rect.left - 44,
                       it.rect.bottom};
             }
           }

@@ -152,6 +152,22 @@ void TestRoutes() {
     CHECK(e.status == CheckResult::Status::Warn && e.fix == CheckFix::None);
   }
 
+  // The whole board summed up: all as set; or how many, and which went elsewhere or unseen.
+  {
+    using S = CheckResult::Status;
+    const std::vector<TileProbe> tiles = {{.key = "service:0", .name = "Netflix", .host = "netflix.com", .expect = "warp"},
+                                          {.key = "service:1", .name = "YouTube", .host = "www.youtube.com", .expect = "proxy"},
+                                          {.key = "ads", .name = "Реклама", .host = "doubleclick.net", .expect = "block"}};
+    const auto tile = [](const char* key, S status) { return TileResult{.key = key, .status = status, .line = key}; };
+    CheckResult b = JudgeBoard(tiles, {tile("service:0", S::Ok), tile("service:1", S::Ok), tile("ads", S::Ok)});
+    CHECK(b.status == S::Ok && b.summary == "все 3 как настроено ✓" && b.detail == "service:0\nservice:1\nads");
+    b = JudgeBoard(tiles, {tile("service:0", S::Fail), tile("service:1", S::Warn), tile("ads", S::Ok)});
+    CHECK(b.status == S::Fail && b.summary == "1 из 3 как настроено · не так: Netflix" && b.fix == CheckFix::Reconnect);
+    b = JudgeBoard(tiles, {tile("service:0", S::Ok), tile("service:1", S::Warn), tile("ads", S::Ok)});
+    CHECK(b.status == S::Warn && b.summary == "2 из 3 как настроено · не видно: YouTube");
+    CHECK(JudgeBoard(tiles, {tile("ads", S::Ok)}).summary == "как настроено ✓");
+  }
+
   // Only chosen things through the VPN: a foreign site directly is the mode, not a failure.
   r = JudgeRoutes({site("ya.ru", true, direct), site("spiegel.de", false, direct), site("chatgpt.com", false, direct)},
                   routing, /*selective=*/true);

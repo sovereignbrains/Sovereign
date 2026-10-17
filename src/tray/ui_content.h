@@ -124,6 +124,9 @@ struct UiChip {
   // Telegram), folded into it - one thing on the board, its menu moves and
   // removes both; -1: none.
   int program = -1;
+  // The board's check on it ("Проверить все плашки"), as UiCheck::Status
+  // counts: 0 not checked, 2 went as set, 3 couldn't be seen, 4 went elsewhere.
+  int check = 0;
 };
 inline constexpr int kBucketDirect = 0;
 inline constexpr int kBucketProxy = 1;
@@ -349,6 +352,7 @@ enum class UiCommand : std::uint8_t {
   Exit,
   Reconnect,     // the connection stopped and started again with the config as it is (the checks' way out)
   ToolsMenu,     // anchor: the main screen's tools - the speed test, the checks, where an address goes, the log
+  CheckBoard,    // every tile on the routing board checked, each held to its bucket
 };
 
 struct UiArgs {

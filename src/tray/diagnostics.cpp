@@ -302,6 +302,40 @@ std::string SiteLine(const SiteWay& site, const RoutingSettings& routing) {
   return line;
 }
 
+CheckResult JudgeBoard(const std::vector<TileProbe>& tiles, const std::vector<TileResult>& results) {
+  CheckResult board;
+  std::size_t ok = 0;
+  std::string wrong;   // the tiles that went elsewhere, by name
+  std::string unseen;  // the ones nothing was seen of
+  for (const TileResult& result : results) {
+    const auto tile = std::find_if(tiles.begin(), tiles.end(), [&](const TileProbe& t) { return t.key == result.key; });
+    const std::string name = tile != tiles.end() ? tile->name : result.key;
+    if (result.status == CheckResult::Status::Ok) {
+      ++ok;
+    } else {
+      std::string& list = result.status == CheckResult::Status::Fail ? wrong : unseen;
+      list += (list.empty() ? "" : ", ") + name;
+    }
+    board.detail += (board.detail.empty() ? "" : "\n") + result.line;
+  }
+  const std::size_t all = results.size();
+  if (ok == all) {
+    board.status = CheckResult::Status::Ok;
+    board.summary = all == 1 ? std::string("как настроено ✓") : std::format("все {} как настроено ✓", all);
+    return board;
+  }
+  board.summary = std::format("{} из {} как настроено", ok, all);
+  if (!wrong.empty()) {
+    board.status = CheckResult::Status::Fail;
+    board.summary += " · не так: " + wrong;
+    board.fix = CheckFix::Reconnect;
+  } else {
+    board.status = CheckResult::Status::Warn;
+    board.summary += " · не видно: " + unseen;
+  }
+  return board;
+}
+
 CheckResult JudgeExpected(const SiteWay& site, std::string_view expect, const RoutingSettings& routing) {
   // Where it went, in the board's words: nothing at all is a block (its name
   // answered empty, or no connection kept).
