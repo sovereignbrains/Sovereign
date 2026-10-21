@@ -175,6 +175,10 @@ void Updater::DoCheck() {
 }
 
 void Updater::DoInstall() {
+  // The release found by the last check may be hours old, and a newer one may
+  // have come out since: ask again, so the click installs the latest, not the
+  // one that was latest back then.
+  DoCheck();
   std::optional<Release> release;
   {
     const std::scoped_lock lock(mutex_);
