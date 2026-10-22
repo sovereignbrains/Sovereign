@@ -3391,7 +3391,7 @@ struct MainWindow::Impl {
   // A frame of the speed test's graph: its tip eased towards the newest
   // sample over one sample's time; true while there's way to go.
   bool StepSpeed() {
-    if (page != UiPage::Checks || IsWindowVisible(hwnd) == FALSE || !Motion()) {
+    if (page != UiPage::Checks || IsWindowVisible(hwnd) == FALSE || !Motion() || Blocked()) {
       painter.speedTip = 1;
       return false;
     }
@@ -3400,6 +3400,13 @@ struct MainWindow::Impl {
     painter.speedTip = std::min(1.0f, t);
     return t < 1.0f;
   }
+
+  // A modal box over the window (MessageBox, a file dialog) disables it. Such
+  // a box shows itself only once its loop finds the queue empty, and a frame
+  // asking for the next one keeps a paint there: the box stayed invisible and
+  // the disabled window looked hung (22.10.2026, the cross's question). No
+  // frames are asked for meanwhile; WM_ENABLE starts them again.
+  bool Blocked() const { return IsWindowEnabled(hwnd) == FALSE; }
 
   void KickLive() {
     if (!liveAt && hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && page == UiPage::Overview && Motion() &&
@@ -3421,7 +3428,7 @@ struct MainWindow::Impl {
     const float dt = liveAt ? std::min(0.1f, std::chrono::duration<float>(now - *liveAt).count()) : 0.0f;
     liveAt = now;
     const bool on = content.display == Display::On;
-    if (!layout.glow || page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE || !Motion() ||
+    if (!layout.glow || page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE || !Motion() || Blocked() ||
         (!on && live.particles.empty())) {
       liveAt.reset();
       if (page != UiPage::Overview || IsWindowVisible(hwnd) == FALSE) {
@@ -4255,6 +4262,11 @@ struct MainWindow::Impl {
         }
         return 0;
       }
+      case WM_ENABLE:
+        if (wParam != FALSE) {
+          KickLive();  // the modal box is gone (Blocked)
+        }
+        return 0;
       case WM_ERASEBKGND: return 1;  // Direct2D paints everything
       case WM_NCCALCSIZE:
         if (wParam == TRUE) {
