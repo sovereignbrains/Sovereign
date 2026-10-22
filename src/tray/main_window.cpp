@@ -1475,8 +1475,8 @@ class Painter {
 
   // Our own title bar (the system's is gone - Impl's WM_NCCALCSIZE): the
   // name on the left; on the right the cross, hiding the window to the tray,
-  // and where they belong: on the main screen the tools (the speed test, the
-  // checks, the log - run now and then, so a click away, not in the
+  // and where they belong: on the main screen the tools (the checks, the
+  // log, the report - run now and then, so a click away, not in the
   // settings) and the settings; on the configurations' list adding one (the
   // clipboard, a QR code, a file) - the main screen has it on its
   // subscription card. Inside the settings they were in the way (he asked
