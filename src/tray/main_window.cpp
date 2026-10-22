@@ -4,7 +4,7 @@
 #include <commctrl.h>
 #include <d2d1.h>
 #include <dwmapi.h>
-#include <dwrite.h>
+#include <dwrite_3.h>
 #include <shellscalingapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -691,28 +691,29 @@ class Painter {
     THROW_IF_FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                         reinterpret_cast<IUnknown**>(dwrite_.put())));
     wic_ = wil::CoCreateInstanceNoThrow<IWICImagingFactory>(CLSID_WICImagingFactory);
-    THROW_IF_FAILED(dwrite_->CreateEllipsisTrimmingSign(MakeFormat(kText, 14).get(), ellipsis_.put()));
-    title_ = MakeFormat(kDisplay, 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    state_ = MakeFormat(kDisplay, 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    delay_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    fonts_ = LoadFontCollection(dwrite_.get());
+    THROW_IF_FAILED(dwrite_->CreateEllipsisTrimmingSign(MakeFormat(Text(), 14).get(), ellipsis_.put()));
+    title_ = MakeFormat(Display(), 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    state_ = MakeFormat(Display(), 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    delay_ = MakeFormat(Text(), 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     delay_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    heading_ = MakeFormat(kText, 15, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    body_ = MakeFormat(kText, 14);
-    caption_ = MakeFormat(kText, 12.5f);
-    button_ = MakeFormat(kText, 14);
+    heading_ = MakeFormat(Text(), 15, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    body_ = MakeFormat(Text(), 14);
+    caption_ = MakeFormat(Text(), 12.5f);
+    button_ = MakeFormat(Text(), 14);
     button_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    chip_ = MakeFormat(kText, 12.5f);
+    chip_ = MakeFormat(Text(), 12.5f);
     chip_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    center_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    center_ = MakeFormat(Text(), 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     center_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    wrap_ = MakeFormat(kText, 14, DWRITE_FONT_WEIGHT_NORMAL, true);
-    captionWrap_ = MakeFormat(kText, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
+    wrap_ = MakeFormat(Text(), 14, DWRITE_FONT_WEIGHT_NORMAL, true);
+    captionWrap_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
     mono_ = MakeFormat(L"Consolas", 12.5f);
-    trailing_ = MakeFormat(kText, 12.5f);
+    trailing_ = MakeFormat(Text(), 12.5f);
     trailing_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    hint_ = MakeFormat(kText, 11, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    hint_ = MakeFormat(Text(), 11, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    tip_ = MakeFormat(kText, 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
+    tip_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -925,8 +926,51 @@ class Painter {
   }
 
  private:
-  static constexpr const wchar_t* kDisplay = L"Segoe UI Variable Display";
-  static constexpr const wchar_t* kText = L"Segoe UI Variable Text";
+  // The headings in Unbounded and the text in Golos Text, both in the exe
+  // (resources, like AIControls'); Segoe UI if they could not be loaded
+  // (a test's exe has none).
+  const wchar_t* Display() const { return fonts_ ? L"Unbounded" : L"Segoe UI Variable Display"; }
+  const wchar_t* Text() const { return fonts_ ? L"Golos Text" : L"Segoe UI Variable Text"; }
+
+  // The fonts of the exe's resources as a collection; null if any is missing.
+  static wil::com_ptr<IDWriteFontCollection> LoadFontCollection(IDWriteFactory* factory) {
+    wil::com_ptr<IDWriteFactory5> factory5;
+    if (FAILED(factory->QueryInterface(IID_PPV_ARGS(factory5.put())))) {
+      return nullptr;
+    }
+    // The loader must outlive every format that uses the collection.
+    static wil::com_ptr<IDWriteInMemoryFontFileLoader> loader;
+    if (!loader) {
+      if (FAILED(factory5->CreateInMemoryFontFileLoader(loader.put())) ||
+          FAILED(factory5->RegisterFontFileLoader(loader.get()))) {
+        loader.reset();
+        return nullptr;
+      }
+    }
+    wil::com_ptr<IDWriteFontSetBuilder1> builder;
+    if (FAILED(factory5->CreateFontSetBuilder(builder.put()))) {
+      return nullptr;
+    }
+    for (const int id : {IDR_FONT_DISPLAY, IDR_FONT_TEXT}) {
+      const HRSRC found = FindResourceW(nullptr, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));  // RT_RCDATA
+      const HGLOBAL loaded = found != nullptr ? LoadResource(nullptr, found) : nullptr;
+      const void* data = loaded != nullptr ? LockResource(loaded) : nullptr;
+      wil::com_ptr<IDWriteFontFile> file;
+      if (data == nullptr ||
+          FAILED(loader->CreateInMemoryFontFileReference(factory5.get(), data, SizeofResource(nullptr, found), nullptr,
+                                                          file.put())) ||
+          FAILED(builder->AddFontFile(file.get()))) {
+        return nullptr;
+      }
+    }
+    wil::com_ptr<IDWriteFontSet> set;
+    wil::com_ptr<IDWriteFontCollection1> collection;
+    if (FAILED(builder->CreateFontSet(set.put())) ||
+        FAILED(factory5->CreateFontCollectionFromFontSet(set.get(), collection.put()))) {
+      return nullptr;
+    }
+    return collection.query<IDWriteFontCollection>();
+  }
 
   // Drawing helpers over one reusable brush.
   struct Canvas {
@@ -971,7 +1015,7 @@ class Painter {
                                              DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL,
                                              bool wrap = false) const {
     wil::com_ptr<IDWriteTextFormat> f;
-    THROW_IF_FAILED(dwrite_->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
+    THROW_IF_FAILED(dwrite_->CreateTextFormat(family, family == Display() || family == Text() ? fonts_.get() : nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                                               DWRITE_FONT_STRETCH_NORMAL, size, L"ru-ru", f.put()));
     if (wrap) {
       f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
@@ -3168,6 +3212,7 @@ class Painter {
 
   wil::com_ptr<ID2D1Factory> d2d_;
   wil::com_ptr<IDWriteFactory> dwrite_;
+  wil::com_ptr<IDWriteFontCollection> fonts_;  // Unbounded and Golos Text; null if missing
   wil::com_ptr<IWICImagingFactory> wic_;
   wil::com_ptr<IDWriteInlineObject> ellipsis_;
   wil::com_ptr<IDWriteTextFormat> title_;
