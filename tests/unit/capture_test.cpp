@@ -51,8 +51,12 @@ struct Picture {
 
 // `text`'s code, `scale` pixels a module: black modules on white, or on nothing.
 Picture Qr(std::string_view text, int scale, bool transparent) {
+  // Newer ZXing marks MultiFormatWriter deprecated, an older one has no CreateBarcode.
+#pragma warning(push)
+#pragma warning(disable : 4996)
   const ZXing::BitMatrix code =
       ZXing::MultiFormatWriter(ZXing::BarcodeFormat::QRCode).setEncoding(ZXing::CharacterSet::UTF8).setMargin(4).encode(std::string(text), 0, 0);
+#pragma warning(pop)
   Picture picture;
   picture.width = code.width() * scale;
   picture.height = code.height() * scale;
