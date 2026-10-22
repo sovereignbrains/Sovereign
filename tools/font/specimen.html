@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;600&family=Onest:wght@400;600&family=Manrope:wght@400;600&family=Geologica:wght@400;600&family=Exo+2:wght@400;600&family=Rubik:wght@400;600&family=Jura:wght@400;600&family=Oxanium:wght@400;600&family=Russo+One&family=Unbounded:wght@500&family=Play:wght@400;700&family=Tektur:wght@400;600&display=swap">
+<style>
+body{background:#0d1118;color:#f2f4f8;margin:0;padding:16px;font:14px sans-serif;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.c{background:#161c26;border:1px solid #28303d;border-radius:10px;padding:14px 16px}
+.n{font:11px monospace;color:#7a8596;margin-bottom:8px}
+.h{font-size:20px;font-weight:600}
+.s{color:#9aa4b4;font-size:13px;margin-top:4px}
+.m{margin-top:8px;font-size:14px}
+</style>
+<body>
+<script>
+const fonts=['Golos Text','Onest','Manrope','Geologica','Exo 2','Rubik','Jura','Oxanium','Russo One','Unbounded','Play','Tektur'];
+for(const f of fonts){
+ document.body.insertAdjacentHTML('beforeend',`<div class="c" style="font-family:'${f}'"><div class="n">${f}</div>
+ <div class="h">Подключено · Германия</div>
+ <div class="s">Сервер оплачен до 09.11 · осталось 18 дней</div>
+ <div class="m">AnyTLS + REALITY · 5.83.147.210 · 51 мс · 0123456789 → +</div></div>`);
+}
+</script>
+</body></html>

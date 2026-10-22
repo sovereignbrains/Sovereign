@@ -926,11 +926,10 @@ class Painter {
   }
 
  private:
-  // The headings in Unbounded and the text in Golos Text, both in the exe
-  // (resources, like AIControls'); Segoe UI if they could not be loaded
-  // (a test's exe has none).
-  const wchar_t* Display() const { return fonts_ ? L"Unbounded" : L"Segoe UI Variable Display"; }
-  const wchar_t* Text() const { return fonts_ ? L"Golos Text" : L"Segoe UI Variable Text"; }
+  // Jura, in the exe (a resource); Segoe UI if it could not be loaded (a
+  // test's exe has none).
+  const wchar_t* Display() const { return fonts_ ? L"Jura" : L"Segoe UI Variable Display"; }
+  const wchar_t* Text() const { return fonts_ ? L"Jura" : L"Segoe UI Variable Text"; }
 
   // The fonts of the exe's resources as a collection; null if any is missing.
   static wil::com_ptr<IDWriteFontCollection> LoadFontCollection(IDWriteFactory* factory) {
@@ -951,7 +950,7 @@ class Painter {
     if (FAILED(factory5->CreateFontSetBuilder(builder.put()))) {
       return nullptr;
     }
-    for (const int id : {IDR_FONT_DISPLAY, IDR_FONT_TEXT}) {
+    for (const int id : {IDR_FONT_TEXT}) {
       const HRSRC found = FindResourceW(nullptr, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));  // RT_RCDATA
       const HGLOBAL loaded = found != nullptr ? LoadResource(nullptr, found) : nullptr;
       const void* data = loaded != nullptr ? LockResource(loaded) : nullptr;
@@ -1015,7 +1014,7 @@ class Painter {
                                              DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL,
                                              bool wrap = false) const {
     wil::com_ptr<IDWriteTextFormat> f;
-    THROW_IF_FAILED(dwrite_->CreateTextFormat(family, family == Display() || family == Text() ? fonts_.get() : nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
+    THROW_IF_FAILED(dwrite_->CreateTextFormat(family, fonts_ && wcscmp(family, L"Jura") == 0 ? fonts_.get() : nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                                               DWRITE_FONT_STRETCH_NORMAL, size, L"ru-ru", f.put()));
     if (wrap) {
       f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
@@ -3212,7 +3211,7 @@ class Painter {
 
   wil::com_ptr<ID2D1Factory> d2d_;
   wil::com_ptr<IDWriteFactory> dwrite_;
-  wil::com_ptr<IDWriteFontCollection> fonts_;  // Unbounded and Golos Text; null if missing
+  wil::com_ptr<IDWriteFontCollection> fonts_;  // Jura; null if missing
   wil::com_ptr<IWICImagingFactory> wic_;
   wil::com_ptr<IDWriteInlineObject> ellipsis_;
   wil::com_ptr<IDWriteTextFormat> title_;
