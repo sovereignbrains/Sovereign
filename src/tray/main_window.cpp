@@ -3147,9 +3147,27 @@ class Painter {
     const float radius = std::min(r.right - r.left, r.bottom - r.top) / 2 - 1;
     const D2D1_ELLIPSE round = D2D1::Ellipse(center, radius, radius);
     k.t->FillEllipse(round, k.Color(Rgb(255, 255, 255, pressed ? 0.12f : hovered ? 0.09f : 0.04f)));
-    k.t->DrawEllipse(round, k.Color(Rgb(255, 255, 255, hovered ? 0.30f : 0.14f)), 1);
+    // The rim lit from above: bright at the top, fading toward the bottom -
+    // glass, not a flat ring.
+    const float rim = hovered ? 0.42f : 0.24f;
+    const std::array<D2D1_GRADIENT_STOP, 2> stops{{{0.0f, Rgb(255, 255, 255, rim)}, {1.0f, Rgb(255, 255, 255, rim * 0.25f)}}};
+    wil::com_ptr<ID2D1GradientStopCollection> collection;
+    wil::com_ptr<ID2D1LinearGradientBrush> brush;
+    if (SUCCEEDED(k.t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
+        SUCCEEDED(k.t->CreateLinearGradientBrush(
+            D2D1::LinearGradientBrushProperties({center.x, center.y - radius}, {center.x, center.y + radius}), collection.get(),
+            brush.put()))) {
+      k.t->DrawEllipse(round, brush.get(), 1);
+    } else {
+      k.t->DrawEllipse(round, k.Color(Rgb(255, 255, 255, rim)), 1);
+    }
     const D2D1_RECT_F face{center.x - radius, center.y - radius, center.x + radius, center.y + radius};
-    k.Text(it.glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.82f));
+    // Grayscale text: ClearType on a translucent round fringes the glyph's
+    // edges red and blue.
+    const D2D1_TEXT_ANTIALIAS_MODE mode = k.t->GetTextAntialiasMode();
+    k.t->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    k.Text(it.glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.88f));
+    k.t->SetTextAntialiasMode(mode);
   }
 
   // The switch is a cube (cube.h): in the pose the window animates it
