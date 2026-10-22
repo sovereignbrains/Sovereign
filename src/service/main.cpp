@@ -37,6 +37,10 @@ constexpr wchar_t kServiceDisplayName[] = L"Sovereign Core";
 // How many of the core's recent log lines the service keeps for the tray.
 constexpr std::size_t kCoreLogCapacity = 2000;
 
+// How long the core's stop and start after a resume may take (a good one:
+// 25-30 s with the TUN) before the service restarts itself.
+constexpr std::chrono::seconds kResumeLimit{60};
+
 // Живёт на весь процесс службы: ServiceCtrlHandler (обычный C-callback без
 // контекста) должен куда-то дотянуться, поэтому состояние остановки хранится
 // в объекте с статической длительностью, а не как локальная переменная.
@@ -128,6 +132,23 @@ DWORD WINAPI ServiceCtrlHandler(DWORD control, DWORD eventType, LPVOID, LPVOID) 
           // Through the handler, under the lock its pipe requests take (see
           // ControlHandler::ResumeAfterSleep): this is the SCM's thread, and
           // a box_start/box_stop from the tray may be in flight right now.
+          // A core that never comes back from Stop() (22.10.2026: sing-box's
+          // wireguard endpoint close hung after sleep, "take too much time to
+          // finish") keeps the handler's lock for good: every pipe request of
+          // the tray waits behind it and the TUN stays half-closed - no
+          // internet, dead buttons. Past the limit the service dies on
+          // purpose: the SCM restarts it (failure actions, --install) and
+          // StartAtBoot brings the VPN back from the boot config.
+          std::jthread watchdog([](const std::stop_token& stop) {
+            std::mutex mutex;
+            std::condition_variable_any cv;
+            std::unique_lock lock(mutex);
+            cv.wait_for(lock, stop, kResumeLimit, [] { return false; });
+            if (!stop.stop_requested()) {
+              trace::Power("resume_hung");
+              TerminateProcess(GetCurrentProcess(), 1);
+            }
+          });
           const auto outcome = state.handlerReady.load(std::memory_order_acquire) && state.handler.has_value()
                                    ? state.handler->ResumeAfterSleep()
                                    : sovereign::service::ControlHandler::ResumeOutcome{};
