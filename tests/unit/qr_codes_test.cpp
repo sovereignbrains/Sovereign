@@ -48,8 +48,13 @@ struct Canvas {
 
   // The code for `text` at (left, top), `scale` pixels a module, with its quiet zone.
   void Draw(std::string_view text, int left, int top, int scale, bool inverted = false) {
+    // Newer ZXing marks MultiFormatWriter deprecated (CreateBarcode), an older one
+    // (the build job's cache) has no CreateBarcode: the warning is silenced, not obeyed.
+#pragma warning(push)
+#pragma warning(disable : 4996)
     const ZXing::BitMatrix code =
         ZXing::MultiFormatWriter(ZXing::BarcodeFormat::QRCode).setEncoding(ZXing::CharacterSet::UTF8).setMargin(4).encode(std::string(text), 0, 0);
+#pragma warning(pop)
     const std::uint8_t dark = inverted ? 240 : 10;
     const std::uint8_t light = inverted ? 20 : 250;
     for (int y = 0; y < code.height() * scale; ++y) {

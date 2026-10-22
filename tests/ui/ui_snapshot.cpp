@@ -416,10 +416,10 @@ int EditTest(HINSTANCE instance) {
   // Tab goes through the window's own caption first (0.4.97 on) - then the
   // page's back arrow. Before, the count left them out: Enter landed on "+"
   // and its menu waited for a click (CI failed from dc9e160 on, a desktop run
-  // hung). The configurations' list has "+" and "hide" there, a
-  // configuration's page "hide" only (0.5.12 on: MainWindow's Caption).
-  constexpr int kListCaption = 2;
-  constexpr int kProfileCaption = 1;
+  // hung). The configurations' list has "+", "hide" and the cross there, a
+  // configuration's page "hide" and the cross (MainWindow's Caption).
+  constexpr int kListCaption = 3;
+  constexpr int kProfileCaption = 2;
   const auto tabs = [&](int n) {
     for (int i = 0; i < n; ++i) {
       key(VK_TAB);
