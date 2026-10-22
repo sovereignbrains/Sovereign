@@ -5726,8 +5726,13 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         LOG_CAUGHT_EXCEPTION();
       }
       break;
-    case UiCommand::Exit:
-      DestroyWindow(trayWindow);
+    case UiCommand::Exit:  // the window's cross; the tray menu's «Выход» doesn't come this way
+      if (MessageBoxW(owner,
+                      L"Закрыть Sovereign?\n\nПодключение останется: им управляет служба. Значок в трее исчезнет, "
+                      L"окно вернётся, когда запустишь клиент снова. Спрятать окно в трей можно чёрточкой рядом с крестиком.",
+                      L"Sovereign", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES) {
+        DestroyWindow(trayWindow);
+      }
       break;
   }
 }
