@@ -243,8 +243,7 @@ def main():  # noqa: F811
     src, dst = sys.argv[1], sys.argv[2]
     f = TTFont(src)
     cm = f.getBestCmap()
-    for ch, build, lsb, a3, a7 in (("0", build_zero, 120, 1096, 1228),
-                                   ("4", build_four, 60, 1036, 1246)):  # 2 оставлена как в Jura
+    for ch, build, lsb, a3, a7 in (("0", build_zero, 120, 1096, 1228),):  # 2 и 4 оставлены как в Jura
         p3 = build(lsb + H300, a3 - lsb - H300, H300)
         p7 = build(lsb + H700, a7 - lsb - H700, H700)
         set_glyph(f, cm[ord(ch)], p3, p7, a3, a7, lsb)
@@ -254,5 +253,6 @@ def main():  # noqa: F811
 
 if __name__ == "__main__":
     main()
+
 
 
