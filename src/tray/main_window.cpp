@@ -1588,8 +1588,11 @@ class Painter {
     Item card = Make(Kind::ServerCard, {x0 + 2, y + 2, x1 - 2, y + h - 2}, {}, kGlyphChevron);
     card.action = ItemAction::Page;
     card.index = static_cast<int>(UiPage::Servers);
-    card.enabled = !c.protocols.empty();
     if (c.protocols.empty()) {
+      // No servers (every configuration or server switched off): the card
+      // leads to the configurations, where they are switched on again - not a
+      // dead end with nothing to click.
+      card.index = static_cast<int>(UiPage::Subscription);
       card.text = c.profiles.empty() ? L"Нет серверов" : L"Выбора сервера нет";
       card.detail = c.profiles.empty() ? L"добавь конфигурацию" : L"включи конфигурацию с серверами";
       l.items.push_back(std::move(card));
