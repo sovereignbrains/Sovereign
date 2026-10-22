@@ -17,10 +17,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
 #include <exception>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -35,6 +38,7 @@ namespace {
 
 using sovereign::tray::UiContent;
 using sovereign::tray::UiPage;
+using sovereign::tray::UiQuestion;
 
 // The routing board with a bit of everything, a long site among it.
 std::vector<sovereign::tray::UiChip> SampleBoard() {
@@ -306,6 +310,39 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(detailed, UiPage::Servers, logs, 400, 620, 96,
                                               dir + L"\\servers-detailed.png");
   });
+  // ...and as the subscription lists them, not fastest first.
+  variant([&](UiContent& listed) {
+    listed.serversByDelay = false;
+    sovereign::tray::RenderMainWindowSnapshot(listed, UiPage::Servers, logs, 400, 620, 96,
+                                              dir + L"\\servers-listed.png");
+  });
+  // The window's own questions (MainWindow::Ask): the cross's over the
+  // overview; a configuration's removal, narrow, its long name wrapped; a note.
+  variant([&](UiContent& asked) {
+    asked.question = UiQuestion{.title = L"Закрыть Sovereign?",
+                                .text = L"Подключение останется: им управляет служба. Значок в трее исчезнет, окно "
+                                        L"вернётся, когда запустишь клиент снова. Спрятать окно в трей можно "
+                                        L"чёрточкой рядом с крестиком.",
+                                .yes = L"Закрыть",
+                                .tone = UiQuestion::Tone::Danger,
+                                .glyph = L"\xE7E8"};
+    sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\question-exit.png");
+    asked.question = UiQuestion{.title = L"Удалить «packetlab.tech · 4G | Whitelist №2 · резерв»?",
+                                .text = L"Подписка больше не будет обновляться. Её config.json останется в папке "
+                                        L"history на всякий случай.",
+                                .yes = L"Удалить",
+                                .tone = UiQuestion::Tone::Danger,
+                                .glyph = L"\xE74D"};
+    sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Profile, logs, 360, 620, 96,
+                                              dir + L"\\question-remove-narrow.png");
+    asked.question = UiQuestion{.title = L"Не удалось записать файл",
+                                .text = L"Может быть, папка только для чтения или файл открыт в другой программе.",
+                                .yes = L"Понятно",
+                                .no = L"",
+                                .tone = UiQuestion::Tone::Warning};
+    sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Logs, logs, 400, 620, 96, dir + L"\\question-note.png");
+  });
   // The exit's address hidden: the flag and the country.
   variant([&](UiContent& hidden) {
     hidden.hideExitIp = true;
@@ -351,31 +388,22 @@ int Window(HINSTANCE instance) {
   return 0;
 }
 
-// --edit-test: typing a configuration's name in place, in the real window,
-// driven by keys as a user would - Tab to the first configuration, Enter
-// opens it, Tab to its title, Enter starts the edit box over it; Enter keeps
-// what was typed, Esc drops it, clicking away keeps it. Needs a desktop:
-// ctest runs it in CI (CI is set) or with SOVEREIGN_DESKTOP_TESTS=1.
-int EditTest(HINSTANCE instance) {
+// The tests in the real window need a desktop: ctest runs them in CI (CI is
+// set) or with SOVEREIGN_DESKTOP_TESTS=1, else they say they're skipped.
+bool OnDesktop(const char* test) {
   std::array<wchar_t, 8> flag{};
   if (GetEnvironmentVariableW(L"CI", flag.data(), static_cast<DWORD>(flag.size())) == 0 &&
       GetEnvironmentVariableW(L"SOVEREIGN_DESKTOP_TESTS", flag.data(), static_cast<DWORD>(flag.size())) == 0) {
-    std::puts("edit in place: skipped (set SOVEREIGN_DESKTOP_TESTS=1; CI runs it)");
-    return 0;
+    std::printf("%s: skipped (set SOVEREIGN_DESKTOP_TESTS=1; CI runs it)\n", test);
+    return false;
   }
-  sovereign::tray::UiCommand command{};
-  sovereign::tray::UiArgs got;
-  int commands = 0;
-  sovereign::tray::MainWindow window(instance, [&](sovereign::tray::UiCommand c, const sovereign::tray::UiArgs& a) {
-    command = c;
-    got = a;
-    ++commands;
-  });
-  window.Update(SampleContent());
-  window.Show(UiPage::Subscription);
-  // This thread's own window - never FindWindowW: an installed Sovereign has
-  // a window of the same class, and the keys below went to it (16.10.2026:
-  // a desktop run turned the user's connection off).
+  return true;
+}
+
+// This thread's own window - never FindWindowW: an installed Sovereign has
+// a window of the same class, and the keys sent went to it (16.10.2026:
+// a desktop run turned the user's connection off).
+HWND OwnWindow() {
   HWND hwnd = nullptr;
   EnumThreadWindows(
       GetCurrentThreadId(),
@@ -389,29 +417,52 @@ int EditTest(HINSTANCE instance) {
         return FALSE;
       },
       reinterpret_cast<LPARAM>(&hwnd));
+  return hwnd;
+}
+
+// A fifth of a second of the window's messages. Timed, not drained: on the
+// main page the live traffic's WM_PAINT asks for the next frame (0.5.3 on)
+// and waits for vsync, so the queue never runs dry - draining it after Esc
+// led there never returned (CI failed from dc9e160 on, a desktop run hung).
+void Pump() {
+  const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+  while (std::chrono::steady_clock::now() < until) {
+    MSG msg;
+    if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    } else {
+      Sleep(10);
+    }
+  }
+}
+
+// --edit-test: typing a configuration's name in place, in the real window,
+// driven by keys as a user would - Tab to the first configuration, Enter
+// opens it, Tab to its title, Enter starts the edit box over it; Enter keeps
+// what was typed, Esc drops it, clicking away keeps it. Needs a desktop.
+int EditTest(HINSTANCE instance) {
+  if (!OnDesktop("edit in place")) {
+    return 0;
+  }
+  sovereign::tray::UiCommand command{};
+  sovereign::tray::UiArgs got;
+  int commands = 0;
+  sovereign::tray::MainWindow window(instance, [&](sovereign::tray::UiCommand c, const sovereign::tray::UiArgs& a) {
+    command = c;
+    got = a;
+    ++commands;
+  });
+  window.Update(SampleContent());
+  window.Show(UiPage::Subscription);
+  const HWND hwnd = OwnWindow();
   if (hwnd == nullptr) {
     std::fputs("edit in place: no window of this test's own\n", stderr);
     return 1;
   }
-  // A fifth of a second of the window's messages. Timed, not drained: on the
-  // main page the live traffic's WM_PAINT asks for the next frame (0.5.3 on)
-  // and waits for vsync, so the queue never runs dry - draining it after Esc
-  // led there never returned (CI failed from dc9e160 on, a desktop run hung).
-  const auto pump = [] {
-    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
-    while (std::chrono::steady_clock::now() < until) {
-      MSG msg;
-      if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-      } else {
-        Sleep(10);
-      }
-    }
-  };
   const auto key = [&](WPARAM vk) {
     SendMessageW(hwnd, WM_KEYDOWN, vk, 0);
-    pump();
+    Pump();
   };
   // Tab goes through the window's own caption first (0.4.97 on) - then the
   // page's back arrow. Before, the count left them out: Enter landed on "+"
@@ -450,7 +501,7 @@ int EditTest(HINSTANCE instance) {
     check(std::wstring(text.data()) == L"packetlab", "the box doesn't hold the name");
     SetWindowTextW(box, L"  Мой NL  ");
     SendMessageW(box, WM_KEYDOWN, VK_RETURN, 0);
-    pump();
+    Pump();
     check(commands == 1 && command == sovereign::tray::UiCommand::RenameProfile && got.index == 0 &&
               got.text == L"Мой NL",
           "Enter didn't send the name, trimmed");
@@ -460,16 +511,149 @@ int EditTest(HINSTANCE instance) {
   if (box != nullptr) {
     SetWindowTextW(box, L"dropped");
     SendMessageW(box, WM_KEYDOWN, VK_ESCAPE, 0);
-    pump();
+    Pump();
     check(commands == 1, "Esc sent something");
   }
   box = startEdit();
   if (box != nullptr) {
     SetWindowTextW(box, L"kept");
     SetFocus(hwnd);  // a click elsewhere in the window
-    pump();
+    Pump();
     check(commands == 2 && got.text == L"kept", "leaving the box didn't keep the name");
   }
+  window.Hide();
+  return failures == 0 ? 0 : 1;
+}
+
+// --ask-test: a question over the real window (MainWindow::Ask), answered as
+// a user would. The page under it takes no click; Esc and "Отмена" drop it,
+// Enter and its yes button answer it, Tab stays on its buttons; hiding the
+// window drops it. The clicks are the window's mouse messages at the items'
+// places in its layout (DescribeMainWindowLayout). Needs a desktop.
+int AskTest(HINSTANCE instance) {
+  if (!OnDesktop("ask")) {
+    return 0;
+  }
+  int commands = 0;
+  sovereign::tray::MainWindow window(instance,
+                                     [&](sovereign::tray::UiCommand, const sovereign::tray::UiArgs&) { ++commands; });
+  const UiContent content = SampleContent();
+  window.Update(content);
+  window.Show(UiPage::Overview);
+  const HWND hwnd = OwnWindow();
+  if (hwnd == nullptr) {
+    std::fputs("ask: no window of this test's own\n", stderr);
+    return 1;
+  }
+  Pump();
+  const UiQuestion question{.title = L"Закрыть Sovereign?",
+                            .text = L"Подключение останется: им управляет служба.",
+                            .yes = L"Закрыть",
+                            .tone = UiQuestion::Tone::Danger};
+  UiContent asked = content;
+  asked.question = question;
+  // The centre of the last item of `kind` with `label` (any, if empty) in the
+  // window's pixels: a question's buttons come last.
+  RECT client{};
+  GetClientRect(hwnd, &client);
+  const float scale = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+  const auto at = [&](const UiContent& c, std::wstring_view kind, std::wstring_view label) -> std::optional<POINT> {
+    const std::wstring text = sovereign::tray::DescribeMainWindowLayout(
+        c, UiPage::Overview, static_cast<float>(client.right) / scale, static_cast<float>(client.bottom) / scale);
+    std::optional<POINT> found;
+    for (std::size_t from = 0; from < text.size();) {
+      const std::size_t end = std::min(text.find(L'\n', from), text.size());
+      const std::wstring_view line(text.data() + from, end - from);
+      from = end + 1;
+      // "   Kind         [ left top right bottom] text  | detail"
+      const std::size_t open = line.find(L'[');
+      const std::size_t close = line.find(L"] ");
+      if (open == std::wstring_view::npos || close == std::wstring_view::npos || line.size() < 4 + kind.size() ||
+          line.substr(4, kind.size()) != kind || line[4 + kind.size()] != L' ') {
+        continue;
+      }
+      const std::wstring_view rest = line.substr(close + 2);
+      if (!label.empty() && rest != label && !rest.starts_with(std::wstring(label) + L"  |")) {
+        continue;
+      }
+      std::array<float, 4> r{};
+      if (swscanf_s(std::wstring(line.substr(open + 1, close - open - 1)).c_str(), L"%f %f %f %f", &r[0], &r[1], &r[2],
+                    &r[3]) == 4) {
+        found = POINT{std::lround((r[0] + r[2]) / 2 * scale), std::lround((r[1] + r[3]) / 2 * scale)};
+      }
+    }
+    return found;
+  };
+  const auto click = [&](POINT p) {
+    const LPARAM where = MAKELPARAM(p.x, p.y);
+    SendMessageW(hwnd, WM_MOUSEMOVE, 0, where);
+    SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, where);
+    SendMessageW(hwnd, WM_LBUTTONUP, 0, where);
+    Pump();
+  };
+  const auto key = [&](WPARAM vk) {
+    SendMessageW(hwnd, WM_KEYDOWN, vk, 0);
+    Pump();
+  };
+  int failures = 0;
+  const auto check = [&](bool ok, const char* what) {
+    if (!ok) {
+      std::fprintf(stderr, "ask: %s\n", what);
+      ++failures;
+    }
+  };
+  const std::optional<POINT> power = at(content, L"Power", L"");
+  const std::optional<POINT> yesButton = at(asked, L"Danger", question.yes);
+  const std::optional<POINT> noButton = at(asked, L"Button", question.no);
+  if (!power || !yesButton || !noButton) {
+    std::fputs("ask: no power button or no question's buttons in the layout\n", stderr);
+    return 1;
+  }
+  int yes = 0;
+  const auto ask = [&] {
+    window.Ask(question, [&] { ++yes; });
+    Pump();
+  };
+  // The power button takes the click again: the question is gone.
+  const auto gone = [&](const char* what) {
+    const int before = commands;
+    click(*power);
+    check(commands == before + 1, what);
+  };
+
+  ask();
+  click(*power);
+  check(commands == 0, "the page under the question took a click");
+  key(VK_ESCAPE);
+  check(yes == 0, "Esc answered yes");
+  gone("the question stayed after Esc");
+  ask();
+  key(VK_TAB);  // its yes, then
+  key(VK_TAB);  // "Отмена" - its buttons only, left to right
+  key(VK_TAB);  // and round to its yes...
+  key(VK_TAB);  // ...and "Отмена" again, not the page's
+  key(VK_RETURN);
+  check(commands == 1 && yes == 0, "Tab went past the question's buttons or not in their order");
+  gone("the question stayed after Enter on \"Отмена\"");
+  ask();
+  key(VK_RETURN);
+  check(yes == 1, "Enter didn't answer yes");
+  gone("the question stayed after Enter");
+  ask();
+  click(*noButton);
+  check(yes == 1, "\"Отмена\" answered yes");
+  gone("the question stayed after \"Отмена\"");
+  ask();
+  click(*yesButton);
+  check(yes == 2, "its yes button didn't answer yes");
+  gone("the question stayed after its yes button");
+  ask();
+  window.Hide();
+  Pump();
+  window.Show(UiPage::Overview);
+  Pump();
+  check(yes == 2, "hiding the window answered yes");
+  gone("the question stayed over the window hidden and shown again");
   window.Hide();
   return failures == 0 ? 0 : 1;
 }
@@ -493,21 +677,32 @@ int LayoutTest(const std::wstring& dir) {
   routed.routingMore = true;
   routed.routing.remoteDns = L"авто · Cloudflare";
   routed.routing.localDns = L"свой · dns.adguard-dns.com";
-  const std::array<std::pair<UiPage, const wchar_t*>, 8> pages = {{{UiPage::Overview, L"overview"},
-                                                                   {UiPage::Servers, L"servers"},
-                                                                   {UiPage::Subscription, L"subscription"},
-                                                                   {UiPage::Logs, L"logs"},
-                                                                   {UiPage::Settings, L"settings"},
-                                                                   {UiPage::Profile, L"profile"},
-                                                                   {UiPage::Routing, L"routing"},
-                                                                   {UiPage::Checks, L"checks"}}};
+  // A question open over the overview (MainWindow::Ask), its title long enough to wrap.
+  UiContent asked = content;
+  asked.question = UiQuestion{.title = L"Скачать подписку напрямую, без VPN и пересыльщика?",
+                              .text = L"Сервер этой подписки увидит твой настоящий IP-адрес.",
+                              .yes = L"Скачать напрямую",
+                              .tone = UiQuestion::Tone::Warning};
+  struct Page {
+    UiPage page;
+    const wchar_t* name;
+    const UiContent* content;
+  };
+  const std::array<Page, 9> pages = {{{UiPage::Overview, L"overview", &content},
+                                      {UiPage::Servers, L"servers", &content},
+                                      {UiPage::Subscription, L"subscription", &content},
+                                      {UiPage::Logs, L"logs", &content},
+                                      {UiPage::Settings, L"settings", &content},
+                                      {UiPage::Profile, L"profile", &content},
+                                      {UiPage::Routing, L"routing", &routed},
+                                      {UiPage::Checks, L"checks", &content},
+                                      {UiPage::Overview, L"question", &asked}}};
   CreateDirectoryW(dir.c_str(), nullptr);
   int failures = 0;
   int cut = 0;
   for (const float width : {420.0f, 360.0f}) {
-    for (const auto& [page, name] : pages) {
-      const std::wstring text =
-          sovereign::tray::DescribeMainWindowLayout(page == UiPage::Routing ? routed : content, page, width, 660);
+    for (const auto& [page, name, sample] : pages) {
+      const std::wstring text = sovereign::tray::DescribeMainWindowLayout(*sample, page, width, 660);
       std::string utf8(static_cast<std::size_t>(WideCharToMultiByte(CP_UTF8, 0, text.data(),
                                                                     static_cast<int>(text.size()), nullptr, 0,
                                                                     nullptr, nullptr)),
@@ -547,6 +742,7 @@ int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - se
     const std::wstring arg = argc > 1 ? argv[1] : L"ui-snapshots";
     result = arg == L"--window"      ? Window(GetModuleHandleW(nullptr))
              : arg == L"--edit-test" ? EditTest(GetModuleHandleW(nullptr))
+             : arg == L"--ask-test"  ? AskTest(GetModuleHandleW(nullptr))
              : arg == L"--layout-test" ? LayoutTest(argc > 2 ? argv[2] : L"ui-layout")
                                      : Snapshots(arg);
   } catch (const wil::ResultException& e) {

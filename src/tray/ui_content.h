@@ -6,10 +6,14 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <format>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "tray_model.h"
@@ -172,6 +176,19 @@ struct UiCheck {
   std::vector<float> speedUp;
 };
 
+// A question the window asks over itself (MainWindow::Ask) - its own dark
+// card in place of the system's light MessageBox. no empty: a note with one
+// button (yes).
+struct UiQuestion {
+  enum class Tone : std::uint8_t { Accent, Warning, Danger };
+  std::wstring title;  // "Закрыть Sovereign?"
+  std::wstring text;   // what it means, under it
+  std::wstring yes;    // "Закрыть"
+  std::wstring no = L"Отмена";
+  Tone tone = Tone::Accent;
+  std::wstring glyph{};  // a Segoe Fluent Icons character, in a circle before the title; empty: a "!"
+};
+
 // What the tray's window shows; built by main.cpp from the worker's view.
 // Strings are ready to draw.
 struct UiContent {
@@ -234,6 +251,11 @@ struct UiContent {
   bool exitPending = false;             // being looked up
   bool hideExitIp = false;              // the country only
   bool delaysDetailed = false;          // latency in full (DelayLabel, DelayDetail)
+  bool serversByDelay = true;           // the servers' page lists them fastest first (ServerOrder)
+  // The order the servers' page shows them in, indices into protocols (the
+  // window's own: kept through a test, while every figure is "…"); empty:
+  // ServerOrder's.
+  std::vector<std::size_t> serverOrder;
   std::wstring logLevel;                // what the core writes; empty = the config's
   bool killSwitch = false;              // the setting
   bool lanClosed = false;               // the local network closed both ways (settings.h)
@@ -247,6 +269,7 @@ struct UiContent {
   bool connectAtStartup = true;         // and connects (if it was on), else starts turned off
   bool routingMore = false;             // the settings' fine settings (QUIC, IPv4, DNS) unfolded
   bool settingsMore = false;            // the configurations' relay fold open (the window's own)
+  std::optional<UiQuestion> question;   // asked over the page (the window's own, MainWindow::Ask)
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through
   std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
@@ -317,6 +340,7 @@ enum class UiCommand : std::uint8_t {
   RevertConfig,      // the config back to the subscription as it arrived
   ToggleExitIp,        // show or hide the exit's address
   ToggleDelayDetails,  // the servers' latency in full, or one rounded figure
+  SetServerOrder,      // index: 0 fastest first, 1 the subscription's order
   ChooseLogLevel,      // anchor: where to open the menu of levels
   ToggleKillSwitch,
   ToggleLanClosed,
@@ -398,6 +422,32 @@ inline std::wstring DelayDetail(const UiDelay& delay, bool detailed) {
     text += std::format(L" · потери {}%", delay.loss);
   }
   return text;
+}
+
+// The servers as their page lists them, indices into c.protocols, auto left
+// out (it has a card of its own): with serversByDelay the answering ones
+// fastest first, then the ones not measured, then the ones that didn't
+// answer - each in the subscription's order among its equals; else the
+// subscription's order.
+inline std::vector<std::size_t> ServerOrder(const UiContent& c) {
+  std::vector<std::size_t> order;
+  for (std::size_t i = 0; i < c.protocols.size(); ++i) {
+    if (static_cast<int>(i) != c.autoOption) {
+      order.push_back(i);
+    }
+  }
+  if (!c.serversByDelay) {
+    return order;
+  }
+  const auto rank = [&c](std::size_t i) {
+    const UiDelay* delay = i < c.delays.size() ? &c.delays[i] : nullptr;
+    if (delay == nullptr || (delay->state != UiDelay::State::Ok && delay->state != UiDelay::State::Failed)) {
+      return std::pair{1, 0};
+    }
+    return delay->state == UiDelay::State::Ok ? std::pair{0, delay->ms} : std::pair{2, 0};
+  };
+  std::stable_sort(order.begin(), order.end(), [&rank](std::size_t a, std::size_t b) { return rank(a) < rank(b); });
+  return order;
 }
 
 // "день", "дня" or "дней" after the number `n`.

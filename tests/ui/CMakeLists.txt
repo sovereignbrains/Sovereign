@@ -10,6 +10,9 @@ add_test(NAME ui-snapshot COMMAND ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/snaps
 # Typing a configuration's name in place, in the real window (a desktop: CI,
 # or SOVEREIGN_DESKTOP_TESTS=1 - else it says it's skipped).
 add_test(NAME ui-edit-in-place COMMAND ui-snapshot --edit-test)
+# A question over the real window (MainWindow::Ask) answered by keys and
+# clicks, the page under it taking none (a desktop, as above).
+add_test(NAME ui-ask COMMAND ui-snapshot --ask-test)
 # Every page's layout as text: no clickable items overlapping, nothing past
 # the window's edge, at the default width and the narrowest.
 add_test(NAME ui-layout COMMAND ui-snapshot --layout-test "${CMAKE_CURRENT_BINARY_DIR}/layout")

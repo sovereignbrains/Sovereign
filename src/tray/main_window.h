@@ -53,6 +53,12 @@ class MainWindow {
   // with the text in UiArgs::text and the same index; Esc drops it.
   void EditInPlace(UiCommand anchor, int index, UiCommand onEnter, const std::wstring& initial, bool digitsOnly);
 
+  // Asks `question` on a dark card over the page (shown first if hidden), in
+  // place of a MessageBox: the page under it takes no clicks or keys until
+  // it's answered. Its yes button, or Enter, calls onYes; no, Esc or the
+  // window hidden drop it. A new question replaces one still open.
+  void Ask(UiQuestion question, std::function<void()> onYes);
+
   // The log page's lines: all of them, or new ones at the bottom.
   void SetLogs(const std::vector<std::wstring>& lines);
   void AppendLogs(const std::vector<std::wstring>& lines);

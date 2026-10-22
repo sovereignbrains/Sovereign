@@ -128,6 +128,7 @@ constexpr UINT kTipDelayMs = 500;
 constexpr UINT_PTR kCubeTimer = 2;
 constexpr UINT kCubeFrameMs = 15;
 constexpr ULONGLONG kCubeTurnMs = 520;
+constexpr UINT kQuestionInMs = 170;  // MainWindow::Ask's card coming in
 constexpr float kCubeSpin = 0.12f;
 
 // Segoe Fluent Icons (Windows 11; the same code points in Segoe MDL2 Assets).
@@ -200,6 +201,7 @@ enum class Kind : std::uint8_t {
   Tag,           // a thing on the routing board: a program's icon (text2: its exe), its name, a detail after it
   AppTitle,      // our title bar's name, after the app's icon (text2: the exe it's taken from)
   SpeedGraph,    // the speed test's throughput over time, down and up (index: its check's, UiCheck speedDown/Up)
+  Question,      // MainWindow::Ask's card, the window dimmed round it (index: its UiQuestion::Tone)
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
@@ -215,7 +217,8 @@ enum class ItemAction : std::uint8_t {
   SaveLogs,
   ToggleMore,  // the configurations' relay fold, folded or not (the window's own)
   Hide,        // our title bar's cross: the window away to the tray
-  Hint
+  Hint,
+  Answer       // a question's button (index: 1 yes, 0 no); while one is open, the only ones that take a click
 };
 
 struct Item {
@@ -685,6 +688,9 @@ class Painter {
   // sample (0..1) - Impl eases it frame by frame, so the graph grows
   // smoothly, not a quarter of a second at a time (he: "like 10 fps").
   float speedTip = 1;
+  // MainWindow::Ask's card coming in (0..1): the dimming deepens, the card
+  // grows to its size from a little smaller.
+  float questionShown = 1;
 
   Painter() {
     THROW_IF_FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d_.put()));
@@ -714,6 +720,7 @@ class Painter {
     hint_ = MakeFormat(Text(), 11, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     tip_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
+    ask_ = MakeFormat(Display(), 18, DWRITE_FONT_WEIGHT_SEMI_BOLD, true);
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -762,7 +769,73 @@ class Painter {
       l.glow->top -= scroll;
       l.glow->bottom -= scroll;
     }
+    if (c.question) {
+      // Over everything, the page's clip off: its card, then its buttons as
+      // they stand, left to right (Tab's order).
+      const UiQuestion& q = *c.question;
+      const AskBoxes box = AskBox(q, width, height);
+      Item card = Make(Kind::Question, box.card, q.title);
+      card.index = static_cast<int>(q.tone);
+      card.scrolls = false;
+      l.items.push_back(std::move(card));
+      Item yes = Make(q.tone == UiQuestion::Tone::Danger ? Kind::DangerButton : Kind::AccentButton, box.yes, q.yes);
+      yes.action = ItemAction::Answer;
+      yes.index = 1;
+      yes.sub = static_cast<int>(q.tone);
+      yes.scrolls = false;
+      l.items.push_back(std::move(yes));
+      if (!q.no.empty()) {
+        Item no = Make(Kind::Button, box.no, q.no);
+        no.action = ItemAction::Answer;
+        no.scrolls = false;
+        l.items.push_back(std::move(no));
+      }
+    }
     return l;
+  }
+
+  // Where MainWindow::Ask's card and what's on it go in a window of
+  // width x height: a little above the middle, a glyph in a circle, the
+  // title and what it means beside it, the buttons on a band at the bottom -
+  // yes first, as Windows' own dialogs have it.
+  struct AskBoxes {
+    D2D1_RECT_F card{};
+    D2D1_RECT_F circle{};
+    D2D1_RECT_F title{};
+    D2D1_RECT_F text{};
+    float band = 0;  // the buttons' band's top
+    D2D1_RECT_F yes{};
+    D2D1_RECT_F no{};
+  };
+  AskBoxes AskBox(const UiQuestion& q, float width, float height) const {
+    constexpr float kAskPad = 22;
+    constexpr float kCircle = 38;
+    constexpr float kBand = 68;
+    constexpr float kAskButton = 34;
+    const float w = std::min(392.0f, width - 2 * kPad);
+    const float textLeft = kAskPad + kCircle + 14;
+    const float textWidth = w - textLeft - kAskPad;
+    const float titleHeight = TextHeight(q.title, ask_.get(), textWidth);
+    const float textHeight = q.text.empty() ? 0.0f : TextHeight(q.text, wrap_.get(), textWidth);
+    // The title's first line centred on the circle.
+    const float titleTop = kAskPad + (kCircle - 24) / 2;
+    const float body = std::max(kAskPad + kCircle, titleTop + titleHeight + (q.text.empty() ? 0.0f : 6 + textHeight));
+    const float h = body + kAskPad + kBand;
+    const float left = std::round((width - w) / 2);
+    const float top = std::round(std::max(kCaption + 8, (height - h) * 0.42f));
+    AskBoxes b;
+    b.card = {left, top, left + w, top + h};
+    b.circle = {left + kAskPad, top + kAskPad, left + kAskPad + kCircle, top + kAskPad + kCircle};
+    b.title = {left + textLeft, top + titleTop, left + textLeft + textWidth, top + titleTop + titleHeight};
+    b.text = {b.title.left, b.title.bottom + 6, b.title.right, b.title.bottom + 6 + textHeight};
+    b.band = top + body + kAskPad;
+    const float buttonTop = b.band + (kBand - kAskButton) / 2;
+    const float half = (w - 2 * kAskPad - 8) / 2;
+    // Alone (a note), its one button takes the right half.
+    b.yes = q.no.empty() ? D2D1_RECT_F{left + w - kAskPad - half, buttonTop, left + w - kAskPad, buttonTop + kAskButton}
+                         : D2D1_RECT_F{left + kAskPad, buttonTop, left + kAskPad + half, buttonTop + kAskButton};
+    b.no = {left + w - kAskPad - half, buttonTop, left + w - kAskPad, buttonTop + kAskButton};
+    return b;
   }
 
   // Draws a layout.
@@ -786,9 +859,32 @@ class Painter {
     // Fixed items after the page's (the switch standing up over the
     // navigation): drawn once the page's clip is off, over everything.
     std::vector<std::size_t> over;
+    // A question coming in (questionShown): its card and buttons grow from
+    // a little smaller round the card's middle, fading in.
+    std::optional<D2D1_POINT_2F> askAt;
+    for (const Item& it : l.items) {
+      if (it.kind == Kind::Question) {
+        askAt = D2D1::Point2F((it.rect.left + it.rect.right) / 2, (it.rect.top + it.rect.bottom) / 2);
+      }
+    }
+    const float shown = EaseOut(std::clamp(questionShown, 0.0f, 1.0f));
     const auto draw = [&](std::size_t i) {
       const Item& it = l.items[i];
       const auto n = static_cast<int>(i);
+      if (it.kind == Kind::Question) {
+        k.Fill({0, 0, size.width, size.height}, Rgb(0, 0, 0, 0.58f * shown));  // the page dimmed under it
+      }
+      wil::com_ptr<ID2D1Layer> layer;
+      D2D1_MATRIX_3X2_F was{};
+      if (askAt && shown < 1 && (it.kind == Kind::Question || it.action == ItemAction::Answer) &&
+          SUCCEEDED(t->CreateLayer(nullptr, layer.put()))) {
+        const float scale = 0.95f + 0.05f * shown;
+        t->GetTransform(&was);
+        t->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale, *askAt) * was);
+        t->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                           D2D1::IdentityMatrix(), shown),
+                     layer.get());
+      }
       if (it.kind == Kind::LogBox && l.logBox) {
         DrawLog(k, *l.logBox, log);
       } else {
@@ -796,6 +892,10 @@ class Painter {
       }
       if (n == in.focus && in.focusVisible) {
         t->DrawRoundedRectangle(D2D1::RoundedRect(Inflate(it.rect, 2), kRadius, kRadius), SetColor(brush.get(), Rgb(255, 255, 255, 0.9f)), 2);
+      }
+      if (layer) {
+        t->PopLayer();
+        t->SetTransform(was);
       }
     };
     for (std::size_t i = 0; i < l.items.size(); ++i) {
@@ -847,14 +947,14 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 32> kNames = {
+    static constexpr std::array<const wchar_t*, 33> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Server",   L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
         L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter",  L"Tag",
-        L"AppTitle", L"Speed"};
+        L"AppTitle", L"Speed",    L"Question"};
     // One per Kind, in its order: a kind added or gone shifts every name after it.
-    static_assert(kNames.size() == static_cast<std::size_t>(Kind::SpeedGraph) + 1);
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Question) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -895,7 +995,8 @@ class Painter {
           const bool over = Interactive(o) && o.rect.left < r.right && o.rect.right > r.left && o.rect.top < r.bottom &&
                             o.rect.bottom > r.top;
           // A card that is a link holds buttons and lines that are links of their own: they take the click.
-          const bool allowed = o.kind == Kind::Hint ||
+          // A question's buttons lie over the page, which takes no click while it's open.
+          const bool allowed = o.kind == Kind::Hint || o.action == ItemAction::Answer ||
                                (o.kind == Kind::IconButton && (it.kind == Kind::Title || it.kind == Kind::Card)) ||
                                (o.kind == Kind::Muted && it.kind == Kind::Card);
           overlaps = overlaps || (over && !allowed);
@@ -1783,15 +1884,28 @@ class Painter {
       row(static_cast<std::size_t>(c.autoOption), y);
       y += kLatencyRow + kGap;
     }
-    const std::size_t servers = c.protocols.size() - (hasAuto ? 1 : 0);
-    if (servers == 0) {
+    const std::vector<std::size_t> order = c.serverOrder.empty() ? ServerOrder(c) : c.serverOrder;
+    if (order.empty()) {
       return y - kGap;
     }
-    const float h = static_cast<float>(servers) * kLatencyRow;
+    if (order.size() > 1) {
+      // Fastest first, by the last test, or as the subscription lists them.
+      const float mid = (x0 + x1) / 2;
+      Item fastest = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 32}, L"Быстрые сверху", nullptr,
+                                 UiCommand::SetServerOrder, 0);
+      fastest.checked = c.serversByDelay;
+      Item listed = CommandItem(Kind::Segment, {mid + 4, y, x1, y + 32}, L"Как в подписке", nullptr,
+                                UiCommand::SetServerOrder, 1);
+      listed.checked = !c.serversByDelay;
+      l.items.push_back(std::move(fastest));
+      l.items.push_back(std::move(listed));
+      y += 32 + kGap;
+    }
+    const float h = static_cast<float>(order.size()) * kLatencyRow;
     l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
     std::size_t shown = 0;
-    for (std::size_t i = 0; i < c.protocols.size(); ++i) {
-      if (hasAuto && static_cast<int>(i) == c.autoOption) {
+    for (const std::size_t i : order) {
+      if (i >= c.protocols.size()) {
         continue;
       }
       const float top = y + static_cast<float>(shown) * kLatencyRow;
@@ -2653,6 +2767,7 @@ class Painter {
         break;
       case Kind::Power: DrawPower(k, it, c, hovered, pressed); break;
       case Kind::SpeedGraph: DrawSpeed(k, it, c); break;
+      case Kind::Question: DrawQuestion(k, c); break;
       case Kind::ServerCard: {
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, kRadius - 1, Rgb(255, 255, 255, hoverAlpha * 0.6f));
@@ -2892,6 +3007,49 @@ class Painter {
            FromColorRef(ui::kPrimaryText));
   }
 
+  static D2D1_COLOR_F ToneColor(UiQuestion::Tone tone, float alpha = 1) {
+    switch (tone) {
+      case UiQuestion::Tone::Warning: return FromColorRef(ui::kWarning, alpha);
+      case UiQuestion::Tone::Danger: return FromColorRef(ui::kDanger, alpha);
+      case UiQuestion::Tone::Accent: break;
+    }
+    return FromColorRef(ui::kAccent, alpha);
+  }
+
+  // MainWindow::Ask's card (AskBox): a soft shadow under it, lighter than
+  // the cards of the page, its edge catching the light at the top, the
+  // buttons' band darker below a line.
+  void DrawQuestion(const Canvas& k, const UiContent& c) const {
+    if (!c.question) {
+      return;
+    }
+    const UiQuestion& q = *c.question;
+    const D2D1_SIZE_F size = k.t->GetSize();
+    const AskBoxes b = AskBox(q, size.width, size.height);
+    const D2D1_RECT_F r = b.card;
+    constexpr float kAskRadius = 12;
+    for (int i = 6; i >= 1; --i) {
+      const auto f = static_cast<float>(i);
+      k.Round({r.left - f * 2.5f, r.top - f * 1.5f, r.right + f * 2.5f, r.bottom + f * 4}, kAskRadius + f * 2.5f,
+              Rgb(0, 0, 0, 0.07f));
+    }
+    k.Round(r, kAskRadius, Rgb(25, 26, 29));  // the band's
+    k.Round({r.left, r.top, r.right, b.band}, kAskRadius, Rgb(36, 37, 41));
+    k.Fill({r.left, b.band - kAskRadius, r.right, b.band}, Rgb(36, 37, 41));
+    k.Line({r.left, b.band + 0.5f}, {r.right, b.band + 0.5f}, Rgb(255, 255, 255, 0.06f));
+    k.Outline(r, kAskRadius, Rgb(255, 255, 255, 0.09f));
+    k.Line({r.left + kAskRadius, r.top + 1.5f}, {r.right - kAskRadius, r.top + 1.5f}, Rgb(255, 255, 255, 0.07f));
+
+    const D2D1_POINT_2F mid{(b.circle.left + b.circle.right) / 2, (b.circle.top + b.circle.bottom) / 2};
+    const float radius = (b.circle.right - b.circle.left) / 2;
+    k.t->FillEllipse(D2D1::Ellipse(mid, radius, radius), k.Color(ToneColor(q.tone, 0.15f)));
+    k.t->DrawEllipse(D2D1::Ellipse(mid, radius - 0.5f, radius - 0.5f), k.Color(ToneColor(q.tone, 0.28f)), 1);
+    k.Text(q.glyph.empty() ? std::wstring_view(kGlyphWarning) : std::wstring_view(q.glyph), glyph_.get(),
+           b.circle, ToneColor(q.tone));
+    k.Text(q.title, ask_.get(), b.title, FromColorRef(ui::kPrimaryText));
+    k.Text(q.text, wrap_.get(), b.text, FromColorRef(ui::kSecondaryText));
+  }
+
   // The log's visible lines in `box`: time and level in their own colors,
   // selected lines highlighted, a thumb when there is more to scroll.
   void DrawLog(const Canvas& k, D2D1_RECT_F box, const LogView& log) const {
@@ -2974,6 +3132,11 @@ class Painter {
       ink = FromColorRef(ui::kDanger);
     } else if (hovered) {
       fill = Rgb(255, 255, 255, pressed ? 0.05f : 0.10f);
+    }
+    if (it.action == ItemAction::Answer && it.index == 1) {
+      // A question's yes: solid in its tone (sub: UiQuestion::Tone).
+      fill = ToneColor(static_cast<UiQuestion::Tone>(it.sub), pressed ? 0.8f : (hovered ? 0.9f : 1.0f));
+      ink = Rgb(16, 18, 24);
     }
     if (!it.enabled) {
       fill = Rgb(255, 255, 255, 0.03f);
@@ -3232,6 +3395,7 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> trailing_;  // a result on a row's right, cut with "…"
   wil::com_ptr<IDWriteTextFormat> hint_;      // the "?" of a hint
   wil::com_ptr<IDWriteTextFormat> tip_;       // a tip's text, wrapped
+  wil::com_ptr<IDWriteTextFormat> ask_;       // a question's title, wrapped
   wil::com_ptr<IDWriteTextFormat> glyph_;
   // ProgramIcon's, by exe path; tied to one render target (ForgetIcons).
   mutable std::map<std::wstring, wil::com_ptr<ID2D1Bitmap>> icons_;
@@ -3286,6 +3450,15 @@ struct MainWindow::Impl {
   LogView log;
   bool selecting = false;      // dragging a selection over the log
   bool settingsMore = false;   // the configurations' relay fold open (UiContent::settingsMore)
+  // The servers' order on their page (UiContent::serverOrder): kept through
+  // a latency test - every figure "…" there, the list would fall back to the
+  // subscription's order and jump again as the results came in.
+  std::vector<std::size_t> serverOrder;
+  // MainWindow::Ask's question while it's open (UiContent::question), what
+  // its yes does, and when it came (Painter::questionShown).
+  std::optional<UiQuestion> question;
+  std::function<void()> onYes;
+  std::chrono::steady_clock::time_point questionAt{};
   std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
   ULONGLONG panSince = 0;        // the middle button went down (log.pan)
   bool panMoved = false;         // the pointer left the still zone since
@@ -3401,6 +3574,18 @@ struct MainWindow::Impl {
     return t < 1.0f;
   }
 
+  // A frame of a question coming in (Painter::questionShown); true while it still is.
+  bool StepQuestion() {
+    if (!question || IsWindowVisible(hwnd) == FALSE || !Motion() || Blocked()) {
+      painter.questionShown = 1;
+      return false;
+    }
+    const float t = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - questionAt).count() /
+                    static_cast<float>(kQuestionInMs);
+    painter.questionShown = std::min(1.0f, t);
+    return t < 1.0f;
+  }
+
   // A modal box over the window (MessageBox, a file dialog) disables it. Such
   // a box shows itself only once its loop finds the queue empty, and a frame
   // asking for the next one keeps a paint there: the box stayed invisible and
@@ -3512,6 +3697,9 @@ struct MainWindow::Impl {
     const float y = ToDip(px.y);
     for (std::size_t i = layout.items.size(); i-- > 0;) {
       const Item& item = layout.items[i];
+      if (question && item.action != ItemAction::Answer) {
+        continue;  // a question open: the page under it takes nothing
+      }
       if ((!anyItem && !Interactive(item)) || !Contains(item.rect, x, y)) {
         continue;
       }
@@ -3659,6 +3847,8 @@ struct MainWindow::Impl {
       state.detail = log.Line(log.caret);
     }
     content.settingsMore = settingsMore;
+    content.serverOrder = serverOrder;
+    content.question = question;
     layout = painter.Build(content, page, openProfile, size.width, size.height, scroll, state);
     ClampLog();
     // The same spot may hold another item now: a tip stays only on one of
@@ -3667,10 +3857,41 @@ struct MainWindow::Impl {
     in.hover = mouse ? HitAt(*mouse) : -1;
     in.tip = IsKind(in.hover, Kind::Hint) || (tipShown && HasTip(in.hover)) ? in.hover : -1;
     if (in.focus >= static_cast<int>(layout.items.size()) ||
-        (in.focus >= 0 && !Interactive(layout.items[static_cast<std::size_t>(in.focus)]))) {
+        (in.focus >= 0 && (!Interactive(layout.items[static_cast<std::size_t>(in.focus)]) ||
+                           (question && layout.items[static_cast<std::size_t>(in.focus)].action != ItemAction::Answer)))) {
       in.focus = -1;
     }
     InvalidateRect(hwnd, nullptr, FALSE);
+  }
+
+  // A question over the page (MainWindow::Ask): whatever was going on in it
+  // stops, the card comes in.
+  void Ask(UiQuestion asked, std::function<void()> yes) {
+    EndEdit(true);
+    StopPan();
+    selecting = false;
+    barGrab.reset();
+    question = std::move(asked);
+    onYes = std::move(yes);
+    in.focus = in.pressed = in.tip = -1;
+    in.focusVisible = false;
+    questionAt = std::chrono::steady_clock::now();
+    painter.questionShown = Motion() ? 0.0f : 1.0f;
+    Relayout();
+  }
+
+  // The question answered (yes) or dropped: the page takes clicks again.
+  void Answer(bool yes) {
+    if (!question) {
+      return;
+    }
+    const std::function<void()> then = std::exchange(onYes, nullptr);
+    question.reset();
+    in.focus = in.pressed = -1;
+    Relayout();
+    if (yes && then) {
+      then();
+    }
   }
 
   // An edit box over the item for `anchor` and `index` on the page shown
@@ -3948,6 +4169,7 @@ struct MainWindow::Impl {
         Relayout();
         return;
       case ItemAction::Hide: PostMessageW(hwnd, WM_CLOSE, 0, 0); return;
+      case ItemAction::Answer: Answer(item.index == 1); return;
       case ItemAction::Command: break;
     }
     UiArgs args;
@@ -4022,7 +4244,13 @@ struct MainWindow::Impl {
     std::ofstream out(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
     out << utf8;
     if (!out) {
-      MessageBoxW(hwnd, L"Не удалось записать файл.", L"Sovereign", MB_OK | MB_ICONWARNING);
+      UiQuestion note;
+      note.title = L"Не удалось записать файл";
+      note.text = L"Может быть, папка только для чтения или файл открыт в другой программе. Попробуй сохранить в другое место.";
+      note.yes = L"Понятно";
+      note.no.clear();
+      note.tone = UiQuestion::Tone::Warning;
+      Ask(std::move(note), nullptr);
     }
   }
 
@@ -4114,7 +4342,8 @@ struct MainWindow::Impl {
   void MoveFocus(bool back) {
     std::vector<int> order;
     for (std::size_t i = 0; i < layout.items.size(); ++i) {
-      if (Interactive(layout.items[i]) && layout.items[i].kind != Kind::Hint) {
+      if (Interactive(layout.items[i]) && layout.items[i].kind != Kind::Hint &&
+          (!question || layout.items[i].action == ItemAction::Answer)) {
         order.push_back(static_cast<int>(i));
       }
     }
@@ -4253,11 +4482,12 @@ struct MainWindow::Impl {
       case WM_PAINT: {
         const bool going = liveAt && StepLiveTraffic();
         const bool easing = StepSpeed();
+        const bool coming = StepQuestion();
         PAINTSTRUCT ps;
         BeginPaint(w, &ps);
         Paint();
         EndPaint(w, &ps);
-        if (going || easing) {
+        if (going || easing || coming) {
           InvalidateRect(w, nullptr, FALSE);  // the next frame: this one waited for the screen's refresh
         }
         return 0;
@@ -4297,7 +4527,8 @@ struct MainWindow::Impl {
           GetClientRect(w, &rc);
           return at.x < frame * 2 ? HTTOPLEFT : at.x >= rc.right - frame * 2 ? HTTOPRIGHT : HTTOP;
         }
-        if (HitAt(at) >= 0 || InLog(at) || log.pan.has_value() || barGrab.has_value() || selecting) {
+        if (HitAt(at) >= 0 ||
+            (!question && (InLog(at) || log.pan.has_value() || barGrab.has_value() || selecting))) {
           return HTCLIENT;
         }
         return HTCAPTION;
@@ -4336,7 +4567,7 @@ struct MainWindow::Impl {
           DragLogThumb(ToDip(at.y) - *barGrab);
           return 0;
         }
-        if (const bool hot = page == UiPage::Logs && OnLogBar(at); hot != log.barHot) {
+        if (const bool hot = page == UiPage::Logs && !question && OnLogBar(at); hot != log.barHot) {
           log.barHot = hot;
           InvalidateRect(w, nullptr, FALSE);
         }
@@ -4397,6 +4628,11 @@ struct MainWindow::Impl {
         SetFocus(w);
         SetCapture(w);
         in.focusVisible = false;
+        if (question) {
+          in.pressed = HitAt(at);  // its buttons only: the log under it keeps its lines
+          InvalidateRect(w, nullptr, FALSE);
+          return 0;
+        }
         if (const auto thumb = page == UiPage::Logs && OnLogBar(at) && layout.logBox ? LogThumb(*layout.logBox, log)
                                                                                      : std::nullopt) {
           // The thumb taken where pressed; a press beside it brings it there.
@@ -4454,7 +4690,7 @@ struct MainWindow::Impl {
         const POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         if (log.pan) {
           StopPan();
-        } else if (page == UiPage::Logs && layout.logBox && InLog(at) && LogThumb(*layout.logBox, log)) {
+        } else if (!question && page == UiPage::Logs && layout.logBox && InLog(at) && LogThumb(*layout.logBox, log)) {
           StartPan(at);
         }
         return 0;
@@ -4473,6 +4709,9 @@ struct MainWindow::Impl {
         return DefWindowProcW(w, message, wParam, lParam);
       case WM_MOUSEWHEEL: {
         StopPan();
+        if (question) {
+          return 0;  // the page stays where the question found it
+        }
         POINT at{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(w, &at);
         const float step = -static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
@@ -4485,7 +4724,7 @@ struct MainWindow::Impl {
       }
       case WM_KEYDOWN: return Key(wParam) ? 0 : DefWindowProcW(w, message, wParam, lParam);
       case WM_CONTEXTMENU:
-        if (std::exchange(panEndedByRight, false)) {
+        if (std::exchange(panEndedByRight, false) || question) {
           return 0;
         }
         if (page == UiPage::Logs && layout.logBox) {
@@ -4528,6 +4767,11 @@ struct MainWindow::Impl {
         EndEdit(true);
         ShowWindow(w, SW_HIDE);
         return 0;
+      case WM_SHOWWINDOW:
+        if (wParam == FALSE) {
+          Answer(false);  // hidden, a question goes unanswered: no
+        }
+        return DefWindowProcW(w, message, wParam, lParam);
       default:
         return DefWindowProcW(w, message, wParam, lParam);
     }
@@ -4540,6 +4784,27 @@ struct MainWindow::Impl {
     }
     const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    if (question) {
+      // Only its buttons: the page under it waits for the answer. Enter
+      // with neither in focus is yes.
+      switch (key) {
+        case VK_ESCAPE: Answer(false); return true;
+        case VK_TAB:
+        case VK_LEFT:
+        case VK_RIGHT: MoveFocus(shift || key == VK_LEFT); return true;
+        case VK_RETURN:
+        case VK_SPACE:
+          if (in.focus >= 0 && static_cast<std::size_t>(in.focus) < layout.items.size() &&
+              layout.items[static_cast<std::size_t>(in.focus)].action == ItemAction::Answer) {
+            const Item item = layout.items[static_cast<std::size_t>(in.focus)];
+            Activate(item);
+          } else if (key == VK_RETURN) {
+            Answer(true);
+          }
+          return true;
+        default: return true;
+      }
+    }
     if (ctrl && key >= '1' && key < '1' + kUiPageCount) {
       Go(static_cast<UiPage>(key - '1'));
       return true;
@@ -4674,18 +4939,31 @@ void MainWindow::Toggle() {
 bool MainWindow::IsVisible() const { return impl_->hwnd != nullptr && IsWindowVisible(impl_->hwnd) != FALSE; }
 
 void MainWindow::Update(const UiContent& content) {
-  impl_->CubeTo(content.display);
-  impl_->content = content;
-  impl_->NoteSpeed();
+  Impl& m = *impl_;
+  m.CubeTo(content.display);
+  const bool sameList = content.protocols == m.content.protocols && content.autoOption == m.content.autoOption &&
+                        content.serversByDelay == m.content.serversByDelay;
+  if (!content.delaysTesting || !sameList || m.serverOrder.empty()) {
+    m.serverOrder = ServerOrder(content);
+  }
+  m.content = content;
+  m.NoteSpeed();
   if (IsVisible()) {
-    impl_->Relayout();
-    impl_->KickLive();
+    m.Relayout();
+    m.KickLive();
   }
 }
 
 void MainWindow::EditInPlace(UiCommand anchor, int index, UiCommand onEnter, const std::wstring& initial,
                              bool digitsOnly) {
   impl_->EditOver(anchor, index, onEnter, initial, digitsOnly);
+}
+
+void MainWindow::Ask(UiQuestion question, std::function<void()> onYes) {
+  if (!IsVisible()) {
+    Show(impl_->page);
+  }
+  impl_->Ask(std::move(question), std::move(onYes));
 }
 
 void MainWindow::SetLogs(const std::vector<std::wstring>& lines) { impl_->AddLogs(lines, true); }

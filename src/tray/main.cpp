@@ -44,6 +44,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <mutex>
@@ -341,6 +342,7 @@ struct View {
   std::vector<sovereign::tray::ExitIp> locations;  // per protocol: where it is, once known
   bool hideExitIp = false;
   bool delaysDetailed = false;
+  bool serversByDelay = true;
   bool connectAtStartup = true;
   bool routingMore = false;
   // Turned on, shut by the kill switch, nothing getting through for a while
@@ -486,6 +488,7 @@ struct Shared {
   bool pendingUrlTest = false;
   bool pendingToggleExitIp = false;
   bool pendingToggleDelayDetails = false;
+  std::optional<bool> pendingServersByDelay;
   std::optional<bool> pendingConnectAtStartup;
   bool pendingToggleRoutingMore = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
@@ -510,7 +513,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingProtectionAlert.has_value() ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingServersByDelay.has_value() || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingProtectionAlert.has_value() ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -694,6 +697,7 @@ class Worker {
       bool urlTest = false;
       bool toggleExitIp = false;
       bool toggleDelayDetails = false;
+      std::optional<bool> serversByDelay;
       std::optional<bool> connectAtStartup;
       bool toggleRoutingMore = false;
       std::optional<std::string> logLevel;
@@ -719,6 +723,7 @@ class Worker {
         urlTest = std::exchange(shared.pendingUrlTest, false);
         toggleExitIp = std::exchange(shared.pendingToggleExitIp, false);
         toggleDelayDetails = std::exchange(shared.pendingToggleDelayDetails, false);
+        serversByDelay = std::exchange(shared.pendingServersByDelay, std::nullopt);
         connectAtStartup = std::exchange(shared.pendingConnectAtStartup, std::nullopt);
         toggleRoutingMore = std::exchange(shared.pendingToggleRoutingMore, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
@@ -823,6 +828,10 @@ class Worker {
       }
       if (toggleDelayDetails) {
         settings_.delaysDetailed = !settings_.delaysDetailed;
+        Save();
+      }
+      if (serversByDelay && *serversByDelay != settings_.serversByDelay) {
+        settings_.serversByDelay = *serversByDelay;
         Save();
       }
       if (connectAtStartup && *connectAtStartup != settings_.connectAtStartup) {
@@ -2711,6 +2720,7 @@ class Worker {
       }
       v.hideExitIp = settings_.hideExitIp;
       v.delaysDetailed = settings_.delaysDetailed;
+      v.serversByDelay = settings_.serversByDelay;
       v.connectAtStartup = settings_.connectAtStartup;
       v.routingMore = settings_.routingMore;
       v.lockedOut = LockedOut();
@@ -4147,6 +4157,15 @@ void RequestToggleDelayDetails() {
   Wake();
 }
 
+void RequestServersByDelay(bool byDelay) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingServersByDelay = byDelay;
+  }
+  Wake();
+}
+
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
 
 // The local network's list as the settings show it - the index a click on
@@ -4551,6 +4570,7 @@ UiContent ContentFrom(const View& v) {
   c.exitPending = v.exitIp.pending;
   c.hideExitIp = v.hideExitIp;
   c.delaysDetailed = v.delaysDetailed;
+  c.serversByDelay = v.serversByDelay;
   c.connectAtStartup = v.connectAtStartup;
   c.routingMore = v.routingMore;
   c.lockedOut = v.lockedOut;
@@ -4598,6 +4618,20 @@ std::optional<UiPage> g_balloonPage;  // what a click on the last balloon opens
 bool g_installerLaunched = false;
 unsigned g_lastNotice = 0;
 std::uint64_t g_logsShown = 0;  // Shared::logsAdded as of the main window's last log update
+
+// A yes-or-no on the window's own dark card (MainWindow::Ask), not the
+// system's light MessageBox (22.10.2026: "make it look dearer, and dark");
+// onYes runs on its yes. Without the window, the box after all.
+void Ask(HWND owner, sovereign::tray::UiQuestion question, std::function<void()> onYes) {
+  if (g_mainWindow != nullptr) {
+    g_mainWindow->Ask(std::move(question), std::move(onYes));
+    return;
+  }
+  const std::wstring text = question.title + L"\n\n" + question.text;
+  if (MessageBoxW(owner, text.c_str(), L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK && onYes) {
+    onYes();
+  }
+}
 
 // The log lines added since the main window's log was last updated. The
 // window keeps them whether it's shown or not, so opening it is instant.
@@ -4754,12 +4788,14 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       break;
     }
     case UiCommand::RefreshDirect:  // from its menu, offered only when it was held back
-      if (MessageBoxW(owner,
-                      L"Сервер этой подписки увидит твой настоящий IP-адрес. Скачать напрямую?\n\n"
-                      L"Без этого она скачается сама, как только будет подключение или пересыльщик (Настройки).",
-                      L"Sovereign", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
-        RequestRefresh(profile.id, /*direct=*/true);
-      }
+      Ask(owner,
+          {.title = L"Скачать подписку напрямую?",
+           .text = L"Сервер этой подписки увидит твой настоящий IP-адрес. Без этого она скачается сама, как только "
+                   L"будет подключение или пересыльщик (Настройки).",
+           .yes = L"Скачать напрямую",
+           .tone = sovereign::tray::UiQuestion::Tone::Warning,
+           .glyph = L"\xE896"},  // Download
+          [id = profile.id] { RequestRefresh(id, /*direct=*/true); });
       break;
     case UiCommand::ToggleAutoUpdate:
       change(ProfileChange::What::AutoUpdate, !profile.autoUpdate);
@@ -4799,12 +4835,14 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     case UiCommand::RemoveProfile: {
-      const std::wstring question = L"Удалить конфигурацию «" + Widen(profile.name) + L"»?\n\n" +
-                                    (profile.url.empty() ? L"" : L"Подписка больше не будет обновляться. ") +
-                                    L"Её config.json останется в папке history на всякий случай.";
-      if (MessageBoxW(owner, question.c_str(), L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
-        RequestRemoveProfile(profile.id);
-      }
+      Ask(owner,
+          {.title = L"Удалить «" + Widen(profile.name) + L"»?",
+           .text = std::wstring(profile.url.empty() ? L"" : L"Подписка больше не будет обновляться. ") +
+                   L"Её config.json останется в папке history на всякий случай.",
+           .yes = L"Удалить",
+           .tone = sovereign::tray::UiQuestion::Tone::Danger,
+           .glyph = L"\xE74D"},  // Delete
+          [id = profile.id] { RequestRemoveProfile(id); });
       break;
     }
     case UiCommand::ToggleServer:
@@ -4823,12 +4861,13 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       RequestChoice(profile.id, ConfigChoice::CarryOver);
       break;
     case UiCommand::RevertConfig:
-      if (MessageBoxW(owner,
-                      L"Вернуть конфиг к подписке в том виде, как она пришла?\n\n"
-                      L"Твои правки не пропадут: нынешний config.json сохранится в папке history.",
-                      L"Sovereign", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
-        RequestChoice(profile.id, ConfigChoice::Revert);
-      }
+      Ask(owner,
+          {.title = L"Вернуть конфиг к подписке?",
+           .text = L"Он станет таким, каким пришёл. Твои правки не пропадут: нынешний config.json сохранится в "
+                   L"папке history.",
+           .yes = L"Вернуть",
+           .glyph = L"\xE7A7"},  // Undo
+          [id = profile.id] { RequestChoice(id, ConfigChoice::Revert); });
       break;
     default:
       break;
@@ -5699,6 +5738,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ToggleDelayDetails:
       RequestToggleDelayDetails();
       break;
+    case UiCommand::SetServerOrder:
+      RequestServersByDelay(args.index == 0);
+      break;
     case UiCommand::TestDelays:
       RequestUrlTest();
       break;
@@ -5727,12 +5769,14 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     case UiCommand::Exit:  // the window's cross; the tray menu's «Выход» doesn't come this way
-      if (MessageBoxW(owner,
-                      L"Закрыть Sovereign?\n\nПодключение останется: им управляет служба. Значок в трее исчезнет, "
-                      L"окно вернётся, когда запустишь клиент снова. Спрятать окно в трей можно чёрточкой рядом с крестиком.",
-                      L"Sovereign", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES) {
-        DestroyWindow(trayWindow);
-      }
+      Ask(owner,
+          {.title = L"Закрыть Sovereign?",
+           .text = L"Подключение останется: им управляет служба. Значок в трее исчезнет, окно вернётся, когда "
+                   L"запустишь клиент снова. Спрятать окно в трей можно чёрточкой рядом с крестиком.",
+           .yes = L"Закрыть",
+           .tone = sovereign::tray::UiQuestion::Tone::Danger,
+           .glyph = L"\xE7E8"},  // Power
+          [trayWindow] { DestroyWindow(trayWindow); });
       break;
   }
 }
