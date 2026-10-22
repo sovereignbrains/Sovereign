@@ -376,7 +376,19 @@ int Snapshots(const std::wstring& dir) {
 }
 
 int Window(HINSTANCE instance) {
-  sovereign::tray::MainWindow window(instance, [](sovereign::tray::UiCommand, const sovereign::tray::UiArgs&) {});
+  // The cross asks as the client's does (main.cpp); its yes closes this.
+  sovereign::tray::MainWindow* self = nullptr;
+  sovereign::tray::MainWindow window(instance, [&self](sovereign::tray::UiCommand c, const sovereign::tray::UiArgs&) {
+    if (c == sovereign::tray::UiCommand::Exit && self != nullptr) {
+      self->Ask({.title = L"Закрыть Sovereign?",
+                 .text = L"Подключение останется: им управляет служба.",
+                 .yes = L"Закрыть",
+                 .tone = UiQuestion::Tone::Danger,
+                 .glyph = L"\xE7E8"},
+                [&self] { self->Hide(); });
+    }
+  });
+  self = &window;
   window.Update(SampleContent());
   window.SetLogs(SampleLogs());
   window.Show(UiPage::Overview);
@@ -435,6 +447,25 @@ void Pump() {
       Sleep(10);
     }
   }
+}
+
+// The window's pixel at `p` (client pixels) as its last frame put it there:
+// DWM's copy of the window. Not the screen's: a dimmer over everything
+// (PangoBright here, 23.10.2026) darkens that whatever the window drew.
+std::optional<COLORREF> ShownPixel(HWND hwnd, POINT p) {
+  RECT client{};
+  GetClientRect(hwnd, &client);
+  const wil::unique_hdc_window screen = wil::GetDC(hwnd);
+  const wil::unique_hdc memory(CreateCompatibleDC(screen.get()));
+  const wil::unique_hbitmap bitmap(CreateCompatibleBitmap(screen.get(), client.right, client.bottom));
+  if (!memory || !bitmap) {
+    return std::nullopt;
+  }
+  const auto selected = wil::SelectObject(memory.get(), bitmap.get());
+  if (PrintWindow(hwnd, memory.get(), PW_CLIENTONLY | PW_RENDERFULLCONTENT) == FALSE) {
+    return std::nullopt;
+  }
+  return GetPixel(memory.get(), p.x, p.y);
 }
 
 // --edit-test: typing a configuration's name in place, in the real window,
@@ -557,10 +588,10 @@ int AskTest(HINSTANCE instance) {
   RECT client{};
   GetClientRect(hwnd, &client);
   const float scale = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-  const auto at = [&](const UiContent& c, std::wstring_view kind, std::wstring_view label) -> std::optional<POINT> {
+  const auto boxOf = [&](const UiContent& c, std::wstring_view kind, std::wstring_view label) -> std::optional<RECT> {
     const std::wstring text = sovereign::tray::DescribeMainWindowLayout(
         c, UiPage::Overview, static_cast<float>(client.right) / scale, static_cast<float>(client.bottom) / scale);
-    std::optional<POINT> found;
+    std::optional<RECT> found;
     for (std::size_t from = 0; from < text.size();) {
       const std::size_t end = std::min(text.find(L'\n', from), text.size());
       const std::wstring_view line(text.data() + from, end - from);
@@ -579,10 +610,15 @@ int AskTest(HINSTANCE instance) {
       std::array<float, 4> r{};
       if (swscanf_s(std::wstring(line.substr(open + 1, close - open - 1)).c_str(), L"%f %f %f %f", &r[0], &r[1], &r[2],
                     &r[3]) == 4) {
-        found = POINT{std::lround((r[0] + r[2]) / 2 * scale), std::lround((r[1] + r[3]) / 2 * scale)};
+        found = RECT{std::lround(r[0] * scale), std::lround(r[1] * scale), std::lround(r[2] * scale),
+                     std::lround(r[3] * scale)};
       }
     }
     return found;
+  };
+  const auto at = [&](const UiContent& c, std::wstring_view kind, std::wstring_view label) -> std::optional<POINT> {
+    const std::optional<RECT> r = boxOf(c, kind, label);
+    return r ? std::optional(POINT{(r->left + r->right) / 2, (r->top + r->bottom) / 2}) : std::nullopt;
   };
   const auto click = [&](POINT p) {
     const LPARAM where = MAKELPARAM(p.x, p.y);
@@ -621,6 +657,21 @@ int AskTest(HINSTANCE instance) {
     check(commands == before + 1, what);
   };
 
+  // Come in for good, its yes button as bright as on a still snapshot.
+  for (const UiPage page : {UiPage::Servers, UiPage::Overview}) {
+    window.Show(page);
+    Pump();
+    ask();
+    Pump();
+    if (const std::optional<RECT> r = boxOf(asked, L"Danger", question.yes)) {
+      const std::optional<COLORREF> c =
+          ShownPixel(hwnd, POINT{r->left + std::lround(6 * scale), (r->top + r->bottom) / 2});
+      check(c && std::abs(GetRValue(*c) - 240) <= 12 && std::abs(GetGValue(*c) - 96) <= 12 &&
+                std::abs(GetBValue(*c) - 96) <= 12,
+            "its yes button isn't kDanger in the window's frame: the card came in dimmed");
+    }
+    key(VK_ESCAPE);
+  }
   ask();
   click(*power);
   check(commands == 0, "the page under the question took a click");
