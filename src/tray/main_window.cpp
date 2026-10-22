@@ -3146,38 +3146,20 @@ class Painter {
       t->FillRectangle(D2D1::RectF(0, 0, size.width, size.height), brush.get());
     }
   }
-  // An icon button of the main screen's glass card: a round of glass, its
-  // rim catching the light - brighter under the pointer, a little down
-  // pressed - the glyph in its middle.
+  // An icon button of the main screen's glass card: as flat as the title bar's
+  // (a ring round the plus looked like a button sewn on - he, 22.10.2026) - the
+  // glyph alone, a soft square under it with the pointer. Its text is
+  // grayscale: ClearType on the translucent card fringes the glyph red and blue.
   void DrawKey(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
     const D2D1_RECT_F r = it.rect;
-    const D2D1_POINT_2F center{(r.left + r.right) / 2, (r.top + r.bottom) / 2 + (pressed ? 1.0f : 0.0f)};
-    const float radius = std::min(r.right - r.left, r.bottom - r.top) / 2 - 1;
-    const D2D1_ELLIPSE round = D2D1::Ellipse(center, radius, radius);
-    k.t->FillEllipse(round, k.Color(Rgb(255, 255, 255, pressed ? 0.12f : hovered ? 0.09f : 0.04f)));
-    // The rim lit from above: bright at the top, fading toward the bottom -
-    // glass, not a flat ring.
-    const float rim = hovered ? 0.42f : 0.24f;
-    const std::array<D2D1_GRADIENT_STOP, 2> stops{{{0.0f, Rgb(255, 255, 255, rim)}, {1.0f, Rgb(255, 255, 255, rim * 0.25f)}}};
-    wil::com_ptr<ID2D1GradientStopCollection> collection;
-    wil::com_ptr<ID2D1LinearGradientBrush> brush;
-    if (SUCCEEDED(k.t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
-        SUCCEEDED(k.t->CreateLinearGradientBrush(
-            D2D1::LinearGradientBrushProperties({center.x, center.y - radius}, {center.x, center.y + radius}), collection.get(),
-            brush.put()))) {
-      k.t->DrawEllipse(round, brush.get(), 1);
-    } else {
-      k.t->DrawEllipse(round, k.Color(Rgb(255, 255, 255, rim)), 1);
+    if (hovered || pressed) {
+      k.Round(r, 8, Rgb(255, 255, 255, pressed ? 0.14f : 0.09f));
     }
-    const D2D1_RECT_F face{center.x - radius, center.y - radius, center.x + radius, center.y + radius};
-    // Grayscale text: ClearType on a translucent round fringes the glyph's
-    // edges red and blue.
     const D2D1_TEXT_ANTIALIAS_MODE mode = k.t->GetTextAntialiasMode();
     k.t->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-    k.Text(it.glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.88f));
+    k.Text(it.glyph, glyph_.get(), r, Rgb(242, 244, 248, hovered ? 1.0f : 0.8f));
     k.t->SetTextAntialiasMode(mode);
   }
-
   // The switch is a cube (cube.h): in the pose the window animates it
   // through, or - a still picture, a snapshot - the state's own.
   void DrawPower(const Canvas& k, const Item& it, const UiContent& c, bool hovered, bool pressed) const {
