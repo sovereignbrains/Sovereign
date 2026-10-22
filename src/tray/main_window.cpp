@@ -1501,7 +1501,7 @@ class Painter {
       keys.push_back(std::move(settings));
       right -= 40;
       Item tools = CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
-                               L"Инструменты: скорость, проверка, журнал", kGlyphTools, UiCommand::ToolsMenu);
+                               L"Инструменты: проверка, журнал", kGlyphTools, UiCommand::ToolsMenu);
       tools.scrolls = false;
       keys.push_back(std::move(tools));
       right -= 40;

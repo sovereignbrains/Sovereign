@@ -5433,14 +5433,15 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::ToolsMenu: {  // the title bar's tools: what's run now and then, not set (16.10.2026: out of the settings)
       std::vector<wil::unique_hbitmap> icons;
-      // speed, a shield, a route, the log, a speech bubble (the report: out of the settings 17.10.2026)
-      for (const wchar_t* glyph : {L"\xEC4A", L"\xEA18", L"\xE8F0", L"\xE8A5", L"\xED15"}) {
+      // a shield, the log, a speech bubble (the report: out of the settings 17.10.2026)
+      for (const wchar_t* glyph : {L"\xEA18", L"\xE8A5", L"\xED15"}) {
         icons.push_back(GlyphMenuIcon(glyph));
       }
-      const auto picked = PickFromMenu(owner, args.anchor,
-                                       {L"Замерить скорость", L"Проверить подключение", L"Почему не открывается сайт?",
-                                        L"Журнал", L"Сообщить о проблеме"},
-                                       -1, icons);
+      // One way to the checks page: the speed test has its button there,
+      // and where a site goes is the routing page's, in the settings - the
+      // menu's own items for them only doubled those (23.10.2026).
+      const auto picked =
+          PickFromMenu(owner, args.anchor, {L"Проверить подключение", L"Журнал", L"Сообщить о проблеме"}, -1, icons);
       if (!picked) {
         break;
       }
@@ -5448,20 +5449,10 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       switch (*picked) {
         case 0:
           ShowMainWindow(UiPage::Checks);
-          StartChecks({CheckId::Speed}, {});
-          break;
-        case 1:
-          ShowMainWindow(UiPage::Checks);
           StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6},
                       {});
           break;
-        case 2:
-          ShowMainWindow(UiPage::Routing);  // the row lives by the board now
-          if (g_mainWindow != nullptr) {  // the address typed over its row's button, as there
-            g_mainWindow->EditInPlace(UiCommand::CheckRoute, 0, UiCommand::CheckRouteText, L"", false);
-          }
-          break;
-        case 3: ShowMainWindow(UiPage::Logs); break;
+        case 1: ShowMainWindow(UiPage::Logs); break;
         default: ReportProblem(owner); break;
       }
       break;
