@@ -139,6 +139,7 @@ constexpr const wchar_t* kGlyphChevronUp = L"\xE70E";    // ...and closes
 constexpr const wchar_t* kGlyphLog = L"\xE8A5";
 constexpr const wchar_t* kGlyphSettings = L"\xE713";
 constexpr const wchar_t* kGlyphClose = L"\xE8BB";  // ChromeClose
+constexpr const wchar_t* kGlyphMinimize = L"\xE921";  // ChromeMinimize
 constexpr const wchar_t* kGlyphPower = L"\xE7E8";
 constexpr const wchar_t* kGlyphPaste = L"\xE77F";
 constexpr const wchar_t* kGlyphRefresh = L"\xE72C";
@@ -1338,9 +1339,15 @@ class Painter {
   // them gone, 16.10.2026). The rest of it drags the window (WM_NCHITTEST).
   void Caption(Layout& l, float width, UiPage page) const {
     float right = width - 46;  // the next key's right edge, leftwards from the cross
-    Item close = Make(Kind::IconButton, {right, 0, width, kCaption}, L"Спрятать в трей", kGlyphClose);
-    close.action = ItemAction::Hide;
+    // The cross closes the client (the connection stays: the service holds
+    // it); the dash beside it only puts the window away to the tray.
+    Item close = CommandItem(Kind::IconButton, {right, 0, width, kCaption}, L"Закрыть клиент (подключение останется)",
+                             kGlyphClose, UiCommand::Exit);
     close.scrolls = false;
+    Item hide = Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Свернуть в трей", kGlyphMinimize);
+    hide.action = ItemAction::Hide;
+    hide.scrolls = false;
+    right -= 40;
     std::vector<Item> keys;
     if (page == UiPage::Overview) {
       Item settings = Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Настройки", kGlyphSettings);
@@ -1370,6 +1377,7 @@ class Painter {
     for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
       l.items.push_back(std::move(*it));
     }
+    l.items.push_back(std::move(hide));
     l.items.push_back(std::move(close));
   }
 
@@ -2417,8 +2425,8 @@ class Painter {
 
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     y = PageTitle(l, L"Настройки", nullptr, x0, x1, y, UiPage::Overview,
-                  L"Значок папки внизу — %LOCALAPPDATA%\\Sovereign: настройки, конфиги, их история.\n\nЗакрыть "
-                  L"клиент совсем — «Выход» в меню значка в трее; подключение останется: им управляет служба.");
+                  L"Значок папки внизу — %LOCALAPPDATA%\\Sovereign: настройки, конфиги, их история.\n\nКрестик "
+                  L"закрывает клиент совсем, чёрточка прячет окно в трей; подключение останется: им управляет служба.");
 
     // Only what's set: where traffic goes (a page of its own), how the
     // connection behaves (it holds when the VPN drops, it starts with Windows,
