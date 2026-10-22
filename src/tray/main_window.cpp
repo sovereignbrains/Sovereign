@@ -236,6 +236,7 @@ struct Item {
   bool warn = false;    // something's wrong with it (a ProfileRow's refresh failed)
   bool glass = false;   // a Card on the main screen: see-through - the light and the streams behind it show
   bool scrolls = true;  // lives in the page (scrolls, clipped), not in the rail
+  bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
 };
 
 struct Layout {
@@ -1531,13 +1532,19 @@ class Painter {
     card.glass = true;
     l.items.push_back(std::move(card));
 
-    // No "+" on it (he, 22.10.2026: it looked like a button sewn on): adding is
-    // the configurations' page, which the card opens.
+    // "+" on it: another configuration (the clipboard, a QR code, a file) -
+    // a list drops from it (he wanted it back here, 16.10.2026).
+    Item add = CommandItem(Kind::IconButton, {right - 32, y + 8, right, y + 40}, L"Добавить: из буфера, QR-код, файл",
+                           kGlyphAdd, UiCommand::AddMenu);
+    add.key = true;
+    l.items.push_back(std::move(add));
+
     float top = y + 12;
     for (const std::size_t i : shown) {
       const auto index = static_cast<int>(i);
       const UiProfile& p = c.profiles[i];
-      l.items.push_back(Make(Kind::Heading, {left, top, right, top + 26}, p.name));
+      // The first name stops short of the "+".
+      l.items.push_back(Make(Kind::Heading, {left, top, top == y + 12 ? right - 44 : right, top + 26}, p.name));
       float line = top + 28;
       if (p.paidTill.empty()) {
         // Not said by its panel, not by the user yet: a click to say it.
@@ -2652,6 +2659,10 @@ class Painter {
       case Kind::AccentButton:
       case Kind::DangerButton: DrawButton(k, it, hovered, pressed); break;
       case Kind::IconButton:
+        if (it.key) {
+          DrawKey(k, it, hovered && it.enabled, pressed && it.enabled);
+          break;
+        }
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
@@ -3135,6 +3146,38 @@ class Painter {
       t->FillRectangle(D2D1::RectF(0, 0, size.width, size.height), brush.get());
     }
   }
+  // An icon button of the main screen's glass card: a round of glass, its
+  // rim catching the light - brighter under the pointer, a little down
+  // pressed - the glyph in its middle.
+  void DrawKey(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
+    const D2D1_RECT_F r = it.rect;
+    const D2D1_POINT_2F center{(r.left + r.right) / 2, (r.top + r.bottom) / 2 + (pressed ? 1.0f : 0.0f)};
+    const float radius = std::min(r.right - r.left, r.bottom - r.top) / 2 - 1;
+    const D2D1_ELLIPSE round = D2D1::Ellipse(center, radius, radius);
+    k.t->FillEllipse(round, k.Color(Rgb(255, 255, 255, pressed ? 0.12f : hovered ? 0.09f : 0.04f)));
+    // The rim lit from above: bright at the top, fading toward the bottom -
+    // glass, not a flat ring.
+    const float rim = hovered ? 0.42f : 0.24f;
+    const std::array<D2D1_GRADIENT_STOP, 2> stops{{{0.0f, Rgb(255, 255, 255, rim)}, {1.0f, Rgb(255, 255, 255, rim * 0.25f)}}};
+    wil::com_ptr<ID2D1GradientStopCollection> collection;
+    wil::com_ptr<ID2D1LinearGradientBrush> brush;
+    if (SUCCEEDED(k.t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
+        SUCCEEDED(k.t->CreateLinearGradientBrush(
+            D2D1::LinearGradientBrushProperties({center.x, center.y - radius}, {center.x, center.y + radius}), collection.get(),
+            brush.put()))) {
+      k.t->DrawEllipse(round, brush.get(), 1);
+    } else {
+      k.t->DrawEllipse(round, k.Color(Rgb(255, 255, 255, rim)), 1);
+    }
+    const D2D1_RECT_F face{center.x - radius, center.y - radius, center.x + radius, center.y + radius};
+    // Grayscale text: ClearType on a translucent round fringes the glyph's
+    // edges red and blue.
+    const D2D1_TEXT_ANTIALIAS_MODE mode = k.t->GetTextAntialiasMode();
+    k.t->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    k.Text(it.glyph, glyph_.get(), face, Rgb(242, 244, 248, hovered ? 1.0f : 0.88f));
+    k.t->SetTextAntialiasMode(mode);
+  }
+
   // The switch is a cube (cube.h): in the pose the window animates it
   // through, or - a still picture, a snapshot - the state's own.
   void DrawPower(const Canvas& k, const Item& it, const UiContent& c, bool hovered, bool pressed) const {
