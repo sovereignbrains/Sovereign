@@ -1524,10 +1524,13 @@ class Painter {
     // The server at the foot; the switch in the middle of what's between,
     // big, a light behind it (DrawBackdrop) and the live traffic round it -
     // no words: its light and the streams say the state.
+    // The switch's room no more than its least size wants: more, and two
+    // subscriptions on a short window made the page scroll by a few pixels.
     constexpr float kServerCard = 60;
-    const float serverTop = std::max(y + 180, bottom - kServerCard);
+    constexpr float kLeastCube = 88;
+    const float serverTop = std::max(y + kLeastCube + 40, bottom - kServerCard);
     const float room = serverTop - y;
-    const float size = std::clamp(std::min(room - 40, (x1 - x0) * 0.6f), 88.0f, 220.0f);
+    const float size = std::clamp(std::min(room - 40, (x1 - x0) * 0.6f), kLeastCube, 220.0f);
     const float top = y + std::max(0.0f, (room - size) / 2);
     const float mid = (x0 + x1) / 2;
     const D2D1_RECT_F cube{mid - size / 2, top, mid + size / 2, top + size};
@@ -4266,7 +4269,9 @@ struct MainWindow::Impl {
         return DefWindowProcW(w, message, wParam, lParam);
       case WM_NCHITTEST: {
         // The sides, the bottom, the corners - the system's; the top edge
-        // sizes it, our title bar drags it but for its buttons.
+        // sizes it; anything not taking a click drags it - the title bar but
+        // for its buttons, the cards, the empty space (he asked, 22.10.2026).
+        // The log keeps its press: it selects lines, its bar scrolls.
         const LRESULT hit = DefWindowProcW(w, message, wParam, lParam);
         if (hit != HTCLIENT) {
           return hit;
@@ -4280,10 +4285,10 @@ struct MainWindow::Impl {
           GetClientRect(w, &rc);
           return at.x < frame * 2 ? HTTOPLEFT : at.x >= rc.right - frame * 2 ? HTTOPRIGHT : HTTOP;
         }
-        if (ToDip(at.y) < kCaption && !IsKind(HitAt(at), Kind::IconButton)) {
-          return HTCAPTION;
+        if (HitAt(at) >= 0 || InLog(at) || log.pan.has_value() || barGrab.has_value() || selecting) {
+          return HTCLIENT;
         }
-        return HTCLIENT;
+        return HTCAPTION;
       }
       case WM_SIZE:
         EndEdit(true);
