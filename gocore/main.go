@@ -39,11 +39,12 @@ import (
 // matches ICore's contract (the service swaps GoCore/NativeCore, not
 // multiple cores at once).
 var (
-	boxMu         sync.Mutex
-	boxInstance   *box.Box
-	boxTraffic    *trafficcontrol.Manager
-	boxContext    context.Context
-	boxGeneration int64
+	boxMu           sync.Mutex
+	boxInstance     *box.Box
+	boxTraffic      *trafficcontrol.Manager
+	boxTrafficScope *adapter.Scope
+	boxContext      context.Context
+	boxGeneration   int64
 )
 
 // box_ping proves two things at once: the DLL loads and runs Go's
@@ -95,11 +96,15 @@ func box_start(configJSON *C.char) *C.char {
 	// not have. Doing it by hand keeps the box exactly what the config says,
 	// plus two passive observers. The manager is the same type sing-box
 	// itself installs for its clash/api services; AppendTracker is how it
-	// does so (box.go).
+	// does so (box.go). Since 1.14.3 a component's cleanups live in the
+	// adapter.Scope it was started with, so the manager gets a scope of its
+	// own and closing that scope is what closes the manager.
 	traffic := trafficcontrol.NewManager(instance.Outbound())
 	instance.Router().AppendTracker(traffic)
 	instance.LogFactory().AttachPlatformWriter(platformWriter{factory: instance.LogFactory()})
-	if err := traffic.Start(adapter.StartStateInitialize); err != nil {
+	trafficScope := adapter.NewScope(ctx, instance.LogFactory().Logger())
+	if err := traffic.Start(adapter.StartStateInitialize, trafficScope); err != nil {
+		trafficScope.Close()
 		instance.Close()
 		return C.CString(fmt.Sprintf("start traffic manager: %s", err))
 	}
@@ -108,12 +113,13 @@ func box_start(configJSON *C.char) *C.char {
 		// box.Start already closes the half-started box on failure (checked:
 		// a second inbound failing to bind leaves the first one's port free).
 		// The traffic manager is ours, outside the box's lifecycle — close it.
-		traffic.Close()
+		trafficScope.Close()
 		return C.CString(fmt.Sprintf("start box: %s", err))
 	}
 
 	boxInstance = instance
 	boxTraffic = traffic
+	boxTrafficScope = trafficScope
 	boxContext = ctx
 	resetDelays()
 	resetExitIP()
@@ -135,9 +141,10 @@ func box_stop() *C.char {
 		return C.CString("")
 	}
 	err := boxInstance.Close()
-	boxTraffic.Close()
+	boxTrafficScope.Close()
 	boxInstance = nil
 	boxTraffic = nil
+	boxTrafficScope = nil
 	boxContext = nil
 	if err != nil {
 		return C.CString(fmt.Sprintf("stop box: %s", err))

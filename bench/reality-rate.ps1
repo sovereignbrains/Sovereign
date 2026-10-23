@@ -3,7 +3,7 @@
 # through the reference sing-box started here (-Ref). Prints + / - each.
 param([int]$Port = 21080, [int]$N = 15, [switch]$Ref,
       [string]$Links = 'C:\Users\user\bench-dl\aeza-links.txt',
-      [string]$SingBox = 'C:\Users\user\projects\sb-ref\sing-box-1.14.2-windows-amd64\sing-box.exe',
+      [string]$SingBox = 'C:\Users\user\projects\sb-ref\sing-box-1.14.3-windows-amd64\sing-box.exe',
       [string]$Expect = '89.169.33.181')
 $p = $null
 if ($Ref) {
