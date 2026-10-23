@@ -3214,22 +3214,27 @@ class Painter {
 
     const float pad = 16;
     const float legend = r.top + 10;
-    k.Text(std::format(L"↓ {:.0f}", StreamMbps(check.speedDown)), heading_.get(),
-           {r.left + pad, legend, r.left + pad + 84, legend + 22}, down);
-    float units = r.left + pad + 84;
+    // Each one as wide as its text: boxes of a fixed width left the units
+    // "Мбит/с · чере…" on a narrow window (24.10.2026).
+    float x = r.left + pad;
+    const auto speed = [&](const std::wstring& text, D2D1_COLOR_F color) {
+      const float width = TextWidth(text, heading_.get());
+      k.Text(text, heading_.get(), {x, legend, x + width + 2, legend + 22}, color);
+      x += width + 14;
+    };
+    speed(std::format(L"↓ {:.0f}", StreamMbps(check.speedDown)), down);
     if (!check.speedUp.empty()) {
-      k.Text(std::format(L"↑ {:.0f}", StreamMbps(check.speedUp)), heading_.get(),
-             {units, legend, units + 84, legend + 22}, up);
-      units += 84;
+      speed(std::format(L"↑ {:.0f}", StreamMbps(check.speedUp)), up);
     }
+    const std::wstring scaleText = std::format(L"{:.0f}", scale);
+    const float scaleLeft = r.right - pad - TextWidth(scaleText, trailing_.get()) - 2;
     // Which way it measured, said with the units: in "only what's chosen" the
     // tray's own requests go directly - the line, not the VPN (its detail
     // starts so: diagnose.cpp Speed).
     const bool direct = check.detail.starts_with(L"Напрямую");
     k.Text(direct ? L"Мбит/с · напрямую" : L"Мбит/с · через VPN", caption_.get(),
-           {units, legend + 3, r.right - pad - 84, legend + 22}, secondary);
-    k.Text(std::format(L"{:.0f}", scale), trailing_.get(), {r.right - pad - 80, legend + 3, r.right - pad, legend + 22},
-           secondary);
+           {x, legend + 3, scaleLeft - 8, legend + 22}, secondary);
+    k.Text(scaleText, trailing_.get(), {scaleLeft, legend + 3, r.right - pad, legend + 22}, secondary);
 
     const D2D1_RECT_F plot{r.left + pad, r.top + 42, r.right - pad, r.bottom - 14};
     const float mid = (plot.top + plot.bottom) / 2;

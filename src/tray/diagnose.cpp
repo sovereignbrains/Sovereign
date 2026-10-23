@@ -15,6 +15,8 @@
 #include <wil/resource.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <expected>
@@ -24,6 +26,7 @@
 #include <random>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "fetch.h"
 
@@ -480,10 +483,20 @@ struct Run {
 
   CheckResult Speed() const {
     CheckResult r;
+    auto server = SpeedServer::Open(L"speed.cloudflare.com", input.userAgent);
+    if (!server) {
+      r.status = Status::Fail;
+      r.summary = "не удалось";
+      r.detail = "Сервер замера недоступен: " + server.error();
+      r.fix = CheckFix::Reconnect;
+      return r;
+    }
+    // Over the one connection, as the test's own requests go: the middle of
+    // five is a round trip, not a handshake (the first one's).
     std::vector<int> pings;
     for (int i = 0; i < 5; ++i) {
       const auto started = Clock::now();
-      if (Download(L"https://speed.cloudflare.com/__down?bytes=0", input.userAgent, 1024)) {
+      if (server->Stream(L"/__down?bytes=0", [](std::uint64_t) { return true; })) {
         pings.push_back(Millis(Clock::now() - started));
       }
     }
@@ -497,8 +510,8 @@ struct Run {
         live(r);
       }
     };
-    const auto down = Stream(kSpeedDownSeconds, r.speedDown, show);
-    const auto up = UploadStream(kSpeedUpSeconds, r.speedUp, show);
+    const auto down = Stream(*server, kSpeedDownSeconds, r.speedDown, show);
+    const auto up = UploadStream(*server, kSpeedUpSeconds, r.speedUp, show);
     if (!down && !up) {
       r.status = Status::Fail;
       r.summary = "не удалось";
@@ -523,31 +536,57 @@ struct Run {
     return r;
   }
 
-  // The download: Cloudflare's test file read again and again for `seconds`,
-  // as their own test does - from 1 MB, doubled while one comes in under
-  // half a second, to 25 MB; a refusal (429 - too much asked lately; 403 -
-  // over 50 MB) halves it. A stall ends a request after 3 s: another starts.
-  // The throughput of every kSpeedSampleMs added to `samples`, `onSample`
-  // told after each. Ok if anything came.
-  std::expected<void, std::string> Stream(int seconds, std::vector<float>& samples,
+  // The download: Cloudflare's test file read again and again for `seconds`
+  // over two connections at once, as most speed tests do: one TCP flow got
+  // ~150 Mbit/s of a line that carried 250 with two or four (WinHTTP and
+  // curl alike, through the VPN, 24.10.2026). The throughput of every
+  // kSpeedSampleMs added to `samples`, `onSample` told after each. Ok if
+  // anything came.
+  std::expected<void, std::string> Stream(const SpeedServer& server, int seconds, std::vector<float>& samples,
                                           const std::function<void()>& onSample) const {
+    constexpr std::size_t kConnections = 2;
     const auto started = Clock::now();
     const auto until = started + std::chrono::seconds(seconds);
-    Slots slots{.started = started, .sampledAt = started, .sampledBytes = 0};
+    std::atomic<std::uint64_t> total{0};
+    std::array<std::string, kConnections> errors;
+    {
+      std::vector<std::jthread> connections;
+      connections.reserve(kConnections);
+      for (std::size_t i = 0; i < kConnections; ++i) {
+        connections.emplace_back([&, i] { errors[i] = Fetches(server, until, total); });
+      }
+      Slots slots{.started = started, .sampledAt = started, .sampledBytes = 0};
+      while (Clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (slots.Fill(samples, total.load(), Clock::now())) {
+          onSample();
+        }
+      }
+    }  // joined: each stops at `until`, a stalled one within 3 s of it
+    if (total.load() == 0) {
+      const auto error = std::ranges::find_if(errors, [](const std::string& e) { return !e.empty(); });
+      return std::unexpected(error != errors.end() ? *error : std::string("ничего не пришло"));
+    }
+    return {};
+  }
+
+  // One of the download's connections until `until`, as Cloudflare's own
+  // test asks: from 1 MB, doubled while one comes in under half a second, to
+  // 25 MB; a refusal (429 - too much asked lately; 403 - over 50 MB) halves
+  // it. A stall ends a request after 3 s: another starts. Every piece added
+  // to `total`; the last error, if any.
+  static std::string Fetches(const SpeedServer& server, Clock::time_point until, std::atomic<std::uint64_t>& total) {
     constexpr std::uint64_t kLeast = 1'000'000;
     constexpr std::uint64_t kMost = 25'000'000;
     std::uint64_t size = kLeast;
-    std::uint64_t before = 0;  // what the requests before this one moved
     std::string error;
     while (Clock::now() < until) {
       const auto asked = Clock::now();
-      const std::wstring url = std::format(L"https://speed.cloudflare.com/__down?bytes={}", size);
-      const auto moved = StreamBytes(url, input.userAgent, [&](std::uint64_t bytes) {
-        const auto now = Clock::now();
-        if (slots.Fill(samples, before + bytes, now)) {
-          onSample();
-        }
-        return now < until;
+      std::uint64_t counted = 0;
+      const auto moved = server.Stream(std::format(L"/__down?bytes={}", size), [&](std::uint64_t bytes) {
+        total += bytes - counted;
+        counted = bytes;
+        return Clock::now() < until;
       });
       if (!moved) {
         error = moved.error();  // tried again, smaller, while there's time - not in a tight loop
@@ -555,28 +594,21 @@ struct Run {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         continue;
       }
-      before += *moved;
       if (*moved >= size && Clock::now() - asked < std::chrono::milliseconds(500)) {
         size = std::min(kMost, size * 2);
       }
     }
-    if (before == 0) {
-      return std::unexpected(error.empty() ? std::string("ничего не пришло") : error);
-    }
-    // Over before its first quarter (a tiny answer): its one sample.
-    if (samples.empty() && before > 0) {
-      samples.push_back(static_cast<float>(Mbps(before, Seconds(Clock::now() - started))));
-      onSample();
-    }
-    return {};
+    return error;
   }
 
   // The upload: POSTs of a growing size, each timed to the server's answer -
   // the bytes it took, not the ones the system had buffered (written pieces
   // counted before they left: 15 and 305 Mbit/s in two runs of one line,
   // 16.10.2026). From 1 MB, doubled while one takes under half a second, to
-  // 16 MB.
-  std::expected<void, std::string> UploadStream(int seconds, std::vector<float>& samples,
+  // 16 MB. Written in pieces over the one connection (SpeedServer::Upload):
+  // 11 Mbit/s whole and a handshake each, 200-238 so (the adapter's counter
+  // of bytes sent agreeing, 24.10.2026).
+  std::expected<void, std::string> UploadStream(const SpeedServer& server, int seconds, std::vector<float>& samples,
                                                 const std::function<void()>& onSample) const {
     const auto started = Clock::now();
     const auto until = started + std::chrono::seconds(seconds);
@@ -587,7 +619,7 @@ struct Run {
     std::uint64_t total = 0;
     while (Clock::now() < until) {
       const auto sent = Clock::now();
-      const auto done = Upload(L"https://speed.cloudflare.com/__up", input.userAgent, std::string_view(body).substr(0, size));
+      const auto done = server.Upload(L"/__up", std::string_view(body).substr(0, size));
       const auto now = Clock::now();
       if (!done) {
         if (total == 0) {

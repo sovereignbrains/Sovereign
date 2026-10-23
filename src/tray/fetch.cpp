@@ -306,22 +306,12 @@ std::expected<std::string, std::string> HttpsSend(const std::wstring& url, const
   return std::move(response->body);
 }
 
-std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, const std::wstring& userAgent,
-                                                      const std::function<bool(std::uint64_t)>& onBytes) {
-  auto opened = Open(url, userAgent, L"GET", "сервер");
-  if (!opened) {
-    return std::unexpected(opened.error());
-  }
-  HINTERNET request = opened->request.get();
-  // A stall is the end of this stream, not half a minute of the test: the
-  // caller starts another (Cloudflare holds a request back now and then).
-  WinHttpSetTimeouts(request, 10'000, 10'000, 3'000, 3'000);
-  constexpr std::size_t kPiece = std::size_t{64} * 1024;
-  std::uint64_t moved = 0;
-  if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-      !WinHttpReceiveResponse(request, nullptr)) {
-    return std::unexpected(Failure("сервер не ответил"));
-  }
+namespace {
+
+constexpr std::size_t kPiece = std::size_t{64} * 1024;
+
+// The answer's status, as an error for anything but a 200.
+std::expected<void, std::string> Status200(HINTERNET request) {
   DWORD status = 0;
   DWORD statusSize = sizeof status;
   if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
@@ -330,6 +320,64 @@ std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, c
   }
   if (status != 200) {
     return std::unexpected(std::format("сервер ответил {}", status));
+  }
+  return {};
+}
+
+}  // namespace
+
+struct SpeedServer::Handles {
+  wil::unique_winhttp_hinternet session;
+  wil::unique_winhttp_hinternet connection;
+
+  std::expected<wil::unique_winhttp_hinternet, std::string> Request(const wchar_t* method, const std::wstring& path) const {
+    wil::unique_winhttp_hinternet request(WinHttpOpenRequest(connection.get(), method, path.c_str(), nullptr,
+                                                             WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                                             WINHTTP_FLAG_SECURE));
+    if (!request) {
+      return std::unexpected(Failure("запрос не создался"));
+    }
+    return request;
+  }
+};
+
+SpeedServer::SpeedServer(std::unique_ptr<Handles> handles) : handles_(std::move(handles)) {}
+SpeedServer::SpeedServer(SpeedServer&&) noexcept = default;
+SpeedServer& SpeedServer::operator=(SpeedServer&&) noexcept = default;
+SpeedServer::~SpeedServer() = default;
+
+std::expected<SpeedServer, std::string> SpeedServer::Open(const std::wstring& host, const std::wstring& userAgent) {
+  auto handles = std::make_unique<Handles>();
+  handles->session.reset(
+      WinHttpOpen(userAgent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+  if (!handles->session) {
+    return std::unexpected(Failure("WinHTTP не открылся"));
+  }
+  WinHttpSetTimeouts(handles->session.get(), 10'000, 10'000, 15'000, 30'000);
+  handles->connection.reset(WinHttpConnect(handles->session.get(), host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0));
+  if (!handles->connection) {
+    return std::unexpected(Failure("не удалось подключиться: сервер"));
+  }
+  return SpeedServer(std::move(handles));
+}
+
+std::expected<std::uint64_t, std::string> SpeedServer::Stream(const std::wstring& path,
+                                                              const std::function<bool(std::uint64_t)>& onBytes) const {
+  auto opened = handles_->Request(L"GET", path);
+  if (!opened) {
+    return std::unexpected(opened.error());
+  }
+  HINTERNET request = opened->get();
+  // A stall is the end of this stream, not half a minute of the test: the
+  // caller starts another (Cloudflare holds a request back now and then).
+  WinHttpSetTimeouts(request, 10'000, 10'000, 3'000, 3'000);
+  std::uint64_t moved = 0;
+  if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+      !WinHttpReceiveResponse(request, nullptr)) {
+    return std::unexpected(Failure("сервер не ответил"));
+  }
+  if (auto ok = Status200(request); !ok) {
+    return std::unexpected(ok.error());
   }
   std::vector<char> buffer(kPiece);
   for (;;) {
@@ -349,13 +397,39 @@ std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, c
   return moved;
 }
 
-std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body) {
-  auto response = HttpsGet(url, userAgent, std::size_t{1024} * 1024, {}, "сервер", L"POST", body);
-  if (!response) {
-    return std::unexpected(response.error());
+// The body written 64 KB at a time: handed to WinHttpSendRequest whole it
+// went at 11 Mbit/s on a line that takes 150 so (the adapter's counter of
+// bytes sent, 24.10.2026).
+std::expected<void, std::string> SpeedServer::Upload(const std::wstring& path, std::string_view body) const {
+  auto opened = handles_->Request(L"POST", path);
+  if (!opened) {
+    return std::unexpected(opened.error());
   }
-  if (response->status != 200) {
-    return std::unexpected(std::format("сервер ответил {}", response->status));
+  HINTERNET request = opened->get();
+  if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0,
+                          static_cast<DWORD>(body.size()), 0)) {
+    return std::unexpected(Failure("сервер не ответил"));
+  }
+  for (std::size_t offset = 0; offset < body.size();) {
+    const auto piece = static_cast<DWORD>(std::min(kPiece, body.size() - offset));
+    DWORD written = 0;
+    if (!WinHttpWriteData(request, body.data() + offset, piece, &written) || written == 0) {
+      return std::unexpected(Failure("обрыв при отправке"));
+    }
+    offset += written;
+  }
+  if (!WinHttpReceiveResponse(request, nullptr)) {
+    return std::unexpected(Failure("сервер не ответил"));
+  }
+  if (auto ok = Status200(request); !ok) {
+    return std::unexpected(ok.error());
+  }
+  // Read to its end, so the connection goes back to the session for the next.
+  std::array<char, 4096> drain{};
+  for (DWORD read = 1; read > 0;) {
+    if (!WinHttpReadData(request, drain.data(), static_cast<DWORD>(drain.size()), &read)) {
+      break;
+    }
   }
   return {};
 }

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,17 +50,34 @@ std::expected<std::string, std::string> HttpsSend(const std::wstring& url, const
                                                   const wchar_t* method, std::string_view body,
                                                   const std::wstring& headers, std::size_t maxBytes);
 
-// A POST of `body` over https, same client; an error for anything but a 200.
-// Blocking: call it off the UI thread.
-std::expected<void, std::string> Upload(const std::wstring& url, const std::wstring& userAgent, std::string_view body);
+// A speed test's server: one WinHTTP session and connection to `host` for
+// all of the test, the requests after the first going over the TCP and TLS
+// it opened while it stays up - a handshake for each request was a part of
+// what got measured. Requests may run at once from threads, each over a
+// connection of its own. Blocking: off the UI thread.
+class SpeedServer {
+ public:
+  static std::expected<SpeedServer, std::string> Open(const std::wstring& host, const std::wstring& userAgent);
+  SpeedServer(SpeedServer&&) noexcept;
+  SpeedServer& operator=(SpeedServer&&) noexcept;
+  ~SpeedServer();
 
-// A speed test's download, same client: a GET read through piece by piece,
-// nothing kept; `onBytes` is told how many came so far after each piece and
-// says whether to go on. The bytes that came; an error only if none did (a
-// server cutting a long stream off, a 3 s stall, is the end of it). The
-// upload is Upload()s timed to the server's answer instead: written pieces
-// are counted before they leave. Blocking: off the UI thread.
-std::expected<std::uint64_t, std::string> StreamBytes(const std::wstring& url, const std::wstring& userAgent,
-                                                      const std::function<bool(std::uint64_t)>& onBytes);
+  // A GET of `path` read through piece by piece, nothing kept; `onBytes` is
+  // told how many came so far after each piece and says whether to go on.
+  // The bytes that came; an error only if none did (a server cutting a long
+  // stream off, a 3 s stall, is the end of it).
+  std::expected<std::uint64_t, std::string> Stream(const std::wstring& path,
+                                                   const std::function<bool(std::uint64_t)>& onBytes) const;
+
+  // A POST of `body` to `path`, written piece by piece, done when the server
+  // has answered; an error for anything but a 200. The upload is these timed
+  // to the answer: written pieces are counted before they leave.
+  std::expected<void, std::string> Upload(const std::wstring& path, std::string_view body) const;
+
+ private:
+  struct Handles;
+  explicit SpeedServer(std::unique_ptr<Handles> handles);
+  std::unique_ptr<Handles> handles_;
+};
 
 }  // namespace sovereign::tray
