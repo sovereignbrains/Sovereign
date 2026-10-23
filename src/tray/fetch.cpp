@@ -1,5 +1,10 @@
 #include "fetch.h"
 
+// windows.h's min/max macros break std::min/max (clang-tidy in CI doesn't see
+// the global NOMINMAX for every file).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <winhttp.h>
 
