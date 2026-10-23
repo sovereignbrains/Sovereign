@@ -1001,54 +1001,79 @@ class Worker {
 
   // The routing's lists: downloaded when missing or a day old, checked every
   // ten minutes (at once after the routing changed), one download a poll so
-  // the window stays answered. The box gets them as local files: a list that
-  // can't be fetched never keeps it from starting.
+  // the window stays answered. The box gets them as local files - a list that
+  // can't be fetched never keeps it from starting - once the round is over
+  // (RuleSetRound): one restart for them all. No download while the box is
+  // wanted on but down: under the kill switch the tray can't reach out, the
+  // download would hang until its timeout and hold the start back.
   void UpdateRuleSets() {
+    using sovereign::tray::RuleSetSource;
     const auto now = TrayModel::Clock::now();
-    if (lastRuleCheck_ && now - *lastRuleCheck_ < std::chrono::minutes(10) && !rulesDirty_) {
-      return;
+    if (!rulesRound_) {
+      if (lastRuleCheck_ && now - *lastRuleCheck_ < std::chrono::minutes(10) && !rulesDirty_) {
+        return;
+      }
+      rulesDirty_ = false;
+      rulesRound_.emplace();
+      rulesRoundError_.clear();
     }
-    rulesDirty_ = false;
-    std::map<std::string, std::string> files;
-    bool downloaded = false;
-    bool pending = false;
-    for (const auto& source : sovereign::tray::NeededRuleSets(settings_.routing)) {
+    const auto extension = [](const RuleSetSource& source) -> std::string_view {
+      return source.adguard ? ".json" : ".srs";
+    };
+    const auto sources = sovereign::tray::NeededRuleSets(settings_.routing);
+    std::vector<std::string> due;
+    for (const RuleSetSource& source : sources) {
       try {
-        const std::string_view extension = source.adguard ? ".json" : ".srs";
-        const auto age = sovereign::tray::RuleSetAge(source.tag, extension);
-        if ((!age || *age >= std::chrono::hours(24)) && !downloaded) {
-          downloaded = true;  // one a poll
-          auto got = sovereign::tray::Download(Widen(source.url), kUserAgent, std::size_t{16} * 1024 * 1024);
-          // AdGuard's filter is text: made a source rule-set here.
-          const std::optional<std::string> list =
-              !got                                      ? std::nullopt
-              : source.adguard                          ? sovereign::tray::AdGuardRuleSet(*got)
-              : sovereign::tray::IsRuleSetFile(*got) ? std::optional<std::string>(std::move(*got))
-                                                        : std::nullopt;
-          if (list) {
-            sovereign::tray::SaveRuleSet(source.tag, *list, extension);
-            rulesError_.clear();
-            rulesUpdated_ = std::time(nullptr);
-          } else {
-            rulesError_ = got ? std::string("ответ — не список правил") : got.error();
-          }
-        } else if (!age || *age >= std::chrono::hours(24)) {
-          pending = true;
+        const auto age = sovereign::tray::RuleSetAge(source.tag, extension(source));
+        if (!age || *age >= std::chrono::hours(24)) {
+          due.push_back(source.tag);
         }
-        if (sovereign::tray::RuleSetAge(source.tag, extension)) {
-          files[source.tag] = Narrow(sovereign::tray::RuleSetPath(source.tag, extension).wstring());
+      } catch (...) {
+        LOG_CAUGHT_EXCEPTION_MSG("the routing's lists folder can't be used");
+      }
+    }
+    if (!rulesRound_->Over(due)) {
+      const auto stats = PollStats();
+      if (model_.WantOn() && !(stats && stats->running)) {
+        return;  // once the box is up
+      }
+      const auto tag = rulesRound_->Next(due);  // one a poll
+      const auto source = std::find_if(sources.begin(), sources.end(), [&](const RuleSetSource& s) { return s.tag == tag; });
+      try {
+        auto got = sovereign::tray::Download(Widen(source->url), kUserAgent, std::size_t{16} * 1024 * 1024);
+        // AdGuard's filter is text: made a source rule-set here.
+        const std::optional<std::string> list =
+            !got                                      ? std::nullopt
+            : source->adguard                         ? sovereign::tray::AdGuardRuleSet(*got)
+            : sovereign::tray::IsRuleSetFile(*got) ? std::optional<std::string>(std::move(*got))
+                                                      : std::nullopt;
+        if (list) {
+          sovereign::tray::SaveRuleSet(source->tag, *list, extension(*source));
+          rulesUpdated_ = std::time(nullptr);
+        } else {
+          rulesRoundError_ = got ? std::string("ответ — не список правил") : got.error();
+        }
+      } catch (...) {
+        LOG_CAUGHT_EXCEPTION_MSG("the routing's lists folder can't be used");
+      }
+      if (!rulesRound_->Over(due)) {
+        return;  // the next poll goes on; the box keeps the lists it has till then
+      }
+    }
+    std::map<std::string, std::string> files;
+    for (const RuleSetSource& source : sources) {
+      try {
+        if (sovereign::tray::RuleSetAge(source.tag, extension(source))) {
+          files[source.tag] = Narrow(sovereign::tray::RuleSetPath(source.tag, extension(source)).wstring());
         }
       } catch (...) {
         LOG_CAUGHT_EXCEPTION_MSG("the routing's lists folder can't be used");
       }
     }
     ruleFiles_ = std::move(files);
-    // More to fetch: the next poll goes on; all there: ten minutes' rest.
-    if (pending) {
-      rulesDirty_ = true;
-    } else {
-      lastRuleCheck_ = now;
-    }
+    rulesError_ = std::move(rulesRoundError_);
+    rulesRound_.reset();
+    lastRuleCheck_ = now;  // ten minutes' rest
   }
 
   // A change to the routing from its page.
@@ -2650,8 +2675,10 @@ class Worker {
       v.quicBlocked = quicBlocked_;
       v.rulesFrom = rulesFrom_;
       v.blockedAds = {blocked_.begin(), blocked_.end()};
-      v.listsReady = ruleFiles_.size();
-      v.listsNeeded = sovereign::tray::NeededRuleSets(settings_.routing).size();
+      const auto lists = sovereign::tray::NeededRuleSets(settings_.routing);
+      v.listsReady = static_cast<std::size_t>(std::count_if(
+          lists.begin(), lists.end(), [&](const sovereign::tray::RuleSetSource& s) { return ruleFiles_.contains(s.tag); }));
+      v.listsNeeded = lists.size();
       v.listsUpdated = rulesUpdated_;
       v.listsError = rulesError_;
       v.profiles.clear();
@@ -2770,7 +2797,9 @@ class Worker {
   std::map<std::string, std::string> ruleFiles_;  // the routing's lists there are: tag -> path (UTF-8)
   std::optional<TrayModel::Clock::time_point> lastRuleCheck_;
   bool rulesDirty_ = true;      // check the lists at the next poll
-  std::string rulesError_;      // the last download failed with this
+  std::optional<sovereign::tray::RuleSetRound> rulesRound_;  // the check under way
+  std::string rulesRoundError_;  // a download in it failed with this
+  std::string rulesError_;      // the last check's download failed with this
   std::int64_t rulesUpdated_ = 0;  // unix seconds of the last list downloaded
   std::string combineError_;             // why there's none
   std::vector<std::string> combineNotes_;

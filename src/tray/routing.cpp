@@ -1051,6 +1051,19 @@ std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
   return sets;
 }
 
+std::optional<std::string> RuleSetRound::Next(std::span<const std::string> due) {
+  for (const std::string& tag : due) {
+    if (tried_.insert(tag).second) {
+      return tag;
+    }
+  }
+  return std::nullopt;
+}
+
+bool RuleSetRound::Over(std::span<const std::string> due) const {
+  return std::all_of(due.begin(), due.end(), [&](const std::string& tag) { return tried_.contains(tag); });
+}
+
 std::string OwnFrame(const RoutingSettings& settings) {
   const char* address = settings.remoteDns == RoutingSettings::RemoteDns::Google  ? "8.8.8.8"
                         : settings.remoteDns == RoutingSettings::RemoteDns::Quad9 ? "9.9.9.9"

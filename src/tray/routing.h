@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -222,6 +223,22 @@ struct RuleSetSource {
   bool adguard = false;  // an AdGuard filter, text: AdGuardRuleSet makes it a source rule-set
 };
 std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings);
+// A check of the lists as it goes (the tray's UpdateRuleSets): one download
+// a poll, each list tried once a round - one that fails isn't fetched again
+// every second, nor does it hold back the ones after it - and the box gets
+// the lists only when the round is over: one restart for them all, not one a
+// list.
+class RuleSetRound {
+ public:
+  // Of the lists `due` (missing or a day old, in NeededRuleSets' order), the
+  // first one not tried in this round, taken as tried now; nullopt: all tried.
+  std::optional<std::string> Next(std::span<const std::string> due);
+  // Every list `due` tried: the round is over.
+  bool Over(std::span<const std::string> due) const;
+
+ private:
+  std::set<std::string> tried_;
+};
 // What a download must start with to be a list (sing-box's "SRS" magic) -
 // not a captive portal's page or an error text.
 inline bool IsRuleSetFile(std::string_view bytes) { return bytes.starts_with("SRS"); }

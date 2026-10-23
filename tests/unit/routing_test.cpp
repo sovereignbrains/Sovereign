@@ -1152,6 +1152,28 @@ void TestWarpWatch() {
         std::vector<std::string>({"a", "b"}));
 }
 
+// The lists' check: one a poll, each once a round - a failing one neither
+// fetched again at once nor in the way of the next - over when all are tried.
+void TestRuleSetRound() {
+  RuleSetRound round;
+  CHECK(round.Over({}));
+  std::vector<std::string> due = {"geosite-ru", "geosite-gov-ru", "geoip-ru"};
+  CHECK(!round.Over(due));
+  CHECK(round.Next(due) == "geosite-ru");
+  due.erase(due.begin());  // downloaded: not due any more
+  CHECK(round.Next(due) == "geosite-gov-ru");  // failed: still due
+  CHECK(!round.Over(due));
+  CHECK(round.Next(due) == "geoip-ru");
+  CHECK(round.Over(due));
+  CHECK(!round.Next(due));
+  due.push_back("ads");  // the routing changed in the middle
+  CHECK(!round.Over(due));
+  CHECK(round.Next(due) == "ads");
+  CHECK(round.Over(due));
+  RuleSetRound next;  // ten minutes on: the failed one again
+  CHECK(next.Next(due) == "geosite-gov-ru");
+}
+
 int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see the catch below
   if (argc >= 5 && std::string_view(argv[1]) == "--try") {
     return TryReal(argc, argv);
@@ -1188,6 +1210,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestLocalDnsFallback();
     TestCustomDns();
     TestWarpWatch();
+    TestRuleSetRound();
     TestQuic();
     TestOrder();
     TestAdGuard();
