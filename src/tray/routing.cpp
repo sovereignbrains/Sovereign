@@ -140,6 +140,17 @@ const char* ActionName(RouteRule::Action action) {
   return "direct";
 }
 
+// ActionName's way back; nullopt: none of them.
+std::optional<RouteRule::Action> ActionNamed(std::string_view name) {
+  for (const RouteRule::Action action :
+       {RouteRule::Action::Direct, RouteRule::Action::Proxy, RouteRule::Action::Block, RouteRule::Action::Warp}) {
+    if (name == ActionName(action)) {
+      return action;
+    }
+  }
+  return std::nullopt;
+}
+
 const char* WayName(ServiceRoute::Way way) {
   switch (way) {
     case ServiceRoute::Way::Warp: return "warp";
@@ -448,7 +459,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
     }
     services.push_back(std::move(service));
   }
-  return {{"russiaDirect", s.russiaDirect},
+  return {{"russia", s.russia ? ActionName(*s.russia) : "off"},
           {"blockAds", s.blockAds},
           {"cookieWindows", s.cookieWindows},
           {"quic", s.quic == RoutingSettings::Quic::Block   ? "block"
@@ -491,7 +502,15 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
     const auto it = json.find(key);
     return it != json.end() && it->is_string() ? it->get<std::string>() : std::string();
   };
-  flag("russiaDirect", s.russiaDirect);
+  // "russiaDirect" before 0.5.36: on is directly, off no way of their own.
+  bool russiaDirect = true;
+  flag("russiaDirect", russiaDirect);
+  s.russia = russiaDirect ? std::optional(RouteRule::Action::Direct) : std::nullopt;
+  if (const std::string russia = text("russia"); russia == "off") {
+    s.russia.reset();
+  } else if (const auto action = ActionNamed(russia)) {
+    s.russia = action;
+  }
   flag("blockAds", s.blockAds);
   flag("cookieWindows", s.cookieWindows);
   // "blockQuic" before 0.4.56: off stays off; on, the default, is auto now.
@@ -583,10 +602,7 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
         }
       }
       const std::string action = entry.contains("action") && entry["action"].is_string() ? entry["action"].get<std::string>() : "";
-      auto rule = ParseRule(line, action == "block"   ? RouteRule::Action::Block
-                                        : action == "proxy" ? RouteRule::Action::Proxy
-                                        : action == "warp"  ? RouteRule::Action::Warp
-                                                            : RouteRule::Action::Direct);
+      auto rule = ParseRule(line, ActionNamed(action).value_or(RouteRule::Action::Direct));
       // One the same as an earlier one (in two buckets, before 0.4.57): only
       // the first ever worked - the rest dropped.
       if (rule && std::none_of(s.rules.begin(), s.rules.end(), [&](const RouteRule& r) { return SameThings(r, *rule); })) {
@@ -1011,7 +1027,7 @@ std::optional<std::string> AdGuardRuleSet(std::string_view filter) {
 
 std::vector<RuleSetSource> NeededRuleSets(const RoutingSettings& settings) {
   std::vector<RuleSetSource> sets;
-  if (settings.russiaDirect) {
+  if (settings.russia) {
     sets.push_back({std::string(kGeositeRu), std::string(kGeositeBase) + "geosite-category-ru.srs", false});
     sets.push_back({std::string(kGeositeGovRu), std::string(kGeositeBase) + "geosite-category-gov-ru.srs", false});
     sets.push_back({std::string(kGeoipRu), std::string(kGeoipBase) + "geoip-ru.srs", true});
@@ -1381,13 +1397,28 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
   }
   // Russia after the services: one sent its own way takes its Russian names
   // too (google.ru with Google) - the user's pick over the general list.
-  if (settings.russiaDirect) {
-    rules.push_back(Json{{"domain_suffix", zones}, {"outbound", direct}});
+  // Through WARP while it's off: left out, as a rule is.
+  Json russia = Json::object();  // where they go, as a rule's ending
+  if (settings.russia == RouteRule::Action::Direct) {
+    russia["outbound"] = direct;
+  } else if (settings.russia == RouteRule::Action::Proxy && !proxy.empty()) {
+    russia["outbound"] = proxy;
+  } else if (settings.russia == RouteRule::Action::Warp && !warp.empty()) {
+    russia["outbound"] = warp;
+  } else if (settings.russia == RouteRule::Action::Block) {
+    russia["action"] = "reject";
+  }
+  if (!russia.empty()) {
+    const auto to = [&](Json rule) {
+      rule.update(russia);
+      rules.push_back(std::move(rule));
+    };
+    to(Json{{"domain_suffix", zones}});
     if (!russianNames.empty()) {
-      rules.push_back(Json{{"rule_set", russianNames}, {"outbound", direct}});
+      to(Json{{"rule_set", russianNames}});
     }
     if (lists.contains(std::string(kGeoipRu))) {
-      rules.push_back(Json{{"rule_set", kGeoipRu}, {"outbound", direct}});
+      to(Json{{"rule_set", kGeoipRu}});
     }
   }
   if (BlockQuic(settings, config)) {
@@ -1462,10 +1493,20 @@ std::string ApplyRouting(std::string_view text, const RoutingSettings& settings,
       dnsRules.push_back(std::move(blocked));
     }
   }
-  if (settings.russiaDirect) {
-    dnsRules.push_back(Json{{"domain_suffix", zones}, {"server", kLocalDns}});
+  // The Russian names: directly resolved here, blocked given no addresses;
+  // through the proxy or WARP the config's own DNS, as everything else's.
+  if (settings.russia == RouteRule::Action::Direct || settings.russia == RouteRule::Action::Block) {
+    const auto to = [&](Json rule) {
+      if (settings.russia == RouteRule::Action::Block) {
+        SetNoAddress(rule);
+      } else {
+        rule["server"] = kLocalDns;
+      }
+      dnsRules.push_back(std::move(rule));
+    };
+    to(Json{{"domain_suffix", zones}});
     if (!russianNames.empty()) {
-      dnsRules.push_back(Json{{"rule_set", russianNames}, {"server", kLocalDns}});
+      to(Json{{"rule_set", russianNames}});
     }
   }
   Prepend(dns["rules"], std::move(dnsRules), 0);

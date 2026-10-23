@@ -120,9 +120,9 @@ struct UiChip {
   std::string logo;     // a service's id, for its logo (icons.h ServiceLogo); empty: none
   // In the bucket everything else goes to, changing nothing - a program there
   // (its rule is the last before that very default), a service there (not
-  // through a country of its own), the Russian sites when everything else is
-  // direct and no program goes through VPN or WARP: kept for the other mode,
-  // not shown.
+  // through a country of its own), the Russian sites when everything else
+  // goes their way and no program goes another (but blocked): kept for the
+  // other mode, not shown.
   bool idle = false;
   // Service: the rule of its own program in the same bucket (Telegram.exe by
   // Telegram), folded into it - one thing on the board, its menu moves and
@@ -135,7 +135,7 @@ inline constexpr int kBucketBlock = 2;
 inline constexpr int kBucketWarp = 3;
 
 struct UiRouting {
-  bool russiaDirect = true;
+  int russia = kBucketDirect;  // the Russian sites' way, a bucket; -1: none of their own
   bool blockAds = true;
   int quic = 0;             // RoutingSettings::Quic's number: 0 auto, 1 blocked, 2 let through
   bool quicBlocked = true;  // what it comes to - auto: by the servers
@@ -303,8 +303,6 @@ enum class UiCommand : std::uint8_t {
   RemoveProfile,     // after asking
   ToggleServer,      // sub: index into its servers
   // The routing's:
-  ToggleRussiaDirect,
-  ToggleBlockAds,
   ChooseQuic,         // anchor: where to open the menu
   SetHysteriaMbps,      // index: Hysteria 2's speed, Mbit/s (kHysteriaSpeeds); 0: auto (BBR)
   SetRouteMode,        // index: 0 everything through the VPN but what's sent elsewhere, 1 only what's sent through it

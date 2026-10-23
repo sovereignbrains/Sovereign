@@ -271,34 +271,62 @@ struct Run {
   }
 
   CheckResult RussiaDirect() {
+    using Action = RouteRule::Action;
     CheckResult r;
+    // Through WARP while it's off: no way of their own (routing.h).
+    const std::optional<Action> way =
+        input.routing.russia == Action::Warp && !WarpReady(input.routing) ? std::nullopt : input.routing.russia;
     const auto body = Download(L"https://ipv4-internet.yandex.net/api/v0/ip", input.userAgent, 4096);
     const auto ip = body ? ParseQuotedIp(*body) : std::nullopt;
     if (!ip) {
-      r.status = Status::Warn;
-      r.summary = "нет ответа";
-      r.detail = "Российский сайт не ответил — проверить не вышло.";
+      r.status = way == Action::Block ? Status::Ok : Status::Warn;
+      r.summary = way == Action::Block ? "заблокированы" : "нет ответа";
+      r.detail = way == Action::Block ? "Российский сайт не ответил: российские сайты в блоке, как ты и решил."
+                                      : "Российский сайт не ответил — проверить не вышло.";
       return r;
     }
-    directIp = *ip;
     r.summary = *ip;
+    if (way != Action::Warp) {
+      directIp = *ip;  // through WARP it's Cloudflare's, not the user's
+    }
     const std::string vpn = VpnIp();
     const bool same = !vpn.empty() && *ip == vpn;
+    if (way == Action::Block) {
+      // With only chosen things through the VPN the check may go round the rules.
+      r.status = input.selective ? Status::Warn : Status::Fail;
+      r.detail = "Российский сайт ответил, хотя российские сайты в блоке: правило не сработало.";
+      r.fix = input.selective ? CheckFix::None : CheckFix::Routing;
+      return r;
+    }
+    if (way == Action::Warp) {
+      r.status = same ? Status::Fail : Status::Ok;
+      r.detail = same ? "Российские сайты видят адрес сервера, а не WARP: правило «через WARP» не сработало."
+                      : "Российские сайты идут через WARP: видят адрес Cloudflare — не твой и не адрес сервера.";
+      r.fix = same ? CheckFix::Routing : CheckFix::None;
+      return r;
+    }
     if (input.selective) {
       r.status = Status::Ok;
       r.detail = same ? "Российские сайты идут через VPN — так решили твои правила."
                       : "Российские сайты видят твой адрес: в список VPN они не входят.";
       return r;
     }
-    if (input.routing.russiaDirect) {
+    if (way == Action::Direct) {
       r.status = same ? Status::Fail : Status::Ok;
       r.detail = same ? "Российские сайты видят адрес сервера, а не твой: правило «напрямую» не сработало."
                       : "Российские сайты видят твой адрес, не адрес сервера.";
       r.fix = same ? CheckFix::Routing : CheckFix::None;
+    } else if (way == Action::Proxy) {
+      r.status = same || vpn.empty() ? Status::Ok : Status::Fail;
+      r.detail = same || vpn.empty() ? "Российские сайты идут через VPN, как ты решил: видят адрес сервера."
+                                     : "Российские сайты видят не адрес сервера: правило «через VPN» не сработало.";
+      r.fix = same || vpn.empty() ? CheckFix::None : CheckFix::Routing;
     } else {
       r.status = Status::Ok;
-      r.detail = same ? "«Российское напрямую» выключено: российские сайты видят адрес сервера."
-                      : "Российские сайты видят этот адрес.";
+      r.detail = input.routing.russia == Action::Warp
+                     ? "«Через WARP» ждёт WARP: пока он выключен, российские сайты идут как всё остальное."
+                 : same ? "У российских сайтов нет своего пути: они видят адрес сервера, как всё остальное."
+                        : "Российские сайты видят этот адрес.";
     }
     return r;
   }

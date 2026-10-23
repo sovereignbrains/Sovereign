@@ -207,7 +207,8 @@ int Migrate(const fs::path& localAppData) {
               << (LoadConfig(ProfileDir(p.id)) ? "there" : "MISSING") << "\n";
   }
   const auto& r = settings.routing;
-  std::cout << "routing:" << (r.russiaDirect ? " russia direct" : "") << (r.blockAds ? ", ads blocked" : "")
+  std::cout << "routing:" << (r.russia ? " russia -> " + std::to_string(static_cast<int>(*r.russia)) : std::string())
+            << (r.blockAds ? ", ads blocked" : "")
             << (r.quic == RoutingSettings::Quic::Block ? ", quic blocked" : "") << ", rules: " << r.rules.size() << "\n";
   for (const RouteRule& rule : r.rules) {
     std::cout << "  " << RuleText(rule) << " -> " << static_cast<int>(rule.action) << "\n";

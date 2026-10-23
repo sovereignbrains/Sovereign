@@ -19,9 +19,11 @@
 // everyone - services like Netflix are the client's to send, through WARP
 // or a country).
 //
-// Russia directly is on by default: a Russian site or app that sees the proxy
+// Russia directly is the default: a Russian site or app that sees the proxy
 // server's address can tie it to the user (and the server to a VPN), so
-// Russian domains, Russian IPs and their DNS go around the proxy.
+// Russian domains, Russian IPs and their DNS go around the proxy. Through
+// WARP they see Cloudflare's address instead, neither the user's nor the
+// server's; or they can be blocked (RoutingSettings::russia).
 //
 // No Win32 here: unit-tested, the configs through the pinned sing-box's
 // `check`, in tests/unit/routing_test.cpp.
@@ -113,7 +115,13 @@ struct RoutingSettings {
   // Auto: that order from Cloudflare - the default. Custom: localDnsCustom,
   // first (ParseCustomDns); given way from only when dialled by its address.
   enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9, Auto, Custom };
-  bool russiaDirect = true;
+  // Where the Russian sites go - Russia's domain zones, its names' lists and
+  // its addresses: directly (the default, their names resolved here too),
+  // through the proxy, blocked (no addresses for their names either) or
+  // through WARP (waits while WARP is off, as a rule does). After the
+  // user's sites and the services, before the programs. Nullopt: no way of
+  // their own - where everything else goes.
+  std::optional<RouteRule::Action> russia = RouteRule::Action::Direct;
   bool blockAds = true;
   // The "accept cookies?" windows of sites: the names their scripts are
   // loaded from (OneTrust, Cookiebot, Usercentrics...) given no addresses, so
@@ -159,7 +167,8 @@ inline constexpr std::string_view kWarpViaTag = "warp-via";
 // nothing (and over the proxy it broke every 5 min idle, filling the log).
 inline bool WarpReady(const RoutingSettings& s) {
   return s.warp && s.warpAccount.has_value() &&
-         (std::any_of(s.rules.begin(), s.rules.end(), [](const RouteRule& r) { return r.action == RouteRule::Action::Warp; }) ||
+         (s.russia == RouteRule::Action::Warp ||
+          std::any_of(s.rules.begin(), s.rules.end(), [](const RouteRule& r) { return r.action == RouteRule::Action::Warp; }) ||
           std::any_of(s.services.begin(), s.services.end(),
                       [](const ServiceRoute& r) { return r.way == ServiceRoute::Way::Warp; }));
 }
@@ -229,8 +238,8 @@ std::optional<std::string> AdGuardRuleSet(std::string_view filter);
 // selector with an "auto" URL test for the configurations' servers.
 std::string OwnFrame(const RoutingSettings& settings);
 
-// `config` with the client's rules first: the user's, ads blocked, Russia
-// directly (names and addresses; their DNS locally), QUIC blocked - and, in
+// `config` with the client's rules first: the user's, ads blocked, Russia its
+// way (names and addresses; directly, their DNS locally), QUIC blocked - and, in
 // own mode, what no rule matches. `files`: the lists there are, tag -> path;
 // a missing one is left out (the domain zones still go directly). JSON text,
 // or `config` unchanged if it isn't a JSON object.

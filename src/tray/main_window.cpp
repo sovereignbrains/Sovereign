@@ -563,8 +563,12 @@ UiPage BackOf(UiPage page) {
 // The routing's line in the settings.
 std::wstring RoutingLine(const UiContent& c) {
   std::vector<std::wstring> parts;
-  if (c.routing.russiaDirect) {
-    parts.emplace_back(L"РФ напрямую");
+  switch (c.routing.russia) {
+    case kBucketDirect: parts.emplace_back(L"РФ напрямую"); break;
+    case kBucketProxy: parts.emplace_back(L"РФ через VPN"); break;
+    case kBucketBlock: parts.emplace_back(L"РФ в блоке"); break;
+    case kBucketWarp: parts.emplace_back(L"РФ через WARP"); break;
+    default: break;
   }
   if (!c.routing.rules.empty()) {
     parts.push_back(std::format(L"правил: {}", c.routing.rules.size()));

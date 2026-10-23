@@ -50,6 +50,18 @@ bool EndsWithLabel(std::string_view host, std::string_view suffix) {
          (host.size() > suffix.size() && host.ends_with(suffix) && host[host.size() - suffix.size() - 1] == '.');
 }
 
+const char* ActionText(RouteRule::Action action) {
+  return action == RouteRule::Action::Direct  ? "напрямую"
+         : action == RouteRule::Action::Proxy ? "через VPN"
+         : action == RouteRule::Action::Warp  ? "через WARP"
+                                              : "блокировать";
+}
+
+// The Russian sites' way in force: through WARP while it's off is none (routing.h).
+std::optional<RouteRule::Action> RussiaWay(const RoutingSettings& routing) {
+  return routing.russia == RouteRule::Action::Warp && !WarpReady(routing) ? std::nullopt : routing.russia;
+}
+
 }  // namespace
 
 std::optional<Trace> ParseTrace(std::string_view body) {
@@ -311,10 +323,14 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
   std::vector<std::pair<std::string, std::string>> groups;
   std::string lines;
   std::string why;
+  const std::optional<RouteRule::Action> russia = RussiaWay(routing);
   for (const SiteWay& site : sites) {
-    const std::string outcome = !site.resolved ? std::string("не находится")
-                                : !site.way    ? std::string("не видно")
-                                               : WayText(*site.way);
+    // Blocked: no address for its name, or no connection seen.
+    const bool blocked = site.russian && russia == RouteRule::Action::Block && (!site.resolved || !site.way);
+    const std::string outcome = blocked          ? std::string("заблокировано")
+                                : !site.resolved ? std::string("не находится")
+                                : !site.way      ? std::string("не видно")
+                                                 : WayText(*site.way);
     const std::string& name = site.where.empty() ? site.host : site.where;
     const auto group = std::find_if(groups.begin(), groups.end(), [&](const auto& g) { return g.first == outcome; });
     if (group == groups.end()) {
@@ -329,13 +345,16 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
       result.status = CheckResult::Status::Fail;
       result.fix = CheckFix::Routing;
       why = std::format("{} идёт мимо VPN: заблокированные сайты не откроются, а сайт видит твой адрес.", site.host);
-    } else if (result.status == CheckResult::Status::Ok) {
+    } else if (result.status == CheckResult::Status::Ok && !blocked) {
       if (!site.way) {
         result.status = CheckResult::Status::Warn;
         why = std::format("{}: не удалось проверить.", site.host);
-      } else if (site.russian && routing.russiaDirect && !direct) {
+      } else if (site.russian && russia == RouteRule::Action::Block) {
         result.status = CheckResult::Status::Warn;
-        why = std::format("{} идёт не напрямую, хотя «Российское напрямую» включено.", site.host);
+        why = std::format("{} идёт {}, хотя российские сайты в блоке.", site.host, outcome);
+      } else if (site.russian && russia && outcome != ActionText(*russia)) {
+        result.status = CheckResult::Status::Warn;
+        why = std::format("{} идёт {}, а российским сайтам задан путь {}.", site.host, outcome, ActionText(*russia));
       }
     }
   }
@@ -343,9 +362,11 @@ CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings
     result.summary += std::format("{}{} → {}", result.summary.empty() ? "" : " · ", names, outcome);
   }
   if (result.status == CheckResult::Status::Ok) {
-    why = selective             ? "Через VPN идут только выбранные программы и сайты, остальные — напрямую."
-          : routing.russiaDirect ? "Российские сайты идут напрямую, зарубежные — через VPN."
-                                 : "Сайты идут через VPN.";
+    why = selective                              ? "Через VPN идут только выбранные программы и сайты, остальные — напрямую."
+          : russia == RouteRule::Action::Direct  ? "Российские сайты идут напрямую, зарубежные — через VPN."
+          : russia == RouteRule::Action::Warp    ? "Российские сайты идут через WARP, зарубежные — через VPN."
+          : russia == RouteRule::Action::Block   ? "Российские сайты заблокированы, зарубежные идут через VPN."
+                                                 : "Сайты идут через VPN.";
   }
   result.detail = why + "\n" + lines;
   return result;
@@ -362,22 +383,18 @@ std::string ClientRuleFor(std::string_view host, const RoutingSettings& routing)
       return cidr == name + "/32" || cidr == name + "/128";
     });
     if (domain || keyword || ip) {
-      const char* action = rule.action == RouteRule::Action::Direct  ? "напрямую"
-                           : rule.action == RouteRule::Action::Proxy ? "через VPN"
-                           : rule.action == RouteRule::Action::Warp  ? "через WARP"
-                                                                     : "блокировать";
       std::string text = RuleText(rule);
       if (text.size() > 40) {
         text = text.substr(0, 40) + "...";
       }
-      return std::format("твоё правило «{}» → {}", text, action);
+      return std::format("твоё правило «{}» → {}", text, ActionText(rule.action));
     }
   }
-  if (routing.russiaDirect) {
+  if (const auto russia = RussiaWay(routing)) {
     for (const std::string_view zone : {"ru", "su", "xn--p1ai", "xn--p1acf", "xn--80adxhks", "moscow", "tatar",
                                         "xn--d1acj3b", "xn--80asehdb", "xn--80aswg", "xn--c1avg"}) {
       if (EndsWithLabel(name, zone)) {
-        return std::format("российская зона .{} → напрямую", zone);
+        return std::format("российская зона .{} → {}", zone, ActionText(*russia));
       }
     }
   }

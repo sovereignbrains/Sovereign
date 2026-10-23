@@ -100,7 +100,7 @@ void TestRoutes() {
   CHECK(WayText(RouteWay{.outbound = "warp 2", .type = "wireguard", .chain = {}, .rule = {}}) == "через WARP");
   CHECK(WayText(RouteWay{.outbound = "Home WG", .type = "wireguard", .chain = {}, .rule = {}}) == "через VPN");
 
-  RoutingSettings routing;  // «Российское напрямую» on
+  RoutingSettings routing;  // the Russian sites directly
   const auto site = [](const char* host, bool russian, std::optional<RouteWay> way) {
     return SiteWay{.host = host, .where = {}, .russian = russian, .resolved = true, .way = std::move(way)};
   };
@@ -140,10 +140,42 @@ void TestRoutes() {
   CHECK(r.summary == "ya.ru, spiegel.de, chatgpt.com → напрямую");
   CHECK(r.detail.starts_with("Через VPN идут только выбранные"));
 
-  // The Russian one through the VPN: a warning with «Российское напрямую» on,
-  // as it should be with it off; a site not seen, a warning either way.
+  // The Russian one through the VPN: a warning with them directly, as it
+  // should be with them through the VPN or of no way of their own; a site
+  // not seen, a warning either way.
+  r = JudgeRoutes({site("ya.ru", true, vpn)}, routing);
+  CHECK(r.status == CheckResult::Status::Warn);
+  CHECK(r.detail.starts_with("ya.ru идёт через VPN, а российским сайтам задан путь напрямую."));
+  routing.russia = RouteRule::Action::Proxy;
+  CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Ok);
+
+  // Through WARP (23.10.2026): WARP's way is right, the VPN's warns; WARP off,
+  // no way of their own - the VPN's is right.
+  const RouteWay warp{.outbound = "warp", .type = "wireguard", .chain = {"warp"}, .rule = {}};
+  routing.russia = RouteRule::Action::Warp;
+  routing.warp = true;
+  routing.warpAccount = WarpAccount{};
+  r = JudgeRoutes({site("ya.ru", true, warp), site("chatgpt.com", false, vpn)}, routing);
+  CHECK(r.status == CheckResult::Status::Ok);
+  CHECK(r.detail.starts_with("Российские сайты идут через WARP"));
+  CHECK(ClientRuleFor("ya.ru", routing) == "российская зона .ru → через WARP");
   CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Warn);
-  routing.russiaDirect = false;
+  routing.warp = false;
+  CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Ok);
+  CHECK(ClientRuleFor("ya.ru", routing).empty());
+
+  // Blocked: no address, or no connection seen, is as meant; one through warns.
+  routing.russia = RouteRule::Action::Block;
+  r = JudgeRoutes({SiteWay{.host = "ya.ru", .where = "Россия", .russian = true, .resolved = false, .way = std::nullopt},
+                   site("chatgpt.com", false, vpn)},
+                  routing);
+  CHECK(r.status == CheckResult::Status::Ok);
+  CHECK(r.summary == "Россия → заблокировано · chatgpt.com → через VPN");
+  CHECK(JudgeRoutes({site("ya.ru", true, std::nullopt)}, routing).status == CheckResult::Status::Ok);
+  r = JudgeRoutes({site("ya.ru", true, direct)}, routing);
+  CHECK(r.status == CheckResult::Status::Warn && r.detail.starts_with("ya.ru идёт напрямую, хотя российские сайты в блоке."));
+
+  routing.russia.reset();
   CHECK(JudgeRoutes({site("ya.ru", true, vpn)}, routing).status == CheckResult::Status::Ok);
   r = JudgeRoutes({site("ya.ru", true, vpn), site("chatgpt.com", false, std::nullopt),
                    SiteWay{.host = "nx.example", .where = {}, .russian = false, .resolved = false, .way = std::nullopt}},
@@ -160,7 +192,9 @@ void TestRules() {
   CHECK(ClientRuleFor("10.0.0.1", routing).find("qwen.ai") != std::string::npos);
   CHECK(ClientRuleFor("notqwen.ai", routing).empty());  // a whole label, not a tail of one
   CHECK(ClientRuleFor("ya.ru", routing) == "российская зона .ru → напрямую");
-  routing.russiaDirect = false;
+  routing.russia = RouteRule::Action::Block;
+  CHECK(ClientRuleFor("ya.ru", routing) == "российская зона .ru → блокировать");
+  routing.russia.reset();
   CHECK(ClientRuleFor("ya.ru", routing).empty());
   CHECK(Mbps(25'000'000, 2.0) == 100.0);
   CHECK(Mbps(1, 0) == 0);

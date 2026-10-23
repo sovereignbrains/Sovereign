@@ -393,7 +393,7 @@ struct ProfileChange {
 // A change to the routing from its page (routing.h).
 struct RoutingChange {
   enum class What : std::uint8_t {
-    RussiaDirect,   // on
+    Russia,         // value: RouteRule::Action (WARP: turned on), -1: no way of their own
     BlockAds,       // on
     CookieWindows,  // on
     Quic,           // value: RoutingSettings::Quic's number
@@ -415,7 +415,7 @@ struct RoutingChange {
     SetServiceWay,  // index; text: "warp" (WARP turned on), "direct", "proxy", "block" or a country code
     WarpVia,        // on: over the proxy; off: directly
   };
-  What what = What::RussiaDirect;
+  What what = What::Russia;
   bool on = false;
   int value = 0;
   int index = 0;
@@ -1071,7 +1071,18 @@ class Worker {
       return true;
     };
     switch (change.what) {
-      case RoutingChange::What::RussiaDirect: r.russiaDirect = change.on; break;
+      case RoutingChange::What::Russia: {
+        if (change.value < 0) {
+          r.russia.reset();
+          break;
+        }
+        const auto action = static_cast<RouteRule::Action>(std::clamp(change.value, 0, 3));
+        if (action == RouteRule::Action::Warp && !warpOn()) {
+          break;
+        }
+        r.russia = action;
+        break;
+      }
       case RoutingChange::What::BlockAds: r.blockAds = change.on; break;
       case RoutingChange::What::CookieWindows: r.cookieWindows = change.on; break;
       case RoutingChange::What::Quic:
@@ -3740,8 +3751,8 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   using sovereign::tray::UiChip;
   const auto& r = v.routing;
   std::vector<UiChip> board;
-  if (r.russiaDirect) {
-    board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = sovereign::tray::kBucketDirect,
+  if (r.russia) {
+    board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = static_cast<int>(*r.russia),
                      .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"});
   }
   if (r.blockAds) {
@@ -3823,12 +3834,13 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
       continue;
     }
     if (chip.kind == UiChip::Kind::Russia) {
-      // Everything else is direct: so are these, nothing to say - but for a
-      // program sent through VPN or WARP (a browser): its Russian sites still
-      // go directly (routing.cpp: Russia before the programs), so it's shown.
-      chip.idle = std::none_of(r.rules.begin(), r.rules.end(), [](const sovereign::tray::RouteRule& rule) {
-        using Action = sovereign::tray::RouteRule::Action;
-        return !rule.processes.empty() && (rule.action == Action::Proxy || rule.action == Action::Warp);
+      // Where everything else goes: so do these, nothing to say - but for a
+      // program sent another way (a browser through VPN while the rest is
+      // direct): its Russian sites still go theirs (routing.cpp: Russia before
+      // the programs, after the blocked ones), so it's shown.
+      chip.idle = std::none_of(r.rules.begin(), r.rules.end(), [&](const sovereign::tray::RouteRule& rule) {
+        const int way = static_cast<int>(rule.action);
+        return !rule.processes.empty() && way != rest && way != sovereign::tray::kBucketBlock;
       });
     } else if (chip.kind == UiChip::Kind::Service) {
       // Through a country is an exception still; otherwise it goes where it would anyway.
@@ -4401,10 +4413,11 @@ UiContent ContentFrom(const View& v) {
                           L"твой канал напрямую, а не VPN."));
   c.checks.push_back(line(CheckId::Route, L"Не открывается сайт?",
                           L"Введи адрес — клиент откроет его и спросит ядро, как он пошёл: напрямую, через VPN, через "
-                          L"WARP или заблокирован, и по какому правилу."));  c.checksRunning = v.checksRunning;
+                          L"WARP или заблокирован, и по какому правилу."));
+  c.checksRunning = v.checksRunning;
   using sovereign::tray::RoutingSettings;
   const RoutingSettings& r = v.routing;
-  c.routing.russiaDirect = r.russiaDirect;
+  c.routing.russia = r.russia ? static_cast<int>(*r.russia) : -1;
   c.routing.blockAds = r.blockAds;
   c.routing.quic = static_cast<int>(r.quic);
   c.routing.quicBlocked = v.quicBlocked;
@@ -4885,8 +4898,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   POINT cursor{};
   GetCursorPos(&cursor);
   switch (command) {
-    case UiCommand::ToggleRussiaDirect: send(What::RussiaDirect, !r.russiaDirect); break;
-    case UiCommand::ToggleBlockAds: send(What::BlockAds, !r.blockAds); break;
     case UiCommand::ChooseQuic:
       if (const auto picked = PickFromMenu(owner, args.anchor, {L"Авто — по серверам", L"Блокировать", L"Пропускать"},
                                            static_cast<int>(r.quic))) {
@@ -5030,7 +5041,13 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       const int bucket = args.index;
       std::vector<std::wstring> items;
       std::vector<Add> adds;
-      if (bucket == sovereign::tray::kBucketDirect && !r.russiaDirect) {
+      // The Russian sites: any bucket while they have no way of their own, or
+      // another while their chip isn't shown (UiChip::idle).
+      const std::vector<sovereign::tray::UiChip> board = BoardOf(view);
+      const auto russia = std::find_if(board.begin(), board.end(), [](const sovereign::tray::UiChip& chip) {
+        return chip.kind == sovereign::tray::UiChip::Kind::Russia;
+      });
+      if (russia == board.end() || (russia->idle && russia->bucket != bucket)) {
         items.emplace_back(L"Российские сайты");
         adds.push_back(Add::Russia);
       }
@@ -5065,7 +5082,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
       switch (adds[*picked]) {
-        case Add::Russia: send(What::RussiaDirect, true); break;
+        case Add::Russia: send(What::Russia, false, bucket); break;
         case Add::Ads: send(What::BlockAds, true); break;
         case Add::Cookies: send(What::CookieWindows, true); break;
         case Add::Service: {
@@ -5157,9 +5174,22 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         break;
       }
       const UiChip& chip = board[static_cast<std::size_t>(args.index)];
+      // The buckets in the board's order.
+      static constexpr std::array kOrder = {sovereign::tray::kBucketProxy, sovereign::tray::kBucketDirect,
+                                            sovereign::tray::kBucketWarp, sovereign::tray::kBucketBlock};
+      static constexpr std::array<const wchar_t*, 4> kBuckets = {L"Через VPN", L"Напрямую", L"Через WARP", L"Блок"};
+
       if (chip.kind == UiChip::Kind::Russia) {
-        if (PickFromMenu(owner, cursor, {L"Убрать: пусть идут как всё остальное"}, -1)) {
-          send(What::RussiaDirect, false);
+        // Its way, as a rule's (WARP: turned on); or none of their own.
+        std::vector<std::wstring> items(kBuckets.begin(), kBuckets.end());
+        items.emplace_back();
+        items.emplace_back(L"Убрать: пусть идут как всё остальное");
+        const auto current = std::find(kOrder.begin(), kOrder.end(), chip.bucket);
+        const auto picked = PickFromMenu(owner, cursor, items, static_cast<int>(current - kOrder.begin()));
+        if (picked && *picked < kOrder.size()) {
+          send(What::Russia, false, kOrder.at(*picked));
+        } else if (picked && *picked == items.size() - 1) {
+          send(What::Russia, false, -1);
         }
         break;
       }
@@ -5201,10 +5231,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         break;
       }
-      // The buckets in the board's order.
-      static constexpr std::array kOrder = {sovereign::tray::kBucketProxy, sovereign::tray::kBucketDirect,
-                                            sovereign::tray::kBucketWarp, sovereign::tray::kBucketBlock};
-      static constexpr std::array<const wchar_t*, 4> kBuckets = {L"Через VPN", L"Напрямую", L"Через WARP", L"Блок"};
 
       if (chip.kind == UiChip::Kind::Rule) {
         // Its way; then what's in it typed anew, a program added - its sites
@@ -5475,8 +5501,6 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::CheckRouteText:
       StartChecks({sovereign::tray::CheckId::Route}, Narrow(args.text));
       break;
-    case UiCommand::ToggleRussiaDirect:
-    case UiCommand::ToggleBlockAds:
     case UiCommand::ChooseQuic:
     case UiCommand::SetHysteriaMbps:
     case UiCommand::SetRouteMode:

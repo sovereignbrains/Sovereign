@@ -40,7 +40,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
       if (arg == "--selective") {
         input.selective = true;
         input.routing.finalDirect = true;
-        input.routing.russiaDirect = false;
+        input.routing.russia.reset();
       } else if (arg == "--vpn" && i + 1 < argc) {
         input.vpnIp = argv[++i];
         if (i + 1 < argc && std::string_view(argv[i + 1]).size() == 2) {

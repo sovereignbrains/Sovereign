@@ -92,8 +92,8 @@ std::optional<RouteWay> ParseRouteAnswer(std::string_view json);
 // As the user reads it: "напрямую", "через WARP", "через VPN".
 std::string WayText(const RouteWay& way);
 
-// The sites "Проверить всё" sends a request to: a Russian one should go
-// directly (with «Российское напрямую»), the foreign ones through the VPN.
+// The sites "Проверить всё" sends a request to: a Russian one should go the
+// Russian sites' way (RoutingSettings::russia), the foreign ones through the VPN.
 struct RouteProbe {
   std::string_view host;
   std::string_view where;  // what it stands for, as the page names it
@@ -117,8 +117,9 @@ std::string SiteLine(const SiteWay& site, const RoutingSettings& routing);
 // Judged: a foreign site going directly with none of the user's rules
 // saying so fails (blocked sites won't open, the user's own address shows) -
 // unless only chosen things go through the VPN (`selective`): then that's
-// the mode; a Russian one through the VPN with «Российское напрямую» on, or
-// a site not seen, warns.
+// the mode; a Russian one going other than the Russian sites' way (blocked:
+// its name with no address, or no connection seen, is as meant), or a site
+// not seen, warns.
 CheckResult JudgeRoutes(const std::vector<SiteWay>& sites, const RoutingSettings& routing, bool selective = false);
 
 // Which of the client's rules - the user's, or Russia's zones - names `host`

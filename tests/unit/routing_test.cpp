@@ -1,5 +1,5 @@
 // The client's routing and DNS (src/tray/routing.h) - the own frame, the
-// rules first in whatever config runs, Russia directly. With `--check
+// rules first in whatever config runs, Russia its way. With `--check
 // <sing-box.exe>` the configs go through the pinned sing-box's `check`, the
 // lists compiled by it from small sources (ctest routing-configs-singbox-check).
 
@@ -81,14 +81,14 @@ std::vector<json> Asked(const json& dns) {
 
 void TestJsonAndParse() {
   RoutingSettings s;
-  s.russiaDirect = false;
+  s.russia.reset();
   s.remoteDns = RoutingSettings::RemoteDns::Quad9;
   s.localDns = RoutingSettings::LocalDns::System;
   s.rules.push_back(*ParseRule("qwen.ai ~tracker 10.0.0.0/8 App.exe", RouteRule::Action::Block));
   const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
   // A tray.json from before 0.4.29 with "source": "profile": read, the field ignored.
   CHECK(RoutingFromJson(json{{"source", "profile"}, {"sourceProfile", "p1"}, {"blockAds", false}}).blockAds == false);
-  CHECK(!back.russiaDirect && back.blockAds && back.remoteDns == RoutingSettings::RemoteDns::Quad9);
+  CHECK(!back.russia && back.blockAds && back.remoteDns == RoutingSettings::RemoteDns::Quad9);
   CHECK(back.localDns == RoutingSettings::LocalDns::System);
   // Auto by default, and for a tray.json that says nothing of it.
   CHECK(RoutingSettings{}.localDns == RoutingSettings::LocalDns::Auto &&
@@ -96,7 +96,8 @@ void TestJsonAndParse() {
   CHECK(RoutingFromJson(json::object()).localDns == RoutingSettings::LocalDns::Auto);
   CHECK(back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Block);
   CHECK(!back.rules.empty() && back.rules[0].keywords == std::vector<std::string>({"tracker"}));
-  CHECK(RoutingFromJson(json::parse(R"({"russiaDirect":"yes","rules":[5,{"domains":[1]}]})")).russiaDirect);
+  CHECK(RoutingFromJson(json::parse(R"({"russiaDirect":"yes","rules":[5,{"domains":[1]}]})")).russia ==
+        RouteRule::Action::Direct);
   // A program with a space in its name: whole when picked, in quotes when
   // typed, and whole back from tray.json (it came back split before 0.4.68).
   const auto ssh = ProgramRule("SSH Client.exe", RouteRule::Action::Proxy);
@@ -930,6 +931,101 @@ void TestWarp() {
   CHECK(back.warp && !back.warpViaProxy && back.warpAccount.has_value() &&
         back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Warp);
 }
+
+// The Russian sites' way (23.10.2026: through WARP or blocked, not only
+// directly): their zones, names' and addresses' lists end the same; their
+// names resolved here directly, given no address blocked, by the config's DNS
+// through the proxy or WARP.
+void TestRussiaWays() {
+  WarpAccount account;
+  account.privateKey = "YJ9Lx3UFbVd6R+1QpYx0K5nV5+OYn5cB4m3Hk4qH0lI=";
+  account.peerKey = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=";
+  account.address4 = "172.16.0.2";
+  account.address6 = "2606:4700:110:87bf:c0a0:2c80:262b:5924";
+  account.reserved = {0x21, 0xEE, 0x10};
+  const std::map<std::string, std::string> lists = {{"sov-geosite-ru", "C:/lists/ru.srs"},
+                                                    {"sov-geosite-gov-ru", "C:/lists/gov.srs"},
+                                                    {"sov-geoip-ru", "C:/lists/ip.srs"}};
+  // Each Russian route rule's ending ("direct", "reject"...), and its DNS rules'.
+  const auto russian = [](const json& rule) {
+    return (rule.contains("domain_suffix") && rule["domain_suffix"].dump().find("xn--p1ai") != std::string::npos) ||
+           rule.value("rule_set", json()) == json::array({"sov-geosite-ru", "sov-geosite-gov-ru"}) ||
+           rule.value("rule_set", json()) == "sov-geoip-ru";
+  };
+  struct Ways {
+    std::vector<std::string> route;
+    std::vector<std::string> dns;  // the server asked; "none": no address given
+    bool warp = false;             // the endpoint there
+    std::string text;
+  };
+  const auto ways = [&](const RoutingSettings& s, const std::map<std::string, std::string>& files) {
+    const auto combined = CombineConfigs({{"ключи", Keys(), {}}}, OwnFrame(s));
+    Ways out;
+    out.text = ApplyRouting(combined.config.value_or("{}"), s, files);
+    const json c = json::parse(out.text);
+    for (const json& r : c["route"]["rules"]) {
+      if (russian(r)) {
+        out.route.push_back(r.value("outbound", r.value("action", "")));
+      }
+    }
+    for (const json& r : c["dns"]["rules"]) {
+      // The answers' own rules (AnswerTyposAtOnce: respond, match_response) left out.
+      if (!russian(r) || r.contains("match_response") || r.value("action", "") == "respond") {
+        continue;
+      }
+      out.dns.push_back(r.value("action", "") == "predefined" ? "none" : r.value("server", ""));
+    }
+    out.dns.erase(std::unique(out.dns.begin(), out.dns.end()), out.dns.end());
+    out.warp = c.contains("endpoints") && !c["endpoints"].empty();
+    return out;
+  };
+  using Names = std::vector<std::string>;
+
+  RoutingSettings s;
+  const Ways direct = ways(s, lists);
+  CHECK(direct.route == Names({"direct", "direct", "direct"}) && direct.dns == Names({"sov-local"}) && !direct.warp);
+
+  s.russia = RouteRule::Action::Proxy;
+  const Ways proxy = ways(s, lists);
+  CHECK(proxy.route == Names({"proxy", "proxy", "proxy"}) && proxy.dns.empty());
+
+  s.russia = RouteRule::Action::Block;
+  const Ways block = ways(s, lists);
+  CHECK(block.route == Names({"reject", "reject", "reject"}) && block.dns == Names({"none"}));
+  Checked().emplace_back("russia-block", ways(s, Files()).text);
+
+  // Through WARP while it's off: left out, as a rule is - where everything else goes.
+  s.russia = RouteRule::Action::Warp;
+  s.warpAccount = account;
+  const Ways waiting = ways(s, lists);
+  CHECK(waiting.route.empty() && waiting.dns.empty() && !waiting.warp);
+  // On: the endpoint for them alone, no rule of the user's needed.
+  s.warp = true;
+  CHECK(WarpReady(s));
+  const Ways warp = ways(s, lists);
+  CHECK(warp.route == Names({"warp", "warp", "warp"}) && warp.dns.empty() && warp.warp);
+  Checked().emplace_back("russia-warp", ways(s, Files()).text);
+
+  // None of their own: no rules, no lists of theirs downloaded.
+  s.russia.reset();
+  const Ways none = ways(s, lists);
+  CHECK(none.route.empty() && none.dns.empty() && !none.warp);
+  const std::vector<RuleSetSource> needed = NeededRuleSets(s);
+  CHECK(std::none_of(needed.begin(), needed.end(),
+                     [](const RuleSetSource& set) { return set.tag.find("-ru") != std::string::npos; }));
+
+  // tray.json: each way back as it was; before 0.5.36 "russiaDirect".
+  for (const auto way : {RouteRule::Action::Direct, RouteRule::Action::Proxy, RouteRule::Action::Block,
+                         RouteRule::Action::Warp}) {
+    s.russia = way;
+    CHECK(RoutingFromJson(json::parse(RoutingToJson(s).dump())).russia == way);
+  }
+  s.russia.reset();
+  CHECK(!RoutingFromJson(json::parse(RoutingToJson(s).dump())).russia);
+  CHECK(!RoutingFromJson(json{{"russiaDirect", false}}).russia);
+  CHECK(RoutingFromJson(json{{"russiaDirect", true}}).russia == RouteRule::Action::Direct);
+  CHECK(RoutingFromJson(json{{"russia", "nonsense"}}).russia == RouteRule::Action::Direct);
+}
 // The local DNS giving way when it stops answering: in what order, and what
 // in the core's log says it doesn't (07.10.2026: 8.8.8.8:443 stopped
 // answering from a home ISP and the box resolved nothing).
@@ -1087,6 +1183,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     TestServiceApps();
     TestBoard();
     TestWarp();
+    TestRussiaWays();
     TestNaiveInsecure();
     TestLocalDnsFallback();
     TestCustomDns();
