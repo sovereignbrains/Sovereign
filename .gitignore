@@ -73,6 +73,9 @@ Testing/
 # fetched on demand, not committed
 /vendor/
 
+# the font scripts' trial output (tools/font/*.py write there; the font itself is assets/fonts)
+/tools/font/out/
+
 # go build -buildmode=c-shared side output when built manually in-tree
 # (CMake builds it out-of-tree into build/, see src/service/CMakeLists.txt)
 /gocore/sovereign-gocore.h
