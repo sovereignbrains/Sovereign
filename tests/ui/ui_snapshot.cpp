@@ -349,6 +349,30 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(hidden, UiPage::Overview, logs, 400, 620, 96,
                                               dir + L"\\overview-ip-hidden.png");
   });
+  // Tips pointed at: a title bar key's (under it, the window ends above),
+  // the "+" on the card, the switch, the server, a "?"'s paragraphs, at 150 % too.
+  const std::array<std::pair<const wchar_t*, const wchar_t*>, 4> tips = {{
+      {L"Проверить подключение", L"tip-tools"},
+      {L"Добавить: ссылка", L"tip-add"},
+      {L"Отключить VPN", L"tip-switch"},
+      {L"Выбрать сервер", L"tip-server"},
+  }};
+  for (const auto& [tip, name] : tips) {
+    sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\" + name + L".png", tip);
+  }
+  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\tip-tools-150.png",
+                                            L"Проверить подключение");
+  variant([&](UiContent& routed) {
+    routed.routing.warp = true;
+    routed.routing.warpRegistered = true;
+    routed.routing.warpState = L"через «4G | Whitelist №1»";
+    routed.routing.board = SampleBoard();
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 900, 96, dir + L"\\tip-hint.png",
+                                              L"WARP — бесплатный");
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 900, 96, dir + L"\\tip-chip.png",
+                                              L"Перенести");
+  });
 
   variant([&](UiContent& merged) {
     merged.profiles[0].edited = true;

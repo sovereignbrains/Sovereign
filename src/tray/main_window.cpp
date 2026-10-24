@@ -120,7 +120,7 @@ constexpr UINT kMenuCopyValue = 115;
 constexpr UINT kMenuRefreshDirect = 116;
 constexpr UINT kMenuHysteriaSpeed = 120;  // + its index in kHysteriaSpeeds
 
-// An icon button's name shows when it's pointed at this long; a "?" at once.
+// A tip (TipText) shows when its item is pointed at this long; a "?"'s at once.
 constexpr UINT_PTR kTipTimer = 1;
 constexpr UINT kTipDelayMs = 500;
 // The connect cube's motion (cube.h): frames while it moves, a turn into a
@@ -228,6 +228,7 @@ struct Item {
   std::wstring text;
   std::wstring detail;
   std::wstring text2;  // a third line where a kind has one (CheckRow: what the result means)
+  std::wstring tip;    // what's in it and what a click does, where its label doesn't say: shown pointed at a while
   std::string logo;    // a Tag's service logo (icons.h ServiceLogo): the service's id; a ValueRow's, before its title
   std::string detailLogo;  // a ValueRow's, before its value: a DNS provider's
   ItemAction action = ItemAction::None;
@@ -242,6 +243,15 @@ struct Item {
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
   bool chrome = false;  // an IconButton of the title bar (DrawChrome): its pill inset from the bar's edges
 };
+
+// What an item's tip says: a "?"'s text, its own tip, an icon button's name;
+// empty: it has none.
+std::wstring_view TipText(const Item& it) {
+  if (!it.tip.empty()) {
+    return it.tip;
+  }
+  return it.kind == Kind::Hint || it.kind == Kind::IconButton ? std::wstring_view(it.text) : std::wstring_view();
+}
 
 struct Layout {
   std::vector<Item> items;
@@ -476,7 +486,7 @@ struct Interaction {
   int pressed = -1;
   int focus = -1;
   bool focusVisible = false;
-  int tip = -1;  // the item whose tip shows: a "?" pointed at, an icon button pointed at a while
+  int tip = -1;  // the item whose tip shows: a "?" pointed at, anything else with one (TipText) pointed at a while
   std::optional<CubePose> cube;  // the switch mid-motion (cube.h); none: at rest in its state's pose
 };
 
@@ -512,6 +522,8 @@ Item ReportButton(const UiContent& c, bool support, D2D1_RECT_F rect, int index)
                                        : L"Отчёт для поддержки",
                        kGlyphDownload, UiCommand::SupportReport, index);
   i.enabled = !c.reportPending;
+  i.tip = support ? L"Проверить серверы, сохранить отчёт, открыть поддержку"
+                  : L"Проверить серверы и сохранить отчёт для поддержки";
   return i;
 }
 
@@ -1456,16 +1468,21 @@ class Painter {
         } else {
           // A click picks another: a chevron after it, like a value row's.
           const float w = std::min(TextWidth(b.note + L" ›", caption_.get()) + 4, at.right - at.left);
-          l.items.push_back(CommandItem(Kind::Muted, {at.left, at.top, at.left + w, at.bottom}, b.note + L" ›",
-                                        nullptr, b.noteCommand));
+          Item note = CommandItem(Kind::Muted, {at.left, at.top, at.left + w, at.bottom}, b.note + L" ›", nullptr,
+                                  b.noteCommand);
+          note.tip = L"Как идёт WARP: поверх VPN или напрямую";
+          l.items.push_back(std::move(note));
         }
       }
-      l.items.push_back(CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd,
-                                    UiCommand::BoardAdd, b.id));
+      Item add = CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd,
+                             UiCommand::BoardAdd, b.id);
+      add.tip = std::format(L"Добавить в «{}»: сервис, программу или сайт", b.name);
+      l.items.push_back(std::move(add));
       for (const auto& [n, at] : placed) {
         const UiChip& chip = r.board[n];
         const D2D1_RECT_F place = {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom};
         Item tag = CommandItem(Kind::Tag, place, chip.text, nullptr, UiCommand::ChipMenu, static_cast<int>(n));
+        tag.tip = L"Перенести в другой путь или убрать";
         tag.detail = chip.detail;
         tag.text2 = chip.icon;
         tag.logo = chip.logo;
@@ -1507,23 +1524,30 @@ class Painter {
     // it); the dash beside it only puts the window away to the tray.
     Item close = chrome(CommandItem(Kind::IconButton, {right, 0, width, kCaption}, L"Закрыть клиент (подключение останется)",
                                  kGlyphClose, UiCommand::Exit));
+    close.tip = L"Закрыть клиент. VPN останется: его держит служба";
     Item hide = chrome(Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Свернуть в трей", kGlyphMinimize));
     hide.action = ItemAction::Hide;
+    hide.tip = L"Убрать окно в трей. VPN работает дальше";
     right -= 40;
     std::vector<Item> keys;
     if (page == UiPage::Overview) {
       Item settings = chrome(Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Настройки", kGlyphSettings));
       settings.action = ItemAction::Page;
       settings.index = static_cast<int>(UiPage::Settings);
+      settings.tip = L"Настройки: маршруты, Kill switch, DNS, автозапуск";
       keys.push_back(std::move(settings));
       right -= 40;
-      keys.push_back(chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
-                                     L"Инструменты: проверка, журнал", kGlyphTools, UiCommand::ToolsMenu)));
+      Item tools = chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
+                                      L"Инструменты: проверка, журнал", kGlyphTools, UiCommand::ToolsMenu));
+      tools.tip = L"Проверить подключение, журнал, сообщить о проблеме";
+      keys.push_back(std::move(tools));
       right -= 40;
     }
     if (page == UiPage::Subscription) {
-      keys.push_back(chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
-                                     L"Добавить: из буфера, QR-код, файл", kGlyphAdd, UiCommand::AddMenu)));
+      Item add = chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
+                                    L"Добавить: из буфера, QR-код, файл", kGlyphAdd, UiCommand::AddMenu));
+      add.tip = L"Добавить: ссылка из буфера, QR-код с экрана, файл";
+      keys.push_back(std::move(add));
       right -= 40;
     }
     Item name = Make(Kind::AppTitle, {12, 0, right - 14, kCaption}, L"Sovereign");
@@ -1617,8 +1641,10 @@ class Painter {
                                     offer ? L"Добавить " + c.clipboardOffer : std::wstring(L"Вставить из буфера"),
                                     kGlyphPaste, UiCommand::PasteSubscription));
       top += kButton + 8;
-      l.items.push_back(CommandItem(Kind::Button, {x0 + 16, top, mid - 4, top + kButton}, L"QR-код с экрана",
-                                    kGlyphQrCode, UiCommand::ScanScreen));
+      Item qr = CommandItem(Kind::Button, {x0 + 16, top, mid - 4, top + kButton}, L"QR-код с экрана", kGlyphQrCode,
+                            UiCommand::ScanScreen);
+      qr.tip = L"Найти на экране QR-код подписки и добавить её";
+      l.items.push_back(std::move(qr));
       l.items.push_back(
           CommandItem(Kind::Button, {mid + 4, top, x1 - 16, top + kButton}, L"Из файла…", kGlyphFile, UiCommand::ImportFile));
       y += h + kGap;
@@ -1650,6 +1676,7 @@ class Painter {
     const D2D1_RECT_F cube{mid - size / 2, top, mid + size / 2, top + size};
     Item power = CommandItem(Kind::Power, cube, {}, kGlyphPower, UiCommand::Toggle);
     power.checked = c.on;
+    power.tip = c.on ? L"Отключить VPN" : L"Подключить VPN";
     l.items.push_back(std::move(power));
     l.glow = cube;
     return ServerCard(l, c, x0, x1, serverTop);
@@ -1690,6 +1717,7 @@ class Painter {
     card.action = ItemAction::Page;
     card.index = static_cast<int>(UiPage::Subscription);
     card.glass = true;
+    card.tip = L"Конфигурации: обновить, выключить отдельные серверы";
     l.items.push_back(std::move(card));
 
     // "+" on it: another configuration (the clipboard, a QR code, a file) -
@@ -1697,6 +1725,7 @@ class Painter {
     Item add = CommandItem(Kind::IconButton, {right - 32, y + 8, right, y + 40}, L"Добавить: из буфера, QR-код, файл",
                            kGlyphAdd, UiCommand::AddMenu);
     add.key = true;
+    add.tip = L"Добавить: ссылка из буфера, QR-код с экрана, файл";
     l.items.push_back(std::move(add));
 
     float top = y + 12;
@@ -1720,6 +1749,7 @@ class Painter {
           const float w = std::min(TextWidth(paid, caption_.get()) + 4, right - left);
           Item item = CommandItem(Kind::Muted, {left, line, left + w, line + 20}, paid, nullptr, UiCommand::PaidMenu, index);
           item.warn = p.daysLeft <= 3;
+          item.tip = L"Оплатил — продлить на месяц или указать дату";
           l.items.push_back(std::move(item));
         } else {
           Item item = Make(Kind::Muted, {left, line, right, line + 20}, paid);
@@ -1813,6 +1843,7 @@ class Painter {
     }
     card.text = std::move(name);
     card.detail = detail.empty() ? std::wstring(L"нажми, чтобы выбрать сервер") : std::move(detail);
+    card.tip = L"Выбрать сервер; авто сам берёт самый быстрый";
     l.items.push_back(std::move(card));
     return y + h;
   }
@@ -1849,6 +1880,7 @@ class Painter {
     Item test = CommandItem(Kind::IconButton, {x1 - 36, titleTop, x1, titleTop + 36}, L"Проверить задержку",
                             kGlyphStopwatch, UiCommand::TestDelays);
     test.enabled = c.canTestDelays && !c.delaysTesting;
+    test.tip = L"Замерить задержку до всех серверов";
     l.items.push_back(std::move(test));
     if (c.protocols.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
@@ -1963,6 +1995,7 @@ class Painter {
         row.detail = p.detail;
         row.checked = p.enabled;
         row.warn = p.failed;
+        row.tip = L"Открыть: имя, обновление, серверы. Правый клик — меню";
         l.items.push_back(std::move(row));
         Item toggle = CommandItem(Kind::Toggle, {x1 - 68, top + 3, x1 - 4, top + kProfileRow - 3},
                                   p.enabled ? L"Выключить" : L"Включить", nullptr, UiCommand::ToggleProfile,
@@ -2036,6 +2069,7 @@ class Painter {
       if (it->kind == Kind::Title) {  // a click on the name renames it
         it->action = ItemAction::EditName;
         it->index = index;
+        it->tip = L"Нажми, чтобы переименовать";
         break;
       }
     }
@@ -2097,8 +2131,10 @@ class Painter {
       if (!p.usage.empty()) {
         y = Paragraph(l, Kind::Caption, p.usage, x0 + 4, x1, y) + kGap;
       }
-      l.items.push_back(CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Обновить", kGlyphRefresh,
-                                    UiCommand::RefreshProfile, index));
+      Item refresh =
+          CommandItem(Kind::Button, {x0, y, mid - 4, y + kButton}, L"Обновить", kGlyphRefresh, UiCommand::RefreshProfile, index);
+      refresh.tip = L"Скачать подписку заново сейчас";
+      l.items.push_back(std::move(refresh));
       l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Копировать ссылку", kGlyphCopy,
                                     UiCommand::CopyProfileLink, index));
       y += kButton + 8;
@@ -2107,8 +2143,10 @@ class Painter {
       l.items.push_back(ReportButton(c, p.support, {x0, y, x1, y + kButton}, index));
       y += kButton + 8;
       if (p.edited || p.waiting) {
-        l.items.push_back(CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo,
-                                      UiCommand::RevertConfig, index));
+        Item revert =
+            CommandItem(Kind::Button, {x0, y, x1, y + kButton}, L"Как в подписке", kGlyphUndo, UiCommand::RevertConfig, index);
+        revert.tip = L"Вернуть конфиг из подписки; твой останется в истории";
+        l.items.push_back(std::move(revert));
         y += kButton + 8;
       }
     }
@@ -2118,8 +2156,10 @@ class Painter {
     rename.index = index;
     l.items.push_back(std::move(rename));
     if (p.subscription) {
-      l.items.push_back(CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Период…", kGlyphClock,
-                                    UiCommand::ChooseRefreshPeriod, index));
+      Item period =
+          CommandItem(Kind::Button, {mid + 4, y, x1, y + kButton}, L"Период…", kGlyphClock, UiCommand::ChooseRefreshPeriod, index);
+      period.tip = L"Как часто обновлять подписку";
+      l.items.push_back(std::move(period));
     }
     y += kButton + kGap + 4;
 
@@ -2387,6 +2427,8 @@ class Painter {
                              i == kCheckSpeed ? kGlyphSpeed : kGlyphRoute,
                              i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute);
       run.enabled = !c.checksRunning;
+      run.tip = i == kCheckSpeed ? L"Замерить скорость приёма и отдачи через VPN"
+                                 : L"Ввести сайт и узнать, каким путём он пойдёт";
       l.items.push_back(std::move(run));
     }
   }
@@ -2493,6 +2535,7 @@ class Painter {
     float right = x1;
     Item save = Make(Kind::IconButton, {right - 36, titleTop, right, titleTop + 36}, L"Сохранить в файл", kGlyphSave);
     save.action = ItemAction::SaveLogs;
+    save.tip = L"Сохранить журнал в файл";
     l.items.push_back(std::move(save));
     right -= 40;
     const bool waiting = s.paused && s.held > 0;
@@ -2502,11 +2545,16 @@ class Painter {
                       s.paused ? kGlyphPlay : kGlyphPause);
     pause.action = ItemAction::PauseLogs;
     pause.checked = s.paused;
+    pause.tip = waiting    ? std::format(L"Новых строк: {}. Показать их и продолжить", s.held)
+                : s.paused ? L"Продолжить: новые строки снова пойдут"
+                           : L"Пауза: новые строки подождут, пока читаешь";
     l.items.push_back(std::move(pause));
     right -= pauseWidth + 4;
-    l.items.push_back(CommandItem(Kind::Button, {right - 124, titleTop + 1, right, titleTop + 1 + kButton},
-                                  c.logLevel.empty() ? std::wstring(L"запись: авто") : L"запись: " + c.logLevel,
-                                  kGlyphFilter, UiCommand::ChooseLogLevel));
+    Item writes = CommandItem(Kind::Button, {right - 124, titleTop + 1, right, titleTop + 1 + kButton},
+                              c.logLevel.empty() ? std::wstring(L"запись: авто") : L"запись: " + c.logLevel,
+                              kGlyphFilter, UiCommand::ChooseLogLevel);
+    writes.tip = L"Насколько подробно ядро пишет журнал";
+    l.items.push_back(std::move(writes));
 
     // Which levels are shown, with how many lines each.
     const float chip = (x1 - x0 - 3 * 6) / kLevelGroups;
@@ -2714,8 +2762,10 @@ class Painter {
     l.items.push_back(Make(Kind::Muted, {x0 + 4, y, x1 - 88, y + 20}, L"Sovereign " + c.version));
     l.items.push_back(Make(Kind::Muted, {x0 + 4, y + 20, x1 - 88, y + 40},
                            c.update == UiUpdate::Downloading ? std::wstring(L"скачиваю обновление…") : UpdateStatus(c)));
-    l.items.push_back(
-        CommandItem(Kind::IconButton, {x1 - 80, y + 2, x1 - 44, y + 38}, L"Папка данных", kGlyphFolder, UiCommand::OpenFolder));
+    Item folder =
+        CommandItem(Kind::IconButton, {x1 - 80, y + 2, x1 - 44, y + 38}, L"Папка данных", kGlyphFolder, UiCommand::OpenFolder);
+    folder.tip = L"Открыть папку данных: настройки, конфиги, их история";
+    l.items.push_back(std::move(folder));
     Item check = CommandItem(Kind::IconButton, {x1 - 40, y + 2, x1 - 4, y + 38}, L"Проверить обновления",
                              kGlyphRefresh, UiCommand::CheckUpdate);
     check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
@@ -2996,31 +3046,63 @@ class Painter {
     }
   }
 
-  // A tip over everything: under the item it's about (over it if there's no
-  // room below), inside the window.
+  // A tip over everything, as AIControls has it (24.10.2026, he: "аккуратненько,
+  // как в айконтролс"): a dark box hugging its words, a nose pointing at the
+  // middle of what it's about - over it, under it where the window ends
+  // above (the title bar's keys), inside the window. A "?"'s paragraphs wrap
+  // and get more room round them.
   void DrawTip(const Canvas& k, const Item& it, D2D1_SIZE_F size) const {
-    const std::wstring& text = it.text;
+    const std::wstring_view text = TipText(it);
     if (text.empty()) {
       return;
     }
-    const float pad = 10;
-    const float maxWidth = std::min(300.0f, size.width - 24 - 2 * pad);
+    constexpr float kNose = 6;     // the triangle's height, and half its base
+    constexpr float kTipGap = 6;   // between its point and the item
+    constexpr float kTipRound = 6;
+    constexpr float kEdge = 6;     // the window's edge it keeps off
+    // A "?"'s paragraphs narrow enough to read; a key's line rather unbroken.
+    const float maxWidth = std::min(it.kind == Kind::Hint ? 300.0f : 360.0f, size.width - 2 * kEdge - 20);
     const auto m = Metrics(text, tip_.get(), maxWidth, 10000);
     if (!m) {
       return;
     }
-    const float w = std::ceil(m->width) + 2 * pad;
-    const float h = std::ceil(m->height) + 2 * pad;
-    const float left = std::clamp(it.rect.left - 12, 12.0f, std::max(12.0f, size.width - 12 - w));
-    float top = it.rect.bottom + 6;
-    if (top + h > size.height - 8) {
-      top = std::max(8.0f, it.rect.top - 6 - h);
+    const bool wrapped = m->lineCount > 1;
+    const float padX = wrapped ? 10.0f : 8.0f;
+    const float padY = wrapped ? 8.0f : 4.0f;
+    const float textWidth = std::min(maxWidth, std::ceil(m->widthIncludingTrailingWhitespace) + 1);
+    const float w = textWidth + 2 * padX;
+    const float h = std::ceil(m->height) + 2 * padY;
+
+    // What it points at: a key's pill, a title's words - not the cell, the row.
+    D2D1_RECT_F at = it.chrome ? ChromePill(it.rect) : it.rect;
+    if (it.kind == Kind::Title) {
+      at.right = std::min(at.right, at.left + TextWidth(it.text, title_.get()));
     }
-    const D2D1_RECT_F box{left, top, left + w, top + h};
-    k.Round(Inflate(box, 1), kRadius, Rgb(0, 0, 0, 0.35f));  // a hint of a shadow
-    k.Round(box, kRadius, Rgb(46, 50, 58));
-    k.Outline(box, kRadius, Rgb(255, 255, 255, 0.12f));
-    k.Text(text, tip_.get(), {left + pad, top + pad, left + pad + maxWidth, top + h - pad},
+    const float middle = (at.left + at.right) / 2;
+    const float left = std::clamp(middle - w / 2, kEdge, std::max(kEdge, size.width - kEdge - w));
+    const float above = at.top - kTipGap - kNose - kEdge;
+    const float under = size.height - kEdge - (at.bottom + kTipGap + kNose);
+    const bool below = h > above && (h <= under || under > above);
+    const float top = below ? std::min(at.bottom + kTipGap + kNose, std::max(kEdge, size.height - kEdge - h))
+                            : std::max(kEdge, at.top - kTipGap - kNose - h);
+
+    const D2D1_COLOR_F fill = Rgb(44, 44, 49);
+    k.Round({left, top, left + w, top + h}, kTipRound, fill);
+    const float noseX = std::clamp(middle, left + kTipRound + kNose, left + w - kTipRound - kNose);
+    const float baseY = below ? top + 0.5f : top + h - 0.5f;  // a hair into the box: no seam
+    const float pointY = below ? top - kNose : top + h + kNose;
+    wil::com_ptr<ID2D1PathGeometry> nose;
+    wil::com_ptr<ID2D1GeometrySink> sink;
+    if (SUCCEEDED(d2d_->CreatePathGeometry(nose.put())) && SUCCEEDED(nose->Open(sink.put()))) {
+      sink->BeginFigure({noseX - kNose, baseY}, D2D1_FIGURE_BEGIN_FILLED);
+      sink->AddLine({noseX, pointY});
+      sink->AddLine({noseX + kNose, baseY});
+      sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+      if (SUCCEEDED(sink->Close())) {
+        k.t->FillGeometry(nose.get(), k.Color(fill));
+      }
+    }
+    k.Text(text, tip_.get(), {left + padX, top + padY, left + padX + textWidth, top + h - padY + 2},
            FromColorRef(ui::kPrimaryText));
   }
 
@@ -3776,19 +3858,25 @@ struct MainWindow::Impl {
            layout.items[static_cast<std::size_t>(index)].kind == kind;
   }
 
-  // Shows its words after a while: an icon button its name.
-  bool HasTip(int index) const { return IsKind(index, Kind::IconButton); }
+  // Shows its words after a while: an icon button its name, anything with a
+  // tip of its own that. A "?" isn't one: its shows at once.
+  bool HasTip(int index) const {
+    return index >= 0 && static_cast<std::size_t>(index) < layout.items.size() && !IsKind(index, Kind::Hint) &&
+           !TipText(layout.items[static_cast<std::size_t>(index)]).empty();
+  }
 
-  // The pointer is over `h` now: a "?" shows its tip, an icon button starts
-  // the wait for its name.
+  // The pointer is over `h` now: a "?" shows its tip, anything else with one
+  // (HasTip) starts the wait for it - none if it comes straight from another
+  // tip (along the title bar's keys: the names one after another).
   void Hover(int h) {
     if (h == in.hover) {
       return;
     }
+    const bool tipShown = in.tip >= 0 && !IsKind(in.tip, Kind::Hint);
     in.hover = h;
     KillTimer(hwnd, kTipTimer);
-    in.tip = IsKind(h, Kind::Hint) ? h : -1;
-    if (HasTip(h)) {
+    in.tip = IsKind(h, Kind::Hint) || (tipShown && HasTip(h)) ? h : -1;
+    if (in.tip < 0 && HasTip(h)) {
       SetTimer(hwnd, kTipTimer, kTipDelayMs, nullptr);
     }
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -4687,6 +4775,12 @@ struct MainWindow::Impl {
         SetFocus(w);
         SetCapture(w);
         in.focusVisible = false;
+        // A press puts a tip away (a "?"'s stays: it's what it's for), and it
+        // stays away until the pointer comes to something else.
+        KillTimer(w, kTipTimer);
+        if (!IsKind(in.tip, Kind::Hint)) {
+          in.tip = -1;
+        }
         if (question) {
           in.pressed = HitAt(at);  // its buttons only: the log under it keeps its lines
           InvalidateRect(w, nullptr, FALSE);
@@ -5042,7 +5136,7 @@ std::wstring DescribeMainWindowLayout(const UiContent& content, UiPage page, flo
 }
 
 void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::vector<std::wstring>& logs, UINT width,
-                              UINT height, float dpi, const std::wstring& pngPath) {
+                              UINT height, float dpi, const std::wstring& pngPath, std::wstring_view tipFor) {
   const Painter painter;
   IWICImagingFactory* wic = painter.Wic();
   THROW_HR_IF_NULL(E_NOINTERFACE, wic);
@@ -5080,8 +5174,16 @@ void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::
       StepLive(live, now, content.display == Display::On, 1.0f / 30, *layout.glow);
     }
   }
+  Interaction in;
+  if (!tipFor.empty()) {
+    const auto it = std::find_if(layout.items.begin(), layout.items.end(),
+                                 [&](const Item& item) { return TipText(item).starts_with(tipFor); });
+    THROW_HR_IF(E_INVALIDARG, it == layout.items.end());
+    in.tip = static_cast<int>(it - layout.items.begin());
+    in.hover = in.tip;
+  }
   target->BeginDraw();
-  painter.Draw(target.get(), layout, content, Interaction{}, log, &live);
+  painter.Draw(target.get(), layout, content, in, log, &live);
   THROW_IF_FAILED(target->EndDraw());
 
   wil::com_ptr<IWICStream> stream;

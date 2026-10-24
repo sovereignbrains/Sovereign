@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ui_content.h"
@@ -70,10 +71,12 @@ class MainWindow {
 
 // Draws `page` with `content` into a PNG of `width` x `height` pixels at
 // `dpi`, with no window - for tests/ui's snapshots, which let a change to the
-// window be looked at without a desktop. `logs` are the log page's lines.
-// Throws on failure.
+// window be looked at without a desktop. `logs` are the log page's lines;
+// `tipFor`, if any: the tip shown is the first item's whose tip starts so.
+// Throws on failure, and if no tip starts so.
 void RenderMainWindowSnapshot(const UiContent& content, UiPage page, const std::vector<std::wstring>& logs,
-                              UINT width, UINT height, float dpi, const std::wstring& pngPath);
+                              UINT width, UINT height, float dpi, const std::wstring& pngPath,
+                              std::wstring_view tipFor = {});
 
 // page's layout in a client area of width x height DIPs as text, an item
 // a line, marked where text needs more room than it has or clickable items
