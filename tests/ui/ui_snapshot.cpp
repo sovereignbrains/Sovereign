@@ -537,9 +537,10 @@ int EditTest(HINSTANCE instance) {
   // page's back arrow. Before, the count left them out: Enter landed on "+"
   // and its menu waited for a click (CI failed from dc9e160 on, a desktop run
   // hung). The configurations' list has "+", "hide" and the cross there, a
-  // configuration's page "hide" and the cross (MainWindow's Caption).
-  constexpr int kListCaption = 3;
-  constexpr int kProfileCaption = 2;
+  // configuration's page "hide" and the cross (MainWindow's Caption); both
+  // the new version's key before them, the sample having one found.
+  constexpr int kListCaption = 4;
+  constexpr int kProfileCaption = 3;
   const auto tabs = [&](int n) {
     for (int i = 0; i < n; ++i) {
       key(VK_TAB);
