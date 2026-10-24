@@ -19,7 +19,8 @@
 namespace sovereign::tray {
 
 // Keeps Sovereign up to date from this repository's GitHub releases: checks a
-// minute after start and then every 12 hours (or when asked), and on request
+// minute after start and then every 12 hours (unless told to look only when
+// asked - SetAutomatic), or when asked, and on request
 // downloads the new installer, checks it against the release's .sha256 and
 // leaves it ready to run. Running it is the UI thread's job (LaunchInstaller):
 // it needs the user's consent through UAC. All network work happens on the
@@ -36,7 +37,7 @@ class Updater {
   };
 
   // `changed` runs on the updater's thread after every state change.
-  Updater(Version current, std::wstring userAgent, std::function<void()> changed);
+  Updater(Version current, std::wstring userAgent, bool automatic, std::function<void()> changed);
   ~Updater();
   Updater(const Updater&) = delete;
   Updater& operator=(const Updater&) = delete;
@@ -44,6 +45,9 @@ class Updater {
   Updater& operator=(Updater&&) = delete;
 
   void Check();
+  // Checks on its own (every 12 hours) or only when asked. Turned back on
+  // with a check overdue, it checks now.
+  void SetAutomatic(bool automatic);
   // Downloads the available release; nothing if none is known.
   void Install();
   // The user declined UAC or the installer didn't start: back to Available.
@@ -61,6 +65,8 @@ class Updater {
   const std::function<void()> changed_;
   mutable std::mutex mutex_;
   std::condition_variable_any wake_;
+  bool automatic_;
+  bool automaticChanged_ = false;  // wakes the thread to wait anew
   bool checkRequested_ = false;
   bool installRequested_ = false;
   State state_;

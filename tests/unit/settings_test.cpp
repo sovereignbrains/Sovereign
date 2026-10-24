@@ -73,6 +73,25 @@ void TestKillSwitchDefault(const fs::path& data) {
   fs::remove_all(data, ec);
 }
 
+// Updates: looked for unasked unless the user said otherwise - a tray.json
+// from before the setting too - and the pick survives a save.
+void TestUpdates(const fs::path& data) {
+  std::error_code ec;
+  fs::remove_all(data, ec);
+  CHECK(LoadSettings().updates == UpdateMode::Check);
+  Write(data / "tray.json", R"({"wantOn":false})");
+  CHECK(LoadSettings().updates == UpdateMode::Check);
+  Write(data / "tray.json", R"({"wantOn":false,"updates":"install"})");
+  {
+    TraySettings s = LoadSettings();
+    CHECK(s.updates == UpdateMode::Install);
+    s.updates = UpdateMode::Off;
+    SaveSettings(s);
+  }
+  CHECK(LoadSettings().updates == UpdateMode::Off);
+  fs::remove_all(data, ec);
+}
+
 void TestMigration(const fs::path& data) {
   Write(data / "tray.json",
         R"({"wantOn":true,"subscriptionUrl":"https://sub.example.com/s?token=x","lastRefresh":1790770050,)"
@@ -227,6 +246,7 @@ int main(int argc, char** argv) {  // NOLINT(bugprone-exception-escape) - see th
     SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str());
     const fs::path data = root / "Sovereign";
     TestKillSwitchDefault(data);
+    TestUpdates(data);
     TestMigration(data);
     TestFrom043(data);
     TestRelay(data);

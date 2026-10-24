@@ -65,10 +65,11 @@ bool WriteFileAll(const std::wstring& path, const std::string& data) {
 
 }  // namespace
 
-Updater::Updater(Version current, std::wstring userAgent, std::function<void()> changed)
+Updater::Updater(Version current, std::wstring userAgent, bool automatic, std::function<void()> changed)
     : current_(current),
       userAgent_(std::move(userAgent)),
       changed_(std::move(changed)),
+      automatic_(automatic),
       thread_([this](const std::stop_token& stop) { Run(stop); }) {}
 
 Updater::~Updater() {
@@ -80,6 +81,18 @@ void Updater::Check() {
   {
     const std::scoped_lock lock(mutex_);
     checkRequested_ = true;
+  }
+  wake_.notify_all();
+}
+
+void Updater::SetAutomatic(bool automatic) {
+  {
+    const std::scoped_lock lock(mutex_);
+    if (automatic_ == automatic) {
+      return;
+    }
+    automatic_ = automatic;
+    automaticChanged_ = true;
   }
   wake_.notify_all();
 }
@@ -125,12 +138,20 @@ void Updater::Run(const std::stop_token& stop) {
     bool check = false;
     bool install = false;
     {
+      // Not on its own: no time to wake at, only a request (or being put
+      // back on its own, when the time it would have checked may be past).
       std::unique_lock lock(mutex_);
-      wake_.wait_until(lock, stop, next, [&] { return checkRequested_ || installRequested_; });
+      const auto woken = [&] { return checkRequested_ || installRequested_ || automaticChanged_; };
+      if (automatic_) {
+        wake_.wait_until(lock, stop, next, woken);
+      } else {
+        wake_.wait(lock, stop, woken);
+      }
       if (stop.stop_requested()) {
         return;
       }
-      check = std::exchange(checkRequested_, false) || std::chrono::steady_clock::now() >= next;
+      automaticChanged_ = false;
+      check = std::exchange(checkRequested_, false) || (automatic_ && std::chrono::steady_clock::now() >= next);
       install = std::exchange(installRequested_, false);
     }
     if (check) {
@@ -144,8 +165,10 @@ void Updater::Run(const std::stop_token& stop) {
 }
 
 void Updater::DoCheck() {
+  // A version found stays found while it's asked about again: its key in the
+  // window doesn't blink, and an ask that fails doesn't lose it.
   Set([](State& s) {
-    if (s.status != Status::Ready && s.status != Status::Downloading) {
+    if (s.status != Status::Ready && s.status != Status::Downloading && s.status != Status::Available) {
       s.status = Status::Checking;
     }
   });
@@ -166,11 +189,13 @@ void Updater::DoCheck() {
     release_ = newer ? release : std::nullopt;
   }
   Set([&](State& s) {
-    s.latest = ToString(release->version);
-    if (s.status == Status::Checking) {
+    // A newer one than the one found: what failed with that one is over.
+    const std::string latest = ToString(release->version);
+    if (s.status == Status::Checking || (s.status == Status::Available && (!newer || s.latest != latest))) {
       s.status = newer ? Status::Available : Status::UpToDate;
       s.error.clear();
     }
+    s.latest = latest;
   });
 }
 

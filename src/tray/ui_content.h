@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "tray_model.h"
+#include "update.h"
 
 namespace sovereign::tray {
 
@@ -275,6 +276,7 @@ struct UiContent {
   std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
   std::wstring version;                 // "0.1.0 · sing-box 1.14.1"
   UiUpdate update = UiUpdate::Idle;
+  UpdateMode updateMode = UpdateMode::Check;  // what the updater does unasked
   std::wstring updateVersion;           // the newest release, once known
   std::wstring updateError;
 };
@@ -364,6 +366,7 @@ enum class UiCommand : std::uint8_t {
   TestDelays,
   CheckUpdate,
   InstallUpdate,
+  ChooseUpdates,       // anchor: where to open the menu - looked for unasked or not, installed or not
   OpenWindow,    // index: the UiPage to show
   OpenFolder,
   Exit,

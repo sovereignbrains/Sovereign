@@ -13,6 +13,7 @@
 #include "lan.h"
 #include "profiles.h"
 #include "routing.h"
+#include "update.h"
 
 namespace sovereign::tray {
 
@@ -23,7 +24,8 @@ namespace sovereign::tray {
 //
 //   tray.json    {"wantOn", "profiles", "protocol", "routing", "appsMode", "apps",
 //                 "appPaths", "hideExitIp", "delaysDetailed", "serversByDelay", "connectAtStartup",
-//                 "routingMore", "logLevel", "killSwitch", "killSwitchChosen", "lanClosed", "lanAllowed"}
+//                 "routingMore", "logLevel", "killSwitch", "killSwitchChosen", "lanClosed", "lanAllowed",
+//                 "updates"}
 //   profiles\<id>\         one configuration (profiles.h), each with:
 //     config.json            the sing-box config: the subscription's copy,
 //                            the user's edits on it, or the user's own; the
@@ -74,6 +76,7 @@ struct TraySettings {
   // off. False: starts turned off whatever it was.
   bool connectAtStartup = true;
   bool routingMore = false;  // the settings' fine settings (QUIC, IPv4, DNS) unfolded
+  UpdateMode updates = UpdateMode::Check;  // what the updater does unasked (update.h)
   std::string logLevel;     // what the core writes (log_level.h); empty = the config's
   // The kill switch (the service's kill_switch.h): in force while the
   // connection is meant to be on, so a drop doesn't let traffic around it.

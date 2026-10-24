@@ -29,6 +29,16 @@ void TestVersions() {
   CHECK(InstallerName({0, 2, 0}) == "Sovereign-Setup-0.2.0.exe");
 }
 
+void TestModes() {
+  for (const UpdateMode mode : {UpdateMode::Off, UpdateMode::Check, UpdateMode::Install}) {
+    CHECK(ParseUpdateMode(UpdateModeName(mode)) == mode);
+  }
+  CHECK(UpdateModeName(UpdateMode::Install) == "install");
+  // A tray.json from before the setting, or a word it doesn't know: as it always was.
+  CHECK(ParseUpdateMode("") == UpdateMode::Check);
+  CHECK(ParseUpdateMode("Install") == UpdateMode::Check);
+}
+
 // Where the v0.2.0 files live (a function: a static std::string may throw at startup).
 std::string Base() { return "https://github.com/sovereignbrains/Sovereign/releases/download/v0.2.0/"; }
 
@@ -82,6 +92,7 @@ void TestChecksum() {
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestVersions();
+    TestModes();
     TestLatestRelease();
     TestChecksum();
   } catch (const std::exception& e) {

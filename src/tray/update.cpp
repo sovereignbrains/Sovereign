@@ -65,6 +65,19 @@ std::string ToString(const Version& version) {
   return std::format("{}.{}.{}", version.major, version.minor, version.patch);
 }
 
+std::string_view UpdateModeName(UpdateMode mode) {
+  switch (mode) {
+    case UpdateMode::Off: return "off";
+    case UpdateMode::Install: return "install";
+    case UpdateMode::Check: break;
+  }
+  return "check";
+}
+
+UpdateMode ParseUpdateMode(std::string_view name) {
+  return name == "off" ? UpdateMode::Off : name == "install" ? UpdateMode::Install : UpdateMode::Check;
+}
+
 std::string InstallerName(const Version& version) { return "Sovereign-Setup-" + ToString(version) + ".exe"; }
 
 bool IsReleaseAssetUrl(std::string_view url) {

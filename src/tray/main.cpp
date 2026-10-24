@@ -490,6 +490,7 @@ struct Shared {
   bool pendingToggleDelayDetails = false;
   std::optional<bool> pendingServersByDelay;
   std::optional<bool> pendingConnectAtStartup;
+  std::optional<sovereign::tray::UpdateMode> pendingUpdates;
   bool pendingToggleRoutingMore = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
@@ -513,7 +514,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingServersByDelay.has_value() || pendingConnectAtStartup.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingProtectionAlert.has_value() ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingServersByDelay.has_value() || pendingConnectAtStartup.has_value() || pendingUpdates.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingProtectionAlert.has_value() ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -699,6 +700,7 @@ class Worker {
       bool toggleDelayDetails = false;
       std::optional<bool> serversByDelay;
       std::optional<bool> connectAtStartup;
+      std::optional<sovereign::tray::UpdateMode> updates;
       bool toggleRoutingMore = false;
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
@@ -725,6 +727,7 @@ class Worker {
         toggleDelayDetails = std::exchange(shared.pendingToggleDelayDetails, false);
         serversByDelay = std::exchange(shared.pendingServersByDelay, std::nullopt);
         connectAtStartup = std::exchange(shared.pendingConnectAtStartup, std::nullopt);
+        updates = std::exchange(shared.pendingUpdates, std::nullopt);
         toggleRoutingMore = std::exchange(shared.pendingToggleRoutingMore, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
@@ -836,6 +839,10 @@ class Worker {
       }
       if (connectAtStartup && *connectAtStartup != settings_.connectAtStartup) {
         settings_.connectAtStartup = *connectAtStartup;
+        Save();
+      }
+      if (updates && *updates != settings_.updates) {
+        settings_.updates = *updates;
         Save();
       }
       if (toggleRoutingMore) {
@@ -4208,6 +4215,9 @@ void RequestServersByDelay(bool byDelay) {
 }
 
 sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater has its own
+// What the updater does unasked: the UI thread's copy of tray.json's, which
+// the worker keeps (pendingUpdates) - a pick acts at once, before it's saved.
+sovereign::tray::UpdateMode g_updateMode = sovereign::tray::UpdateMode::Check;
 
 // The local network's list as the settings show it - the index a click on
 // it carries is into this.
@@ -4651,11 +4661,13 @@ UiContent ContentFrom(const View& v) {
     c.updateVersion = Widen(update.latest);
     c.updateError = Widen(update.error);
   }
+  c.updateMode = g_updateMode;
   return c;
 }
 
 sovereign::tray::MainWindow* g_mainWindow = nullptr;
 std::string g_announcedUpdate;       // the version the balloon already told about
+std::string g_autoInstalled;         // the version installing unasked went for (UpdateMode::Install)
 std::optional<UiPage> g_balloonPage;  // what a click on the last balloon opens
 bool g_installerLaunched = false;
 unsigned g_lastNotice = 0;
@@ -5455,6 +5467,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
   }
 }
 
+void OnUpdateChanged(HWND trayWindow);
+
 void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiArgs& args) {
   const View view = CurrentView();
   HWND owner = args.owner != nullptr ? args.owner : trayWindow;
@@ -5798,6 +5812,27 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         g_updater->Install();
       }
       break;
+    case UiCommand::ChooseUpdates: {
+      using sovereign::tray::UpdateMode;
+      const auto picked =
+          PickFromMenu(owner, args.anchor, {L"Не проверять", L"Проверять автоматически", L"Ставить автоматически"},
+                       static_cast<int>(g_updateMode));
+      if (!picked || *picked < 0 || *picked > static_cast<int>(UpdateMode::Install)) {
+        break;
+      }
+      g_updateMode = static_cast<UpdateMode>(*picked);
+      {
+        const std::scoped_lock lock(State().mutex);
+        State().pendingUpdates = g_updateMode;
+      }
+      Wake();
+      if (g_updater != nullptr) {
+        g_updater->SetAutomatic(g_updateMode != UpdateMode::Off);
+        OnUpdateChanged(trayWindow);  // a version already found: installing unasked goes for it now
+      }
+      UpdateWindows();
+      break;
+    }
     case UiCommand::OpenWindow:
       ShowMainWindow(args.index >= 0 && args.index < sovereign::tray::kUiPageCount ? static_cast<UiPage>(args.index)
                                                                                    : UiPage::Overview);
@@ -5867,18 +5902,31 @@ void ShowTrayMenu(HWND window) {
   }
 }
 
-// The updater moved on: tell about a new version once, and run a downloaded
-// installer - which replaces this tray, so the tray makes way.
+// The updater moved on: tell about a new version once - or, installing
+// unasked, go for it, once a version: declined (UAC) or failed, it waits for
+// a click like any other - and run a downloaded installer, which replaces
+// this tray, so the tray makes way.
 void OnUpdateChanged(HWND trayWindow) {
   if (g_updater == nullptr) {
     return;
   }
   const auto update = g_updater->Get();
   using Status = sovereign::tray::Updater::Status;
+  const bool install = g_updateMode == sovereign::tray::UpdateMode::Install && update.status == Status::Available &&
+                       update.error.empty() && update.latest != g_autoInstalled;
+  if (install) {
+    g_autoInstalled = update.latest;
+    g_updater->Install();
+  }
   if (update.status == Status::Available && update.latest != g_announcedUpdate && g_trayIcon != nullptr) {
     g_announcedUpdate = update.latest;
-    g_trayIcon->Balloon(L"Sovereign: доступна версия " + Widen(update.latest),
-                        L"Нажми, чтобы обновить — установщик скачается с GitHub.", NIIF_INFO);
+    if (install) {
+      g_trayIcon->Balloon(L"Sovereign обновляется до " + Widen(update.latest),
+                          L"Установщик скачивается с GitHub; Windows спросит разрешение поставить его.", NIIF_INFO);
+    } else {
+      g_trayIcon->Balloon(L"Sovereign: доступна версия " + Widen(update.latest),
+                          L"Нажми, чтобы обновить — установщик скачается с GitHub.", NIIF_INFO);
+    }
     g_balloonPage = UiPage::Settings;
   }
   if (update.status == Status::Ready && !g_installerLaunched) {
@@ -6063,9 +6111,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     OnUiCommand(window, command, args);
   };
   sovereign::tray::MainWindow mainWindow(instance, onCommand);
+  g_updateMode = settings.updates;
   sovereign::tray::Updater updater(
       sovereign::tray::ParseVersion(Narrow(SOVEREIGN_VERSION_W)).value_or(sovereign::tray::Version{}), kUserAgent,
-      [window] { PostMessageW(window, kUpdateChangedMessage, 0, 0); });
+      g_updateMode != sovereign::tray::UpdateMode::Off, [window] { PostMessageW(window, kUpdateChangedMessage, 0, 0); });
   g_updater = &updater;
   g_mainWindow = &mainWindow;
   if (!background) {

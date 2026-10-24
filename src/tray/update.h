@@ -26,6 +26,14 @@ struct Version {
 // 0.0.0: a build for development (CMakeLists.txt) - no updates for it.
 inline bool IsDevelopmentBuild(const Version& v) { return v == Version{}; }
 
+// What the updater does unasked (tray.json "updates", the settings' row):
+// Check looks a minute after start and every 12 hours and says what it
+// found; Install also installs it (Windows asks first: UAC); Off looks only
+// when the user asks.
+enum class UpdateMode : std::uint8_t { Off, Check, Install };
+std::string_view UpdateModeName(UpdateMode mode);  // "off" / "check" / "install"
+UpdateMode ParseUpdateMode(std::string_view name);  // unknown -> Check
+
 // "1.2.3" or "v1.2.3"; nullopt for anything else (pre-release suffixes
 // included - the updater only follows plain releases).
 std::optional<Version> ParseVersion(std::string_view text);

@@ -598,7 +598,10 @@ std::wstring RoutingLine(const UiContent& c) {
 
 std::wstring UpdateStatus(const UiContent& c) {
   switch (c.update) {
-    case UiUpdate::Idle: return L"Обновления проверяются сами, раз в 12 часов.";
+    case UiUpdate::Idle:
+      return c.updateMode == UpdateMode::Off       ? L"Обновления проверяются только кнопкой справа."
+             : c.updateMode == UpdateMode::Install ? L"Обновления проверяются и ставятся сами."
+                                                   : L"Обновления проверяются сами, раз в 12 часов.";
     case UiUpdate::Checking: return L"Проверяю…";
     case UiUpdate::UpToDate: return L"Это последняя версия.";
     case UiUpdate::Available:
@@ -759,7 +762,7 @@ class Painter {
     const float x1 = x0 + pageWidth;
     l.viewTop = kCaption;  // the page scrolls under our title bar
     l.viewBottom = height;
-    Caption(l, width, page);  // fixed: before the page's items, which scroll
+    Caption(l, c, width, page);  // fixed: before the page's items, which scroll
     const std::size_t first = l.items.size();
 
     float y = kCaption + 8;
@@ -1508,8 +1511,10 @@ class Painter {
   // settings) and the settings; on the configurations' list adding one (the
   // clipboard, a QR code, a file) - the main screen has it on its
   // subscription card. Inside the settings they were in the way (he asked
-  // them gone, 16.10.2026). The rest of it drags the window (WM_NCHITTEST).
-  void Caption(Layout& l, float width, UiPage page) const {
+  // them gone, 16.10.2026). A new version found, its key on every page (it
+  // was the main screen's banner till 24.10.2026). The rest of it drags the
+  // window (WM_NCHITTEST).
+  void Caption(Layout& l, const UiContent& c, float width, UiPage page) const {
     // Keys of one width, the cross's too (it was Windows' 46): their pills
     // (DrawChrome) a step apart, the cross's as far from the window's right
     // edge as from its top. Its cell still runs to the edge - a throw of the
@@ -1550,11 +1555,30 @@ class Painter {
       keys.push_back(std::move(add));
       right -= 40;
     }
+    // Leftmost, so the keys the hand knows stay where they were; in the
+    // accent (checked, DrawChrome). Downloading, a click opens the settings,
+    // where the update's state is told in full.
+    if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading) {
+      Item update = chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
+                                       L"Обновить до " + c.updateVersion, kGlyphDownload, UiCommand::InstallUpdate));
+      update.checked = true;
+      if (c.update == UiUpdate::Downloading) {
+        update.action = ItemAction::Page;
+        update.index = static_cast<int>(UiPage::Settings);
+        update.tip = L"Скачиваю версию " + c.updateVersion + L"…";
+      } else if (!c.updateError.empty()) {
+        update.tip = L"Обновление не удалось: " + c.updateError + L". Нажми, чтобы повторить";
+      } else {
+        update.tip = L"Доступна версия " + c.updateVersion + L". Нажми, чтобы обновить";
+      }
+      keys.push_back(std::move(update));
+      right -= 40;
+    }
     Item name = Make(Kind::AppTitle, {12, 0, right - 14, kCaption}, L"Sovereign");
     name.text2 = SelfPath();
     name.scrolls = false;
     l.items.push_back(std::move(name));
-    // Left to right, as Tab goes: the tools or "+", the settings, the cross.
+    // Left to right, as Tab goes: the update, the tools or "+", the settings, the cross.
     for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
       l.items.push_back(std::move(*it));
     }
@@ -1563,7 +1587,7 @@ class Painter {
   }
 
   // The one screen for every day, top to bottom: the state, what waits for a
-  // click (an update, a subscription), the switch, the server it runs on and
+  // click (a new subscription), the switch, the server it runs on and
   // where it comes out. The rest of the window - routing, the checks, the
   // log, the kill switch - is in the settings, a key in the title bar.
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
@@ -1584,17 +1608,7 @@ class Painter {
       }
     }
 
-    // What waits for a click: one line each.
-    if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading) {
-      Item update = CommandItem(Kind::Banner, {x0, y, x1, y + 40},
-                                c.update == UiUpdate::Downloading ? L"Скачиваю версию " + c.updateVersion + L"…"
-                                : c.updateError.empty()           ? L"Доступна версия " + c.updateVersion + L" — обновить"
-                                                                  : L"Обновление не удалось — повторить",
-                                kGlyphDownload, UiCommand::InstallUpdate);
-      update.enabled = c.update == UiUpdate::Available;
-      l.items.push_back(std::move(update));
-      y += 40 + 8;
-    }
+    // What waits for a click: one line each (a new version: a key in the title bar).
     if (AnyWaiting(c)) {
       Item waiting = Make(Kind::Banner, {x0, y, x1, y + 40}, L"Новая версия подписки — выбрать", kGlyphSync);
       waiting.action = ItemAction::Page;
@@ -2696,6 +2710,18 @@ class Painter {
                 L"При входе в Windows клиент запускается в области уведомлений, без окна. «С подключением» — "
                 L"подключается сам, если был включён; «без подключения» — ждёт, пока включишь.");
       top += kRow;
+      line(top);
+      Item updates = CommandItem(Kind::ValueRow, row(top), L"Обновления", nullptr, UiCommand::ChooseUpdates);
+      updates.detail = c.updateMode == UpdateMode::Off       ? L"не проверять"
+                       : c.updateMode == UpdateMode::Install ? L"ставить автоматически"
+                                                             : L"проверять автоматически";
+      l.items.push_back(std::move(updates));
+      HintAfter(l, L"Обновления", body_.get(), x0 + 20, x1 - 220, top + kRow / 2,
+                L"«Проверять автоматически» — раз в 12 часов; новая версия появится значком в заголовке окна, "
+                L"обновляешь нажатием на него. «Ставить автоматически» — новая версия скачивается и "
+                L"ставится сама, Windows только спросит разрешение. «Не проверять» — только кнопкой внизу этой "
+                L"страницы.");
+      top += kRow;
       // The local network: open, or closed both ways but for what the user
       // lets in - the router, a device around, an address typed in. Closed, a
       // row per device let in (a click: shut again, LanChipMenu) and one to
@@ -3489,12 +3515,17 @@ class Painter {
     const bool cross = it.glyph == kGlyphClose;
     if (hovered || pressed) {
       k.Round(ChromePill(r), 8,
-              cross ? FromColorRef(ui::kDanger, pressed ? 0.14f : 0.22f) : Rgb(255, 255, 255, pressed ? 0.05f : 0.08f));
+              cross        ? FromColorRef(ui::kDanger, pressed ? 0.14f : 0.22f)
+              : it.checked ? FromColorRef(ui::kAccent, pressed ? 0.12f : 0.20f)
+                           : Rgb(255, 255, 255, pressed ? 0.05f : 0.08f));
     }
+    // Checked (a new version's key, Caption): the accent's even at rest -
+    // the one thing on the bar that's news.
     const D2D1_COLOR_F ink = !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f)
-                             : !hovered  ? FromColorRef(ui::kSecondaryText)
-                             : cross     ? FromColorRef(ui::kDanger)
-                                         : FromColorRef(ui::kPrimaryText);
+                             : it.checked ? FromColorRef(ui::kAccent)
+                             : !hovered   ? FromColorRef(ui::kSecondaryText)
+                             : cross      ? FromColorRef(ui::kDanger)
+                                          : FromColorRef(ui::kPrimaryText);
     // Through pixels' middles: at 100 % lines a pixel thick, not two halves.
     const float cx = std::floor((r.left + r.right) / 2) + 0.5f;
     const float cy = std::floor((r.top + r.bottom) / 2) + 0.5f;
@@ -3998,11 +4029,15 @@ struct MainWindow::Impl {
     content.question = question;
     layout = painter.Build(content, page, openProfile, size.width, size.height, scroll, state);
     ClampLog();
-    // The same spot may hold another item now: a tip stays only on one of
-    // its kind (the content refreshes every second under a resting pointer).
-    const bool tipShown = in.tip >= 0;
-    in.hover = mouse ? HitAt(*mouse) : -1;
-    in.tip = IsKind(in.hover, Kind::Hint) || (tipShown && HasTip(in.hover)) ? in.hover : -1;
+    // The same spot may hold another item now (the content refreshes every
+    // second under a resting pointer): it is pointed at anew, its tip timed
+    // as if the pointer had just come; the same item keeps its tip.
+    const int over = mouse ? HitAt(*mouse) : -1;
+    if (over != in.hover) {
+      Hover(over);
+    } else {
+      in.tip = IsKind(over, Kind::Hint) || (in.tip >= 0 && HasTip(over)) ? over : -1;
+    }
     if (in.focus >= static_cast<int>(layout.items.size()) ||
         (in.focus >= 0 && (!Interactive(layout.items[static_cast<std::size_t>(in.focus)]) ||
                            (question && layout.items[static_cast<std::size_t>(in.focus)].action != ItemAction::Answer)))) {
@@ -4923,6 +4958,10 @@ struct MainWindow::Impl {
       case WM_SHOWWINDOW:
         if (wParam == FALSE) {
           Answer(false);  // hidden, a question goes unanswered: no
+          // Hidden, the window hears no more of the pointer: where it was is
+          // no longer where it is, and the window shown lights nothing up.
+          mouse.reset();
+          Hover(-1);
         }
         return DefWindowProcW(w, message, wParam, lParam);
       default:

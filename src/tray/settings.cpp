@@ -236,6 +236,9 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("routingMore"); v != json.end() && v->is_boolean()) {
     settings.routingMore = v->get<bool>();
   }
+  if (const auto v = json.find("updates"); v != json.end() && v->is_string()) {
+    settings.updates = ParseUpdateMode(v->get<std::string>());
+  }
   // What the file says; nothing - a tray.json from before it was the default - off.
   bool killSwitch = false;
   if (const auto v = json.find("killSwitch"); v != json.end() && v->is_boolean()) {
@@ -301,7 +304,7 @@ void MoveAppsToRules(TraySettings& settings) {
   for (std::string& app : settings.apps) {
     MergeRules(settings.routing.rules,
                {RouteRule{.domains = {}, .keywords = {}, .ips = {}, .processes = {std::move(app)},
-                          .action = RouteRule::Action::Direct}});
+                          .action = RouteRule::Action::Direct, .name = {}}});
   }
   settings.apps.clear();
 }
@@ -324,6 +327,7 @@ void SaveSettings(const TraySettings& settings) {
   json["serversByDelay"] = settings.serversByDelay;
   json["connectAtStartup"] = settings.connectAtStartup;
   json["routingMore"] = settings.routingMore;
+  json["updates"] = std::string(UpdateModeName(settings.updates));
   json["logLevel"] = settings.logLevel;
   json["killSwitch"] = settings.killSwitch;
   json["killSwitchChosen"] = settings.killSwitchChosen;

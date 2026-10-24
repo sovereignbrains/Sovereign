@@ -247,6 +247,18 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(fine, UiPage::Settings, logs, 400, 1000, 96,
                                               dir + L"\\settings-fine.png");
   });
+  // Updates installed unasked, one downloading: its key in the bar, the
+  // row's "?" open; and looked for only when asked, nothing found yet.
+  variant([&](UiContent& updating) {
+    updating.updateMode = sovereign::tray::UpdateMode::Install;
+    updating.update = sovereign::tray::UiUpdate::Downloading;
+    sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Settings, logs, 400, 860, 96,
+                                              dir + L"\\settings-updates-install.png", L"«Проверять автоматически»");
+    updating.updateMode = sovereign::tray::UpdateMode::Off;
+    updating.update = sovereign::tray::UiUpdate::Idle;
+    sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Settings, logs, 400, 860, 96,
+                                              dir + L"\\settings-updates-off.png");
+  });
 
   // The states that look different: off with no subscription, and an error.
   UiContent empty;
@@ -351,7 +363,9 @@ int Snapshots(const std::wstring& dir) {
   });
   // Tips pointed at: a title bar key's (under it, the window ends above),
   // the "+" on the card, the switch, the server, a "?"'s paragraphs, at 150 % too.
-  const std::array<std::pair<const wchar_t*, const wchar_t*>, 4> tips = {{
+  // The new version's key, leftmost in the bar.
+  const std::array<std::pair<const wchar_t*, const wchar_t*>, 5> tips = {{
+      {L"Доступна версия", L"tip-update"},
       {L"Проверить подключение", L"tip-tools"},
       {L"Добавить: ссылка", L"tip-add"},
       {L"Отключить VPN", L"tip-switch"},
@@ -758,12 +772,16 @@ int LayoutTest(const std::wstring& dir) {
                               .text = L"Сервер этой подписки увидит твой настоящий IP-адрес.",
                               .yes = L"Скачать напрямую",
                               .tone = UiQuestion::Tone::Warning};
+  // Updates installed unasked, the longest of the row's values, one downloading.
+  UiContent installing = content;
+  installing.updateMode = sovereign::tray::UpdateMode::Install;
+  installing.update = sovereign::tray::UiUpdate::Downloading;
   struct Page {
     UiPage page;
     const wchar_t* name;
     const UiContent* content;
   };
-  const std::array<Page, 9> pages = {{{UiPage::Overview, L"overview", &content},
+  const std::array<Page, 10> pages = {{{UiPage::Overview, L"overview", &content},
                                       {UiPage::Servers, L"servers", &content},
                                       {UiPage::Subscription, L"subscription", &content},
                                       {UiPage::Logs, L"logs", &content},
@@ -771,7 +789,8 @@ int LayoutTest(const std::wstring& dir) {
                                       {UiPage::Profile, L"profile", &content},
                                       {UiPage::Routing, L"routing", &routed},
                                       {UiPage::Checks, L"checks", &content},
-                                      {UiPage::Overview, L"question", &asked}}};
+                                      {UiPage::Overview, L"question", &asked},
+                                      {UiPage::Settings, L"settings-install", &installing}}};
   CreateDirectoryW(dir.c_str(), nullptr);
   int failures = 0;
   int cut = 0;
