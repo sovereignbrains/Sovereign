@@ -240,6 +240,7 @@ struct Item {
   bool glass = false;   // a Card on the main screen: see-through - the light and the streams behind it show
   bool scrolls = true;  // lives in the page (scrolls, clipped), not in the rail
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
+  bool chrome = false;  // an IconButton of the title bar (DrawChrome): its pill inset from the bar's edges
 };
 
 struct Layout {
@@ -728,6 +729,9 @@ class Painter {
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    THROW_IF_FAILED(d2d_->CreateStrokeStyle(
+        D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND), nullptr, 0,
+        roundCaps_.put()));
   }
 
   ID2D1Factory* D2d() const { return d2d_.get(); }
@@ -895,7 +899,10 @@ class Painter {
         DrawItem(k, it, c, n == in.hover, n == in.pressed);
       }
       if (n == in.focus && in.focusVisible) {
-        t->DrawRoundedRectangle(D2D1::RoundedRect(Inflate(it.rect, 2), kRadius, kRadius), SetColor(brush.get(), Rgb(255, 255, 255, 0.9f)), 2);
+        // A title bar key's ring goes round its pill: the cell runs to the window's edges.
+        const float radius = it.chrome ? 10 : kRadius;
+        t->DrawRoundedRectangle(D2D1::RoundedRect(Inflate(it.chrome ? ChromePill(it.rect) : it.rect, 2), radius, radius),
+                                SetColor(brush.get(), Rgb(255, 255, 255, 0.9f)), 2);
       }
       if (layer) {
         t->PopLayer();
@@ -1486,35 +1493,37 @@ class Painter {
   // subscription card. Inside the settings they were in the way (he asked
   // them gone, 16.10.2026). The rest of it drags the window (WM_NCHITTEST).
   void Caption(Layout& l, float width, UiPage page) const {
-    float right = width - 46;  // the next key's right edge, leftwards from the cross
+    // Keys of one width, the cross's too (it was Windows' 46): their pills
+    // (DrawChrome) a step apart, the cross's as far from the window's right
+    // edge as from its top. Its cell still runs to the edge - a throw of the
+    // mouse into the corner finds it.
+    float right = width - 40;  // the next key's right edge, leftwards from the cross
+    const auto chrome = [](Item item) {
+      item.scrolls = false;
+      item.chrome = true;
+      return item;
+    };
     // The cross closes the client (the connection stays: the service holds
     // it); the dash beside it only puts the window away to the tray.
-    Item close = CommandItem(Kind::IconButton, {right, 0, width, kCaption}, L"Закрыть клиент (подключение останется)",
-                             kGlyphClose, UiCommand::Exit);
-    close.scrolls = false;
-    Item hide = Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Свернуть в трей", kGlyphMinimize);
+    Item close = chrome(CommandItem(Kind::IconButton, {right, 0, width, kCaption}, L"Закрыть клиент (подключение останется)",
+                                 kGlyphClose, UiCommand::Exit));
+    Item hide = chrome(Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Свернуть в трей", kGlyphMinimize));
     hide.action = ItemAction::Hide;
-    hide.scrolls = false;
     right -= 40;
     std::vector<Item> keys;
     if (page == UiPage::Overview) {
-      Item settings = Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Настройки", kGlyphSettings);
+      Item settings = chrome(Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Настройки", kGlyphSettings));
       settings.action = ItemAction::Page;
       settings.index = static_cast<int>(UiPage::Settings);
-      settings.scrolls = false;
       keys.push_back(std::move(settings));
       right -= 40;
-      Item tools = CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
-                               L"Инструменты: проверка, журнал", kGlyphTools, UiCommand::ToolsMenu);
-      tools.scrolls = false;
-      keys.push_back(std::move(tools));
+      keys.push_back(chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
+                                     L"Инструменты: проверка, журнал", kGlyphTools, UiCommand::ToolsMenu)));
       right -= 40;
     }
     if (page == UiPage::Subscription) {
-      Item add = CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Добавить: из буфера, QR-код, файл",
-                             kGlyphAdd, UiCommand::AddMenu);
-      add.scrolls = false;
-      keys.push_back(std::move(add));
+      keys.push_back(chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
+                                     L"Добавить: из буфера, QR-код, файл", kGlyphAdd, UiCommand::AddMenu)));
       right -= 40;
     }
     Item name = Make(Kind::AppTitle, {12, 0, right - 14, kCaption}, L"Sovereign");
@@ -2828,6 +2837,10 @@ class Painter {
           DrawKey(k, it, hovered && it.enabled, pressed && it.enabled);
           break;
         }
+        if (it.chrome) {
+          DrawChrome(k, it, hovered && it.enabled, pressed && it.enabled);
+          break;
+        }
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
@@ -3378,6 +3391,42 @@ class Painter {
     k.Text(it.glyph, glyph_.get(), r, Rgb(242, 244, 248, hovered ? 1.0f : 0.8f));
     k.t->SetTextAntialiasMode(mode);
   }
+  // A title bar key's pill: inset from the bar's top and the window's edge,
+  // not the whole cell up to them.
+  static D2D1_RECT_F ChromePill(D2D1_RECT_F r) {
+    const float cx = (r.left + r.right) / 2;
+    const float cy = (r.top + r.bottom) / 2;
+    return {cx - 16, cy - 14, cx + 16, cy + 14};
+  }
+  // A key of the title bar (Caption): the pill under the pointer; the cross
+  // and the dash drawn as lines of Windows' own size - ChromeClose at the
+  // glyphs' 16 DIPs was the biggest thing in the bar, "it doesn't fit in"
+  // (24.10.2026). The cross's pill is a soft red, the cross on it red.
+  void DrawChrome(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
+    const D2D1_RECT_F r = it.rect;
+    const bool cross = it.glyph == kGlyphClose;
+    if (hovered || pressed) {
+      k.Round(ChromePill(r), 8,
+              cross ? FromColorRef(ui::kDanger, pressed ? 0.14f : 0.22f) : Rgb(255, 255, 255, pressed ? 0.05f : 0.08f));
+    }
+    const D2D1_COLOR_F ink = !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f)
+                             : !hovered  ? FromColorRef(ui::kSecondaryText)
+                             : cross     ? FromColorRef(ui::kDanger)
+                                         : FromColorRef(ui::kPrimaryText);
+    // Through pixels' middles: at 100 % lines a pixel thick, not two halves.
+    const float cx = std::floor((r.left + r.right) / 2) + 0.5f;
+    const float cy = std::floor((r.top + r.bottom) / 2) + 0.5f;
+    constexpr float kHalf = 4.5f;  // with the round ends 10 DIPs across
+    constexpr float kStroke = 1.25f;
+    if (cross) {
+      k.t->DrawLine({cx - kHalf, cy - kHalf}, {cx + kHalf, cy + kHalf}, k.Color(ink), kStroke, roundCaps_.get());
+      k.t->DrawLine({cx - kHalf, cy + kHalf}, {cx + kHalf, cy - kHalf}, k.Color(ink), kStroke, roundCaps_.get());
+    } else if (it.glyph == kGlyphMinimize) {
+      k.t->DrawLine({cx - kHalf, cy}, {cx + kHalf, cy}, k.Color(ink), kStroke, roundCaps_.get());
+    } else {
+      k.Text(it.glyph, glyph_.get(), r, ink);
+    }
+  }
   // The switch is a cube (cube.h): in the pose the window animates it
   // through, or - a still picture, a snapshot - the state's own.
   void DrawPower(const Canvas& k, const Item& it, const UiContent& c, bool hovered, bool pressed) const {
@@ -3388,6 +3437,7 @@ class Painter {
   wil::com_ptr<IDWriteFactory> dwrite_;
   wil::com_ptr<IDWriteFontCollection> fonts_;  // Jura; null if missing
   wil::com_ptr<IWICImagingFactory> wic_;
+  wil::com_ptr<ID2D1StrokeStyle> roundCaps_;  // the title bar's cross and dash
   wil::com_ptr<IDWriteInlineObject> ellipsis_;
   wil::com_ptr<IDWriteTextFormat> title_;
   wil::com_ptr<IDWriteTextFormat> state_;
