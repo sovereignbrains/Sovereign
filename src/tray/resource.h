@@ -5,5 +5,5 @@
 #define IDI_SOVEREIGN 1
 // The country flags sprite (flags.h).
 #define IDR_FLAGS 101
-// The font (assets/fonts, OFL): Jura.
+// The font (assets/fonts, OFL): Geist.
 #define IDR_FONT_TEXT 102

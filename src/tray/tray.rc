@@ -6,7 +6,7 @@
 
 IDI_SOVEREIGN ICON "../../assets/sovereign.ico"
 IDR_FLAGS RCDATA "../../assets/flags/flags.png"
-IDR_FONT_TEXT RCDATA "../../assets/fonts/Jura.ttf"
+IDR_FONT_TEXT RCDATA "../../assets/fonts/Geist.ttf"
 
 SVC_NETFLIX RCDATA "../../assets/services/netflix.svg"
 SVC_YOUTUBE RCDATA "../../assets/services/youtube.svg"

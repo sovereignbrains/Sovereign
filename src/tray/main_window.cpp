@@ -1053,10 +1053,10 @@ class Painter {
   }
 
  private:
-  // Jura, in the exe (a resource); Segoe UI if it could not be loaded (a
+  // Geist, in the exe (a resource); Segoe UI if it could not be loaded (a
   // test's exe has none).
-  const wchar_t* Display() const { return fonts_ ? L"Jura" : L"Segoe UI Variable Display"; }
-  const wchar_t* Text() const { return fonts_ ? L"Jura" : L"Segoe UI Variable Text"; }
+  const wchar_t* Display() const { return fonts_ ? L"Geist" : L"Segoe UI Variable Display"; }
+  const wchar_t* Text() const { return fonts_ ? L"Geist" : L"Segoe UI Variable Text"; }
 
   // The fonts of the exe's resources as a collection; null if any is missing.
   static wil::com_ptr<IDWriteFontCollection> LoadFontCollection(IDWriteFactory* factory) {
@@ -1141,7 +1141,7 @@ class Painter {
                                              DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL,
                                              bool wrap = false) const {
     wil::com_ptr<IDWriteTextFormat> f;
-    THROW_IF_FAILED(dwrite_->CreateTextFormat(family, fonts_ && wcscmp(family, L"Jura") == 0 ? fonts_.get() : nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
+    THROW_IF_FAILED(dwrite_->CreateTextFormat(family, fonts_ && wcscmp(family, L"Geist") == 0 ? fonts_.get() : nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                                               DWRITE_FONT_STRETCH_NORMAL, size, L"ru-ru", f.put()));
     if (wrap) {
       f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
@@ -3548,7 +3548,7 @@ class Painter {
 
   wil::com_ptr<ID2D1Factory> d2d_;
   wil::com_ptr<IDWriteFactory> dwrite_;
-  wil::com_ptr<IDWriteFontCollection> fonts_;  // Jura; null if missing
+  wil::com_ptr<IDWriteFontCollection> fonts_;  // Geist; null if missing
   wil::com_ptr<IWICImagingFactory> wic_;
   wil::com_ptr<ID2D1StrokeStyle> roundCaps_;  // the title bar's cross and dash
   wil::com_ptr<IDWriteInlineObject> ellipsis_;
