@@ -98,8 +98,10 @@ func box_start(configJSON *C.char) *C.char {
 	// itself installs for its clash/api services; AppendTracker is how it
 	// does so (box.go). Since 1.14.3 a component's cleanups live in the
 	// adapter.Scope it was started with, so the manager gets a scope of its
-	// own and closing that scope is what closes the manager.
-	traffic := trafficcontrol.NewManager(instance.Outbound())
+	// own and closing that scope is what closes the manager. Since 1.14.4 the
+	// router hands trackers the resolved outbound chain in the metadata, so
+	// the manager no longer takes the outbound manager.
+	traffic := trafficcontrol.NewManager()
 	instance.Router().AppendTracker(traffic)
 	instance.LogFactory().AttachPlatformWriter(platformWriter{factory: instance.LogFactory()})
 	trafficScope := adapter.NewScope(ctx, instance.LogFactory().Logger())

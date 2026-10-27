@@ -2,7 +2,7 @@
 # mixed inbound of its own: where traffic exits through each. Prints no secret.
 param(
   [string]$Links = 'C:\Users\user\bench-dl\aeza-links.txt',
-  [string]$SingBox = 'C:\Users\user\projects\sb-ref\sing-box-1.14.3-windows-amd64\sing-box.exe',
+  [string]$SingBox = 'C:\Users\user\projects\sb-ref\sing-box-1.14.4-windows-amd64\sing-box.exe',
   [string]$Url = 'https://hel1-speed.hetzner.com/100MB.bin'
 )
 $ErrorActionPreference = 'Stop'

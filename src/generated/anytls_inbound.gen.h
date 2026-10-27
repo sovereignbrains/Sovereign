@@ -138,7 +138,7 @@ struct InboundRealityHandshakeOptions {
 inline void to_json(nlohmann::json& j, const InboundRealityHandshakeOptions& v) {
   j = nlohmann::json::object();
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.detour)) { j["detour"] = v.detour; }
   if (!sovereign::adapters::IsEmptyValue(v.bindInterface)) { j["bind_interface"] = v.bindInterface; }
   if (!sovereign::adapters::IsEmptyValue(v.inet4BindAddress)) { j["inet4_bind_address"] = v.inet4BindAddress; }

@@ -237,7 +237,7 @@ inline void to_json(nlohmann::json& j, const AnyTLSOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.tls)) { j["tls"] = v.tls; }
   if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
   if (!sovereign::adapters::IsEmptyValue(v.idleSessionCheckInterval)) { j["idle_session_check_interval"] = v.idleSessionCheckInterval; }
@@ -517,7 +517,7 @@ inline void to_json(nlohmann::json& j, const VLESSOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   j["uuid"] = v.uuid;
   if (!sovereign::adapters::IsEmptyValue(v.flow)) { j["flow"] = v.flow; }
   if (!sovereign::adapters::IsEmptyValue(v.network)) { j["network"] = v.network; }
@@ -623,9 +623,9 @@ inline void to_json(nlohmann::json& j, const VMessOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   j["uuid"] = v.uuid;
-  j["security"] = v.security;
+  if (!sovereign::adapters::IsEmptyValue(v.security)) { j["security"] = v.security; }
   if (!sovereign::adapters::IsEmptyValue(v.alterId)) { j["alter_id"] = v.alterId; }
   if (!sovereign::adapters::IsEmptyValue(v.globalPadding)) { j["global_padding"] = v.globalPadding; }
   if (!sovereign::adapters::IsEmptyValue(v.authenticatedLength)) { j["authenticated_length"] = v.authenticatedLength; }
@@ -730,7 +730,7 @@ inline void to_json(nlohmann::json& j, const TrojanOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   j["password"] = v.password;
   if (!sovereign::adapters::IsEmptyValue(v.network)) { j["network"] = v.network; }
   if (!sovereign::adapters::IsEmptyValue(v.tls)) { j["tls"] = v.tls; }
@@ -829,9 +829,9 @@ inline void to_json(nlohmann::json& j, const ShadowsocksOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   j["method"] = v.method;
-  j["password"] = v.password;
+  if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
   if (!sovereign::adapters::IsEmptyValue(v.plugin)) { j["plugin"] = v.plugin; }
   if (!sovereign::adapters::IsEmptyValue(v.pluginOptions)) { j["plugin_opts"] = v.pluginOptions; }
   if (!sovereign::adapters::IsEmptyValue(v.network)) { j["network"] = v.network; }
@@ -1030,7 +1030,7 @@ inline void to_json(nlohmann::json& j, const Hysteria2OutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.serverPorts)) { j["server_ports"] = v.serverPorts; }
   if (!sovereign::adapters::IsEmptyValue(v.hopInterval)) { j["hop_interval"] = v.hopInterval; }
   if (!sovereign::adapters::IsEmptyValue(v.hopIntervalMax)) { j["hop_interval_max"] = v.hopIntervalMax; }
@@ -1173,7 +1173,7 @@ inline void to_json(nlohmann::json& j, const HysteriaOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.serverPorts)) { j["server_ports"] = v.serverPorts; }
   if (!sovereign::adapters::IsEmptyValue(v.hopInterval)) { j["hop_interval"] = v.hopInterval; }
   if (!sovereign::adapters::IsEmptyValue(v.up)) { j["up"] = v.up; }
@@ -1313,7 +1313,7 @@ inline void to_json(nlohmann::json& j, const TUICOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.uuid)) { j["uuid"] = v.uuid; }
   if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
   if (!sovereign::adapters::IsEmptyValue(v.congestionControl)) { j["congestion_control"] = v.congestionControl; }
@@ -1432,7 +1432,7 @@ inline void to_json(nlohmann::json& j, const SOCKSOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.version)) { j["version"] = v.version; }
   if (!sovereign::adapters::IsEmptyValue(v.username)) { j["username"] = v.username; }
   if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
@@ -1529,7 +1529,7 @@ inline void to_json(nlohmann::json& j, const HTTPOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.username)) { j["username"] = v.username; }
   if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
   if (!sovereign::adapters::IsEmptyValue(v.tls)) { j["tls"] = v.tls; }
@@ -1631,7 +1631,7 @@ inline void to_json(nlohmann::json& j, const NaiveOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.username)) { j["username"] = v.username; }
   if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
   if (!sovereign::adapters::IsEmptyValue(v.insecureConcurrency)) { j["insecure_concurrency"] = v.insecureConcurrency; }
@@ -1744,7 +1744,7 @@ inline void to_json(nlohmann::json& j, const SSHOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   if (!sovereign::adapters::IsEmptyValue(v.user)) { j["user"] = v.user; }
   if (!sovereign::adapters::IsEmptyValue(v.password)) { j["password"] = v.password; }
   if (!sovereign::adapters::IsEmptyValue(v.privateKey)) { j["private_key"] = v.privateKey; }
@@ -1885,7 +1885,7 @@ inline void to_json(nlohmann::json& j, const SnellOutboundOptions& v) {
   if (!sovereign::adapters::IsEmptyValue(v.fallbackDelay)) { j["fallback_delay"] = v.fallbackDelay; }
   if (!sovereign::adapters::IsEmptyValue(v.domainStrategy)) { j["domain_strategy"] = v.domainStrategy; }
   j["server"] = v.server;
-  j["server_port"] = v.serverPort;
+  if (!sovereign::adapters::IsEmptyValue(v.serverPort)) { j["server_port"] = v.serverPort; }
   j["psk"] = v.psk;
   if (!sovereign::adapters::IsEmptyValue(v.userKey)) { j["userkey"] = v.userKey; }
   if (!sovereign::adapters::IsEmptyValue(v.reuse)) { j["reuse"] = v.reuse; }
