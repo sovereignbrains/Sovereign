@@ -66,6 +66,38 @@ struct Canvas {
     }
   }
 
+  void Fill(std::uint8_t value) {
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        Set(x, y, value);
+      }
+    }
+  }
+
+  // The code as `qrencode -t UTF8 -m 2` prints it, in a terminal of the
+  // canvas's colour: its light modules are blocks of `block`, a character two
+  // modules tall, and between the rows of characters `gap` pixels of the
+  // terminal itself.
+  void DrawTerminal(std::string_view text, int left, int top, int module, int gap, std::uint8_t block) {
+#pragma warning(push)
+#pragma warning(disable : 4996)
+    const ZXing::BitMatrix code =
+        ZXing::MultiFormatWriter(ZXing::BarcodeFormat::QRCode).setEncoding(ZXing::CharacterSet::UTF8).setMargin(2).encode(std::string(text), 0, 0);
+#pragma warning(pop)
+    for (int row = 0; row < code.height(); ++row) {
+      const int y0 = top + (row / 2) * (2 * module + gap) + (row % 2) * module;
+      for (int column = 0; column < code.width(); ++column) {
+        for (int y = y0; y < y0 + module && y < height; ++y) {
+          for (int x = left + column * module; x < left + (column + 1) * module && x < width; ++x) {
+            if (!code.get(column, row)) {
+              Set(x, y, block);
+            }
+          }
+        }
+      }
+    }
+  }
+
   BgraImage Image() const { return {pixels.data(), width, height, stride}; }
 };
 
@@ -106,6 +138,25 @@ void TestInverted() {
   CHECK(ReadQrCodes(canvas.Image()) == std::vector<std::string>({std::string(kSub)}));
 }
 
+// packetlab's "QR для приложения sing-box" in a terminal (28.10.2026: not
+// read from the screen or the clipboard): 7-pixel modules, 2 pixels between
+// the rows of characters - in a dark terminal and in a light one.
+void TestTerminal() {
+  const std::string link =
+      "sing-box://import-remote-profile?url="
+      "https%3A%2F%2Fsub.example.com%2Fapi%2Fv1%2Fclient%2Fsubscribe%3Ftoken%3D0123456789abcdef#packetlab";
+  for (const bool light : {false, true}) {
+    for (const int gap : {1, 2, 3}) {
+      Canvas canvas(900, 700, 0);
+      canvas.Fill(light ? 245 : 25);
+      canvas.DrawTerminal(link, 60, 40, 7, gap, light ? 40 : 180);
+      CHECK(ReadQrCodes(canvas.Image()) == std::vector<std::string>({link}));
+    }
+  }
+  // What it holds is the subscription the import takes.
+  CHECK(sovereign::tray::RecognizeImport(link).urls == std::vector<std::string>({std::string(kSub)}));
+}
+
 void TestNothing() {
   Canvas canvas(640, 480, 0);
   CHECK(ReadQrCodes(canvas.Image()).empty());
@@ -120,6 +171,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestOne();
     TestSeveral();
     TestInverted();
+    TestTerminal();
     TestNothing();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
