@@ -478,6 +478,7 @@ struct Shared {
   std::condition_variable_any wake;
   std::optional<bool> pendingWant;
   std::optional<std::string> pendingImport;  // a subscription URL to add (UTF-8)
+  bool pendingImportDirect = false;          // ...fetched directly: the user said so, its server sees their IP
   std::optional<LocalImport> pendingLocalConfig;  // a config of the user's own to add (a file, the clipboard)
   std::vector<ProfileChange> pendingChanges;   // in the order they were made
   std::vector<RoutingChange> pendingRouting;   // likewise
@@ -685,6 +686,7 @@ class Worker {
     while (!stop.stop_requested()) {
       std::optional<bool> want;
       std::optional<std::string> import;
+      bool importDirect = false;
       std::optional<AppsChange> apps;
       std::optional<std::string> protocol;
       std::optional<std::pair<std::string, ConfigChoice>> choice;
@@ -715,6 +717,7 @@ class Worker {
         protocol = std::exchange(shared.pendingProtocol, std::nullopt);
         choice = std::exchange(shared.pendingChoice, std::nullopt);
         import = std::exchange(shared.pendingImport, std::nullopt);
+        importDirect = std::exchange(shared.pendingImportDirect, false);
         local = std::exchange(shared.pendingLocalConfig, std::nullopt);
         changes = std::exchange(shared.pendingChanges, {});
         routing = std::exchange(shared.pendingRouting, {});
@@ -755,7 +758,7 @@ class Worker {
         RemoveProfile(*remove);
       }
       if (import) {
-        AddSubscription(*import);
+        AddSubscription(*import, importDirect);
       }
       if (relay) {
         if (relay->url) {
@@ -1497,8 +1500,9 @@ class Worker {
   }
 
   // Fetches configuration `id`'s subscription into its folder. False, with
-  // the reason in its runtime error, if nothing usable came.
-  bool Refresh(const std::string& id, RefreshReason reason) {
+  // the reason in its runtime error, if nothing usable came. `direct`: as
+  // RefreshReason::Direct, for one just added.
+  bool Refresh(const std::string& id, RefreshReason reason, bool direct = false) {
     Profile* profile = sovereign::tray::FindProfile(settings_.profiles, id);
     const auto dir = profile != nullptr ? DirOf(id) : std::nullopt;
     if (profile == nullptr || profile->url.empty() || !dir) {
@@ -1519,7 +1523,7 @@ class Worker {
                           std::find(runningHosts_.begin(), runningHosts_.end(), hosts.front()) != runningHosts_.end();
     std::expected<sovereign::tray::FetchResult, std::string> fetched = std::unexpected(std::string());
     state.heldBack = false;
-    if (viaProxy || reason == RefreshReason::Direct) {
+    if (viaProxy || direct || reason == RefreshReason::Direct) {
       fetched = sovereign::tray::FetchSubscription(Widen(profile->url), kUserAgent, profile->hwid);
     } else if (sovereign::tray::IsRelayUrl(settings_.relayUrl) && sovereign::tray::IsRelayKey(settings_.relayKey)) {
       fetched = sovereign::tray::FetchSubscriptionViaRelay(settings_.relayUrl, settings_.relayKey, Widen(profile->url),
@@ -1642,13 +1646,14 @@ class Worker {
 
   // A subscription link: a new configuration next to the others, on - or,
   // when that link is already one, that one switched on and refreshed.
-  void AddSubscription(const std::string& url) {
+  // `direct`: fetched directly whatever the way (RequestSubscription asked).
+  void AddSubscription(const std::string& url, bool direct) {
     if (Profile* known = sovereign::tray::FindProfile(settings_.profiles,
                                                      FindIdByUrl(url))) {
       known->enabled = true;
       const std::string id = known->id;
       Save();
-      Refresh(id, RefreshReason::Asked);
+      Refresh(id, direct ? RefreshReason::Direct : RefreshReason::Asked);
       return;
     }
     Profile profile;
@@ -1656,7 +1661,7 @@ class Worker {
     profile.url = url;
     profile.name = sovereign::tray::UniqueProfileName(settings_.profiles, sovereign::tray::DefaultProfileName(url));
     settings_.profiles.push_back(profile);
-    if (!Refresh(profile.id, RefreshReason::Added)) {
+    if (!Refresh(profile.id, RefreshReason::Added, direct)) {
       if (runtime_[profile.id].heldBack) {
         // Not fetched on purpose: kept, and fetched once there's a way (or
         // directly, if the user says so from its menu).
@@ -3027,6 +3032,46 @@ void ImportBalloon(const std::wstring& message) {
   }
 }
 
+void Ask(HWND owner, sovereign::tray::UiQuestion question, std::function<void()> onYes);  // below
+
+// A subscription link to add (the worker's AddSubscription); `direct`: fetched
+// directly whatever the way.
+void QueueSubscription(std::string url, bool direct) {
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    shared.pendingImport = std::move(url);
+    shared.pendingImportDirect = direct;
+  }
+  Wake();
+}
+
+// A subscription link to add. With no connection, none coming and no relay
+// it would only be held back (Refresh) - on a clean client, the very first
+// one (28.10.2026: "can't add a subscription on a clean client"): asked
+// right away whether to fetch it directly, and not added if not.
+void RequestSubscription(std::string url) {
+  bool ask = false;
+  {
+    auto& shared = State();
+    const std::scoped_lock lock(shared.mutex);
+    const View& v = shared.view;
+    ask = v.display != Display::On && !v.wantOn && (v.relayUrl.empty() || !v.relayKeySet);
+  }
+  if (!ask) {
+    QueueSubscription(std::move(url), /*direct=*/false);
+    return;
+  }
+  Ask(nullptr,
+      {.title = L"Скачать подписку напрямую?",
+       .text = L"Подключения нет, и пересыльщик не задан, так что сервер подписки увидит твой настоящий IP-адрес. "
+               L"Не хочешь — подключись или задай пересыльщик (Настройки → «Скачивать без подключения») и добавь "
+               L"её снова.",
+       .yes = L"Скачать напрямую",
+       .tone = sovereign::tray::UiQuestion::Tone::Warning,
+       .glyph = L"\xE896"},  // Download
+      [url = std::move(url)] { QueueSubscription(url, /*direct=*/true); });
+}
 constexpr const wchar_t* kNothingToImport =
     L"Не нашёл ни ссылки на подписку, ни конфига, ни ключей (vless://, vmess://, trojan://, ss://, hy2://, tuic://, "
     L"anytls://, wireguard://...), ни Clash/Xray-конфига.";
@@ -3064,12 +3109,7 @@ bool ImportText(const std::string& text, bool quiet = false, const std::string& 
   }
   for (const std::string& url : items.urls) {
     if (sovereign::tray::IsHttpsUrl(Widen(url))) {
-      {
-        auto& shared = State();
-        const std::scoped_lock lock(shared.mutex);
-        shared.pendingImport = url;
-      }
-      Wake();
+      RequestSubscription(url);
       return true;
     }
   }

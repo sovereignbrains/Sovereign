@@ -33,7 +33,7 @@ Free plan limits are far beyond what this needs (100 000 requests a day).
 2. Create an API token with **Account -> Workers Scripts: Edit** and
    **Account -> Account Settings: Read**.
 3. `$env:CLOUDFLARE_API_TOKEN = '...'; .\deploy.ps1`
-4. In Sovereign: Настройки -> Подписки без подключения -> the address and the
+4. In Sovereign: Настройки -> Скачивать без подключения -> the address and the
    key from `relay.json`. The tray keeps the key encrypted for your Windows
    user (DPAPI).
 
@@ -43,5 +43,6 @@ Free plan limits are far beyond what this needs (100 000 requests a day).
   host through the proxy: fetched as before, through the proxy.
 - Otherwise, with a relay set: through the relay.
 - Otherwise not at all. A scheduled refresh waits quietly for a connection or a
-  relay; a new subscription is kept, marked "не скачана", and its menu offers
-  "Скачать напрямую" (after a warning that its server will see your IP).
+  relay; a new subscription is asked about right away - "Скачать напрямую"
+  (its server will see your IP) or not added at all. One kept "не скачана"
+  (the connection was coming) offers "Скачать напрямую" in its menu.
