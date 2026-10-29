@@ -47,7 +47,8 @@ std::map<std::string, ServerTitle> ServerTitles(std::string_view config);
 
 // Whether a server's name says no more than its title: "AnyTLS-REALITY" for
 // "AnyTLS + REALITY", "hysteria2" for "Hysteria 2" - the same letters and
-// digits, case and the rest aside.
+// digits, case and the rest aside - or a name of protocol words, a country's
+// two letters and numbers alone ("REALITY", "NL-Naive", "AnyTLS-REALITY 2").
 bool NameIsTitle(std::string_view name, std::string_view title);
 
 }  // namespace sovereign::tray

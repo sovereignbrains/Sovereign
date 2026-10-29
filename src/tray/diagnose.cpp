@@ -703,7 +703,7 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
       break;
     }
     progress(id, CheckResult{.status = Status::Running,
-                             .summary = "проверяю...",
+                             .summary = "проверяю…",
                              .detail = {},
                              .fix = CheckFix::None,
                              .speedDown = {},

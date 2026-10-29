@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <utility>
 
@@ -182,7 +183,46 @@ bool NameIsTitle(std::string_view name, std::string_view title) {
     return out;
   };
   const std::string a = letters(name);
-  return !a.empty() && a == letters(title);
+  if (a.empty()) {
+    return false;
+  }
+  if (a == letters(title)) {
+    return true;
+  }
+  // Or nothing but protocol words, a country's two letters and numbers
+  // ("NL-Naive", "REALITY", "AnyTLS-REALITY 2"): what the title already says,
+  // and the number the host tells apart. A name with any word of its own
+  // ("4G | Whitelist №2", "Германия") says more.
+  static constexpr std::string_view kProtocolWords[] = {
+      "anytls", "vless", "vmess", "trojan", "shadowsocks", "ss", "ssr", "shadowsocksr", "hysteria", "hysteria2",
+      "hy2",    "tuic",  "wireguard", "wg", "naive", "naiveproxy", "shadowtls", "reality", "vision", "tls",
+      "ws",     "grpc",  "ech",       "tcp", "udp", "quic", "http", "https", "socks", "ssh", "tor",
+  };
+  std::string word;
+  bool own = false;
+  int emoji = 0;  // the continuation bytes of a flag or another emoji still to skip
+  const auto endWord = [&] {
+    const bool digits = std::all_of(word.begin(), word.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; });
+    const bool country = word.size() == 2 && std::all_of(word.begin(), word.end(), [](char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; });
+    const bool protocol = std::find(std::begin(kProtocolWords), std::end(kProtocolWords), word) != std::end(kProtocolWords);
+    own = own || (!word.empty() && !digits && !country && !protocol);
+    word.clear();
+  };
+  for (const char c : name) {
+    const auto u = static_cast<unsigned char>(c);
+    if (emoji > 0 && (u & 0xC0) == 0x80) {
+      --emoji;
+    } else if (u >= 0xF0) {
+      emoji = 3;
+      endWord();
+    } else if (std::isalnum(u) != 0 || u >= 0x80) {
+      word += static_cast<char>(std::tolower(u));
+    } else {
+      endWord();
+    }
+  }
+  endWord();
+  return !own;
 }
 
 std::map<std::string, ServerTitle> ServerTitles(std::string_view config) {

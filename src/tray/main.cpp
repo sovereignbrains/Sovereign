@@ -1941,11 +1941,11 @@ class Worker {
     const auto now = TrayModel::Clock::now();
     const bool autoDue = IsAuto(choices, current) && !testing_ && now - testStarted_ >= kAutoRetest;
     const bool recheckDue = recheckAt_ && !testing_ && now >= *recheckAt_;
-    if (on && (asked || autoDue || recheckDue || testedGeneration_ != generation_)) {
+    if (on && ((asked && !testing_) || autoDue || recheckDue || testedGeneration_ != generation_)) {
       testedGeneration_ = generation_;
       recheckAt_.reset();
       StartUrlTest();
-    } else if (asked) {
+    } else if (asked && !on) {
       delayError_ = "подключение выключено";
       ++delaysRound_;  // asked, and over: nothing to wait for
     }
@@ -4356,7 +4356,7 @@ sovereign::tray::UiCheck LeaksLine(const View& v) {
   line.detail = Widen(detail);
   if (running) {
     line.status = UiCheck::Status::Running;
-    line.summary = L"проверяю...";
+    line.summary = L"проверяю…";
   } else if (!any) {
     line.status = UiCheck::Status::NotRun;
   } else if (!failed.empty()) {

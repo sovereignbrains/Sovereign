@@ -1921,7 +1921,8 @@ class Painter {
                   x1 - 40);
     Item test = CommandItem(Kind::IconButton, {x1 - 36, titleTop, x1, titleTop + 36}, L"Проверить задержку",
                             kGlyphStopwatch, UiCommand::TestDelays);
-    test.enabled = c.canTestDelays && !c.delaysTesting;
+    // Always to press: with the connection off it says so in the note, while
+    // one runs a press changes nothing.
     test.tip = L"Замерить задержку до всех серверов";
     l.items.push_back(std::move(test));
     if (c.protocols.empty()) {
@@ -4267,7 +4268,7 @@ struct MainWindow::Impl {
         break;
       case Kind::ServerCard:
         add(kMenuOpen, L"Выбрать сервер…", item.enabled);
-        add(kMenuTestDelays, L"Проверить задержку", content.canTestDelays && !content.delaysTesting);
+        add(kMenuTestDelays, L"Проверить задержку", true);
         separator();
         add(kMenuCopyIp, content.exitIp.empty() ? std::wstring(L"Копировать IP выхода")
                                                 : L"Копировать IP выхода: " + content.exitIp,

@@ -114,6 +114,10 @@ void TestServerTitles() {
   CHECK(ServerTitles("not json").empty());
   CHECK(NameIsTitle("AnyTLS-REALITY", "AnyTLS + REALITY") && NameIsTitle("hysteria2", "Hysteria 2"));
   CHECK(!NameIsTitle("🇪🇺 4G | Whitelist №2", "VLESS + Vision + REALITY") && !NameIsTitle("", ""));
+  // Protocol words, a country code and numbers only: nothing the title doesn't say (29.10.2026, the servers page).
+  CHECK(NameIsTitle("REALITY", "VLESS + Vision + REALITY") && NameIsTitle("NL-Naive", "NaïveProxy") &&
+        NameIsTitle("AnyTLS-REALITY 2", "AnyTLS + REALITY") && NameIsTitle("🇳🇱 NL-TUIC", "TUIC"));
+  CHECK(!NameIsTitle("Германия", "Hysteria 2") && !NameIsTitle("DE Frankfurt Hysteria2", "Hysteria 2"));
 }
 
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
