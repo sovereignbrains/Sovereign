@@ -1,0 +1,146 @@
+name: sing-box bump
+
+# A new sing-box release gets a branch and a pull request here the day it comes
+# out - tools/bump-singbox.ps1 moves the pin, the Go modules, the generated
+# structs and the conformance reference; CI is then started on the branch (a push
+# made with GITHUB_TOKEN doesn't start it by itself). Nothing is merged, tagged
+# or released: red CI or a changed golden ClientHello is for a person, and so is
+# the C++ side (gocore follows upstream's API by hand). A bump that fails before
+# a branch exists becomes an issue, one per version.
+
+on:
+  schedule:
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'sing-box version to move to (X.Y.Z); empty: the latest release'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency: singbox-bump
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which version
+        id: which
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $current = (Get-Content tools/codegen/sing-box.version)[0].Trim().TrimStart('v')
+          $explicit = "$env:INPUT_VERSION".Trim().TrimStart('v')
+          if ($explicit) {
+            if ($explicit -notmatch '^\d+\.\d+\.\d+$') { throw "version must be X.Y.Z, got '$explicit'" }
+            $target = $explicit
+          } else {
+            # releases/latest never answers with a draft or a prerelease.
+            $latest = Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN"; 'User-Agent' = 'sovereign-bump' } https://api.github.com/repos/SagerNet/sing-box/releases/latest
+            if ($latest.tag_name -notmatch '^v(\d+\.\d+\.\d+)$') { Write-Output "latest release '$($latest.tag_name)' is not vX.Y.Z"; "bump=false" >> $env:GITHUB_OUTPUT; exit 0 }
+            $target = $Matches[1]
+          }
+          Write-Output "pinned $current, target $target"
+          if ([version]$target -le [version]$current) { "bump=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          $branch = "bump/sing-box-$target"
+          git ls-remote --exit-code --heads origin $branch *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Output "$branch exists already"; "bump=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          if (-not $explicit) {
+            $failed = gh issue list --state all --search "sing-box $target in:title" --json title --jq '[.[] | select(.title | contains("подъём не прошёл"))] | length'
+            if ([int]$failed -gt 0) { Write-Output "a failed bump of $target is filed already"; "bump=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          }
+          "bump=true" >> $env:GITHUB_OUTPUT
+          "current=$current" >> $env:GITHUB_OUTPUT
+          "target=$target" >> $env:GITHUB_OUTPUT
+          "branch=$branch" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/setup-go@v5
+        if: steps.which.outputs.bump == 'true'
+        with:
+          go-version-file: gocore/go.mod
+          cache: false
+
+      - name: Bump
+        id: bump
+        if: steps.which.outputs.bump == 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: ./tools/bump-singbox.ps1 -Version '${{ steps.which.outputs.target }}' *>&1 | Tee-Object "$env:RUNNER_TEMP/bump.log"
+
+      - name: Branch, pull request, CI
+        if: steps.which.outputs.bump == 'true' && steps.bump.outcome == 'success'
+        shell: pwsh
+        env:
+          CURRENT: ${{ steps.which.outputs.current }}
+          TARGET: ${{ steps.which.outputs.target }}
+          BRANCH: ${{ steps.which.outputs.branch }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c $env:BRANCH
+          git add -A
+          git commit -q -m "sing-box $env:CURRENT -> $env:TARGET (tools/bump-singbox.ps1)" -m "The pin, the Go modules, src/generated and the conformance reference. Golden ClientHellos are not re-recorded here, CI checks them against the new reference as they are."
+          git push -q origin $env:BRANCH
+
+          $compare = "v$env:CURRENT...v$env:TARGET"
+          $files = gh api "repos/SagerNet/sing-box/compare/$compare" --paginate --jq '.files[].filename'
+          $watched = @($files | Where-Object { $_ -match '^(adapter|route|common/trafficcontrol|experimental|option)/' })
+          $notes = (gh api "repos/SagerNet/sing-box/releases/tags/v$env:TARGET" --jq '.body')
+          if ($notes.Length -gt 3000) { $notes = $notes.Substring(0, 3000) + "`n..." }
+          $stat = (git show --stat --format= HEAD | Select-Object -Last 40) -join "`n"
+          $body = @"
+          Upstream: https://github.com/SagerNet/sing-box/compare/$compare
+
+          ## What upstream says
+          $notes
+
+          ## Upstream files gocore and the generator read ($($watched.Count))
+          $(($watched | Select-Object -First 60 | ForEach-Object { "- ``$_``" }) -join "`n")
+
+          ## This branch
+          ``````
+          $stat
+          ``````
+
+          ## Before merging
+          - CI was started on the branch by the workflow (a push by the token doesn't start it): red is work for a person.
+          - The old golden ClientHellos pass against the new reference in CI's build job, or the ClientHello changed and they are re-recorded on purpose (see 512db6e).
+          - ``gocore/main.go`` against the changes to ``adapter`` and ``trafficcontrol`` above; ``sing-box check`` on the configurations the client writes (1.14.4 began to refuse a tag listed twice in a group).
+          - Local reference: ``sb-ref\sing-box-$env:TARGET-windows-amd64`` and the path in ``tools\sov-full.cmd``.
+          - Then merge and tag: users get it through the update, in a quiet moment.
+          "@
+          Set-Content -Path "$env:RUNNER_TEMP/body.md" -Value $body -Encoding utf8
+          gh pr create --base main --head $env:BRANCH --title "sing-box $env:CURRENT -> $env:TARGET" --body-file "$env:RUNNER_TEMP/body.md"
+          if ($LASTEXITCODE -ne 0) {
+            # The repository may forbid the token to open pull requests: the branch is pushed, say so in an issue.
+            gh issue create --title "sing-box ${env:TARGET}: ветка bump готова, PR не открылся" --body "Ветка ``$env:BRANCH`` запушена, CI на ней запущен. PR не создался (настройка репозитория Actions: разрешить создавать pull request). Сравнение: https://github.com/sovereignbrains/Sovereign/compare/main...$env:BRANCH`n`n$body"
+          }
+          gh workflow run ci.yml --ref $env:BRANCH
+
+      - name: Failure issue
+        if: steps.which.outputs.bump == 'true' && steps.bump.outcome == 'failure'
+        shell: pwsh
+        env:
+          TARGET: ${{ steps.which.outputs.target }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $fence = '`' * 3
+          $tail = (Get-Content "$env:RUNNER_TEMP/bump.log" -Tail 60) -join "`n"
+          $body = @(
+            'tools/bump-singbox.ps1 не дошёл до конца.', '',
+            "Прогон: $env:RUN_URL", '',
+            $fence, $tail, $fence, '',
+            "Повторить вручную: Actions -> sing-box bump -> Run workflow с версией $env:TARGET."
+          ) -join "`n"
+          gh issue create --title "sing-box ${env:TARGET}: подъём не прошёл" --body $body
