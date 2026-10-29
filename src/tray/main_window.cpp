@@ -2005,7 +2005,8 @@ class Painter {
     }
     // The figures in full, or one rounded: noise to most, a tool to some.
     const std::vector<SwitchRow> details = {
-        Row(L"Подробные замеры", L"± — разброс запросов, сколько их было, время соединения через сервер.",
+        Row(L"Подробные замеры", L"Цифры за словом «стабильный»: ± разброс, сколько было запросов, время соединения; "
+                                 L"ошибка сервера как её вернуло ядро.",
             c.delaysDetailed, UiCommand::ToggleDelayDetails)};
     return Switches(l, details, x0, x1, y + h + kGap);
   }

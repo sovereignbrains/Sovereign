@@ -418,24 +418,61 @@ inline std::wstring DelayLabel(const UiDelay& delay, bool detailed) {
   return {};
 }
 
-// What a measurement is made of: "замеров: 9 · соединение 412 мс · потери 10%"
-// (`detailed`; else only the losses, if any), or why there was no answer.
+// What the figures of a measured server come to, in a word: losing requests
+// ("теряет 16%": from 10%), jumping (the spread a third of the latency or
+// more, and 30 ms), else steady. The ± and the count of requests are the
+// working behind it (DelayDetail, detailed).
+inline std::wstring DelayVerdict(const UiDelay& delay) {
+  if (delay.state != UiDelay::State::Ok) {
+    return {};
+  }
+  if (delay.loss >= 10) {
+    return std::format(L"теряет {}%", delay.loss);
+  }
+  if (delay.jitter >= 30 && delay.jitter * 3 >= delay.ms) {
+    return L"скачет";
+  }
+  return L"стабильный";
+}
+
+// Why a server gave no answer, short: the core's error is a Go one -
+// `Head "https://www.gstatic.com/generate_204": context deadline exceeded` -
+// the sort of text nobody reads. Unknown ones are cut after the quoted URL.
+inline std::wstring ShortDelayError(const std::wstring& error) {
+  const auto has = [&error](const wchar_t* part) { return error.find(part) != std::wstring::npos; };
+  if (has(L"deadline") || has(L"timeout") || has(L"timed out")) {
+    return L"не отвечает";
+  }
+  if (has(L"refused") || has(L"Application error") || has(L"reset") || has(L"EOF")) {
+    return L"сервер отклонил соединение";
+  }
+  if (has(L"tls") || has(L"TLS") || has(L"certificate") || has(L"handshake")) {
+    return L"не прошёл TLS";
+  }
+  if (has(L"no such host") || has(L"lookup")) {
+    return L"имя сервера не найдено";
+  }
+  const auto quote = error.find(L"\": ");
+  return quote == std::wstring::npos ? error : error.substr(quote + 3);
+}
+
+// What a measurement says: "стабильный" - and, `detailed`, what it is made of:
+// "замеров: 9 · соединение 412 мс" - or why there was no answer (the core's
+// words as they are, `detailed`).
 inline std::wstring DelayDetail(const UiDelay& delay, bool detailed) {
   if (delay.state == UiDelay::State::Failed) {
-    return delay.error;
+    return detailed ? delay.error : ShortDelayError(delay.error);
   }
   if (delay.state != UiDelay::State::Ok) {
     return {};
   }
+  std::wstring text = DelayVerdict(delay);
   if (!detailed) {
-    return delay.loss > 0 ? std::format(L"потери {}%", delay.loss) : std::wstring();
+    return text;
   }
-  std::wstring text = std::format(L"замеров: {}", delay.samples);
+  text += std::format(L" · замеров: {}", delay.samples);
   if (delay.connect > 0) {
     text += std::format(L" · соединение {} мс", delay.connect);
-  }
-  if (delay.loss > 0) {
-    text += std::format(L" · потери {}%", delay.loss);
   }
   return text;
 }
