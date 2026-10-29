@@ -365,6 +365,7 @@ struct View {
   std::string relayUrl;  // the subscription relay's address; never its key
   std::map<std::string, std::string> serviceVia;  // a service through a country: its server now ("" none there)
   bool relayKeySet = false;
+  bool sharedRelay = false;
 };
 
 // What to do with the config when a newer subscription meets the user's
@@ -450,6 +451,7 @@ struct LocalImport {
 struct RelayChange {
   std::optional<std::string> url;
   std::optional<std::string> key;
+  std::optional<bool> shared;  // Sovereign's own relay on or off
 };
 
 struct AppsChange {
@@ -761,9 +763,7 @@ class Worker {
       if (remove) {
         RemoveProfile(*remove);
       }
-      if (import) {
-        AddSubscription(*import, importDirect);
-      }
+      // The relay first: a subscription added with it chosen in the same breath is fetched through it.
       if (relay) {
         if (relay->url) {
           settings_.relayUrl = std::move(*relay->url);
@@ -774,7 +774,13 @@ class Worker {
         if (relay->key) {
           settings_.relayKey = std::move(*relay->key);
         }
+        if (relay->shared) {
+          settings_.sharedRelay = *relay->shared;
+        }
         Save();
+      }
+      if (import) {
+        AddSubscription(*import, importDirect);
       }
       if (refresh) {
         Refresh(*refresh, refreshDirect ? RefreshReason::Direct : RefreshReason::Asked);
@@ -1520,7 +1526,8 @@ class Worker {
     // Who sees the user's address decides how it's fetched:
     //  * the box runs a config whose rules send this host through the proxy:
     //    straight from here - it goes through the proxy;
-    //  * else through the relay, if there is one: its server sees Cloudflare;
+    //  * else through the relay, if there is one (the user's own, or Sovereign's
+    //    when chosen): its server sees Cloudflare;
     //  * else not at all - unless the user said "directly" for this one.
     const auto hosts = sovereign::tray::SubscriptionHosts({*profile});
     const bool viaProxy = model_.GetDisplay() == Display::On && !hosts.empty() &&
@@ -1529,9 +1536,10 @@ class Worker {
     state.heldBack = false;
     if (viaProxy || direct || reason == RefreshReason::Direct) {
       fetched = sovereign::tray::FetchSubscription(Widen(profile->url), kUserAgent, profile->hwid);
-    } else if (sovereign::tray::IsRelayUrl(settings_.relayUrl) && sovereign::tray::IsRelayKey(settings_.relayKey)) {
-      fetched = sovereign::tray::FetchSubscriptionViaRelay(settings_.relayUrl, settings_.relayKey, Widen(profile->url),
-                                                          kUserAgent, profile->hwid);
+    } else if (const auto relay =
+                   sovereign::tray::ChooseRelay(settings_.relayUrl, settings_.relayKey, settings_.sharedRelay)) {
+      fetched = sovereign::tray::FetchSubscriptionViaRelay(relay->url, relay->key, Widen(profile->url), kUserAgent,
+                                                          profile->hwid);
     } else {
       state.heldBack = true;
       fetched = std::unexpected(std::string(kHeldBack));
@@ -2788,6 +2796,7 @@ class Worker {
       v.lanDevices = lanDevices_;
       v.relayUrl = settings_.relayUrl;
       v.relayKeySet = !settings_.relayKey.empty();
+      v.sharedRelay = settings_.sharedRelay;
       v.killSwitchActive = killSwitchActive_;
       v.killSwitchError = killSwitchError_;
       window = shared.window;
@@ -3036,7 +3045,9 @@ void ImportBalloon(const std::wstring& message) {
   }
 }
 
-void Ask(HWND owner, sovereign::tray::UiQuestion question, std::function<void()> onYes);  // below
+void Ask(HWND owner, sovereign::tray::UiQuestion question, std::function<void()> onYes,
+         std::function<void()> onOther = {});  // below
+void RequestRelay(RelayChange change);       // below
 
 // A subscription link to add (the worker's AddSubscription); `direct`: fetched
 // directly whatever the way.
@@ -3053,30 +3064,37 @@ void QueueSubscription(std::string url, bool direct) {
 // A subscription link to add. With no connection, none coming and no relay
 // it would only be held back (Refresh) - on a clean client, the very first
 // one (28.10.2026: "can't add a subscription on a clean client"): asked
-// right away whether to fetch it directly, and not added if not.
+// right away how to fetch it - through Sovereign's relay (remembered: the
+// setting), directly (this once), or not at all.
 void RequestSubscription(std::string url) {
   bool ask = false;
   {
     auto& shared = State();
     const std::scoped_lock lock(shared.mutex);
     const View& v = shared.view;
-    ask = v.display != Display::On && !v.wantOn && (v.relayUrl.empty() || !v.relayKeySet);
+    const bool own = !v.relayUrl.empty() && v.relayKeySet;
+    ask = v.display != Display::On && !v.wantOn && !own && !v.sharedRelay;
   }
   if (!ask) {
     QueueSubscription(std::move(url), /*direct=*/false);
     return;
   }
   Ask(nullptr,
-      {.title = L"Скачать подписку напрямую?",
-       .text = L"Подключения нет, и пересыльщик не задан, так что сервер подписки увидит твой настоящий IP-адрес. "
-               L"Не хочешь — подключись или задай пересыльщик (Настройки → «Скачивать без подключения») и добавь "
-               L"её снова.",
-       .yes = L"Скачать напрямую",
+      {.title = L"Как скачать подписку?",
+       .text = L"Подключения нет. Напрямую сервер подписки увидит твой настоящий IP-адрес. Через сервер Sovereign "
+               L"(Cloudflare) он увидит адрес Cloudflare, но ссылку на подписку увидит тот, кто держит этот сервер, "
+               L"— автор Sovereign. Выбор запомнится: Настройки → «Скачивать без подключения».",
+       .yes = L"Через сервер Sovereign",
+       .no = L"Не добавлять",
+       .other = L"Напрямую",
        .tone = sovereign::tray::UiQuestion::Tone::Warning,
        .glyph = L"\xE896"},  // Download
-      [url = std::move(url)] { QueueSubscription(url, /*direct=*/true); });
-}
-constexpr const wchar_t* kNothingToImport =
+      [url] {
+        RequestRelay({.url = std::nullopt, .key = std::nullopt, .shared = true});
+        QueueSubscription(url, /*direct=*/false);
+      },
+      [url] { QueueSubscription(url, /*direct=*/true); });
+}constexpr const wchar_t* kNothingToImport =
     L"Не нашёл ни ссылки на подписку, ни конфига, ни ключей (vless://, vmess://, trojan://, ss://, hy2://, tuic://, "
     L"anytls://, wireguard://...), ни Clash/Xray-конфига.";
 
@@ -4697,6 +4715,7 @@ UiContent ContentFrom(const View& v) {
   }
   c.relayHost = v.relayUrl.empty() ? std::wstring() : sovereign::tray::UrlHost(Widen(v.relayUrl));
   c.relaySet = !v.relayUrl.empty() && v.relayKeySet;
+  c.sharedRelay = v.sharedRelay;
   c.killSwitchActive = v.killSwitchActive;
   c.killSwitchError = Widen(v.killSwitchError);
   c.autostart = sovereign::tray::AutostartEnabled();
@@ -4740,9 +4759,10 @@ std::uint64_t g_logsShown = 0;  // Shared::logsAdded as of the main window's las
 // A yes-or-no on the window's own dark card (MainWindow::Ask), not the
 // system's light MessageBox (22.10.2026: "make it look dearer, and dark");
 // onYes runs on its yes. Without the window, the box after all.
-void Ask(HWND owner, sovereign::tray::UiQuestion question, std::function<void()> onYes) {
+void Ask(HWND owner, sovereign::tray::UiQuestion question, std::function<void()> onYes,
+         std::function<void()> onOther) {
   if (g_mainWindow != nullptr) {
-    g_mainWindow->Ask(std::move(question), std::move(onYes));
+    g_mainWindow->Ask(std::move(question), std::move(onYes), std::move(onOther));
     return;
   }
   const std::wstring text = question.title + L"\n\n" + question.text;
@@ -5731,19 +5751,22 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       const std::string text = Narrow(args.text);
       const bool url = command == UiCommand::EditRelayUrlText;
       if (url && text.empty()) {
-        RequestRelay({.url = std::string(), .key = std::nullopt});  // cleared: no relay
+        RequestRelay({.url = std::string(), .key = std::nullopt, .shared = std::nullopt});  // cleared: no relay
       } else if (url ? !sovereign::tray::IsRelayUrl(text) : !sovereign::tray::IsRelayKey(text)) {
         if (g_trayIcon != nullptr) {
           g_trayIcon->Balloon(L"Sovereign", url ? L"Адрес пересыльщика — https://…, без ? и пробелов."
                                                 : L"Ключ — от 16 до 256 знаков, без пробелов.");
         }
       } else if (url) {
-        RequestRelay({.url = sovereign::tray::RelayBase(text), .key = std::nullopt});
+        RequestRelay({.url = sovereign::tray::RelayBase(text), .key = std::nullopt, .shared = std::nullopt});
       } else {
-        RequestRelay({.url = std::nullopt, .key = text});
+        RequestRelay({.url = std::nullopt, .key = text, .shared = std::nullopt});
       }
       break;
     }
+    case UiCommand::ToggleSharedRelay:
+      RequestRelay({.url = std::nullopt, .key = std::nullopt, .shared = !view.sharedRelay});
+      break;
     case UiCommand::Reconnect: {
       {
         auto& shared = State();

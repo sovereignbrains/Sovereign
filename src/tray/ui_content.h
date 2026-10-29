@@ -188,6 +188,7 @@ struct UiQuestion {
   std::wstring text;   // what it means, under it
   std::wstring yes;    // "Закрыть"
   std::wstring no = L"Отмена";
+  std::wstring other{};  // a second way to go on, under yes and over no; empty: none
   Tone tone = Tone::Accent;
   std::wstring glyph{};  // a Segoe Fluent Icons character, in a circle before the title; empty: a "!"
 };
@@ -266,6 +267,7 @@ struct UiContent {
   // The subscription relay (relay.h): its host only - the key never reaches the UI.
   std::wstring relayHost;
   bool relaySet = false;
+  bool sharedRelay = false;  // Sovereign's own relay chosen (relay.h kSovereignRelayUrl)
   bool killSwitchActive = false;        // the filters are in place
   std::wstring killSwitchError;         // why the service couldn't apply it
   bool autostart = false;               // the tray starts when the user signs in
@@ -361,6 +363,7 @@ enum class UiCommand : std::uint8_t {
   EditRelayUrlText,   // text: the address ("" clears the relay)
   EditRelayKey,       // starts typing the relay's key over its row (shown empty)
   EditRelayKeyText,   // text: the key
+  ToggleSharedRelay,  // Sovereign's own relay, on or off
   RefreshDirect,      // index into profiles: fetch it directly - its server sees the user's IP
   ChooseVia,          // index into profiles, anchor: the menu of configurations to connect through
   SetAppsMode,   // index: 0 all except the list, 1 only the list

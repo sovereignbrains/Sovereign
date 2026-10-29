@@ -808,6 +808,13 @@ class Painter {
       yes.sub = static_cast<int>(q.tone);
       yes.scrolls = false;
       l.items.push_back(std::move(yes));
+      if (!q.other.empty()) {
+        Item other = Make(Kind::Button, box.other, q.other);
+        other.action = ItemAction::Answer;
+        other.index = 2;
+        other.scrolls = false;
+        l.items.push_back(std::move(other));
+      }
       if (!q.no.empty()) {
         Item no = Make(Kind::Button, box.no, q.no);
         no.action = ItemAction::Answer;
@@ -829,6 +836,7 @@ class Painter {
     D2D1_RECT_F text{};
     float band = 0;  // the buttons' band's top
     D2D1_RECT_F yes{};
+    D2D1_RECT_F other{};
     D2D1_RECT_F no{};
   };
   AskBoxes AskBox(const UiQuestion& q, float width, float height) const {
@@ -844,7 +852,10 @@ class Painter {
     // The title's first line centred on the circle.
     const float titleTop = kAskPad + (kCircle - 24) / 2;
     const float body = std::max(kAskPad + kCircle, titleTop + titleHeight + (q.text.empty() ? 0.0f : 6 + textHeight));
-    const float h = body + kAskPad + kBand;
+    // With a second way on, the buttons go in two rows: yes across the card,
+    // then the other and no side by side.
+    const bool rows = !q.other.empty();
+    const float h = body + kAskPad + kBand + (rows ? kAskButton + 8 : 0.0f);
     const float left = std::round((width - w) / 2);
     const float top = std::round(std::max(kCaption + 8, (height - h) * 0.42f));
     AskBoxes b;
@@ -859,6 +870,12 @@ class Painter {
     b.yes = q.no.empty() ? D2D1_RECT_F{left + w - kAskPad - half, buttonTop, left + w - kAskPad, buttonTop + kAskButton}
                          : D2D1_RECT_F{left + kAskPad, buttonTop, left + kAskPad + half, buttonTop + kAskButton};
     b.no = {left + w - kAskPad - half, buttonTop, left + w - kAskPad, buttonTop + kAskButton};
+    if (rows) {
+      const float lower = buttonTop + kAskButton + 8;
+      b.yes = {left + kAskPad, buttonTop, left + w - kAskPad, buttonTop + kAskButton};
+      b.other = {left + kAskPad, lower, left + kAskPad + half, lower + kAskButton};
+      b.no = {left + w - kAskPad - half, lower, left + w - kAskPad, lower + kAskButton};
+    }
     return b;
   }
 
@@ -2050,24 +2067,33 @@ class Painter {
       Item relay = Make(Kind::ValueRow, row(y), L"Скачивать без подключения",
                         c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
       relay.action = ItemAction::ToggleMore;
-      relay.detail = c.relayHost.empty() ? L"выключено" : L"включено";
+      relay.detail = !c.relayHost.empty() ? L"свой" : (c.sharedRelay ? L"Sovereign" : L"выключено");
       l.items.push_back(std::move(relay));
       HintAfter(l, L"Скачивать без подключения", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
                 L"Пока подключение работает, подписки скачиваются через него. Когда его нет, напрямую их сервер "
-                L"увидел бы твой настоящий IP — поэтому они скачиваются через пересыльщик: твой Cloudflare Worker "
-                L"(tools/relay в репозитории). Сервер подписки видит адрес Cloudflare.\n\nАдрес — "
-                L"https://….workers.dev/ твоего Worker'а, ключ — его ключ; оба пишет в relay.json deploy.ps1.\n\n"
-                L"Не обязателен: без него новую подписку предложит скачать напрямую, остальные ждут подключения. "
-                L"Пустой адрес — пересыльщик выключен.");
+                L"увидел бы твой настоящий IP — поэтому они скачиваются через пересыльщик (Cloudflare Worker): сервер "
+                L"подписки видит адрес Cloudflare, а ссылку на подписку — тот, кто держит пересыльщик.\n\n"
+                L"«Через сервер Sovereign» — пересыльщик автора, ничего не настраивать. Хочешь, чтобы ссылки видел "
+                L"только ты, — задай свой: адрес https://….workers.dev/ и ключ из relay.json, который пишет "
+                L"tools/relay/deploy.ps1. Свой главнее.\n\nБез пересыльщика новую подписку предложат скачать "
+                L"напрямую, остальные ждут подключения.");
       float top = y + kRow;
       if (c.settingsMore) {
         line(top);
-        Item url = CommandItem(Kind::ValueRow, row(top), L"Адрес", nullptr, UiCommand::EditRelayUrl);
+        Item shared = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + 56 - 2}, L"Через сервер Sovereign", nullptr,
+                                  UiCommand::ToggleSharedRelay);
+        shared.detail = c.relayHost.empty() ? std::wstring(L"сервер видит ссылку на подписку")
+                                            : std::wstring(L"пока задан свой — он главнее");
+        shared.checked = c.sharedRelay;
+        l.items.push_back(std::move(shared));
+        top += 56;
+        line(top);
+        Item url = CommandItem(Kind::ValueRow, row(top), L"Свой адрес", nullptr, UiCommand::EditRelayUrl);
         url.detail = c.relayHost.empty() ? std::wstring(L"не задан") : c.relayHost;
         l.items.push_back(std::move(url));
         top += kRow;
         line(top);
-        Item key = CommandItem(Kind::ValueRow, row(top), L"Ключ", nullptr, UiCommand::EditRelayKey);
+        Item key = CommandItem(Kind::ValueRow, row(top), L"Свой ключ", nullptr, UiCommand::EditRelayKey);
         key.detail = c.relaySet ? L"задан" : L"не задан";
         key.enabled = !c.relayHost.empty();
         l.items.push_back(std::move(key));
@@ -3649,6 +3675,7 @@ struct MainWindow::Impl {
   // its yes does, and when it came (Painter::questionShown).
   std::optional<UiQuestion> question;
   std::function<void()> onYes;
+  std::function<void()> onOther;
   std::chrono::steady_clock::time_point questionAt{};
   std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
   ULONGLONG panSince = 0;        // the middle button went down (log.pan)
@@ -4067,13 +4094,14 @@ struct MainWindow::Impl {
 
   // A question over the page (MainWindow::Ask): whatever was going on in it
   // stops, the card comes in.
-  void Ask(UiQuestion asked, std::function<void()> yes) {
+  void Ask(UiQuestion asked, std::function<void()> yes, std::function<void()> other = {}) {
     EndEdit(true);
     StopPan();
     selecting = false;
     barGrab.reset();
     question = std::move(asked);
     onYes = std::move(yes);
+    onOther = std::move(other);
     in.focus = in.pressed = in.tip = -1;
     in.focusVisible = false;
     questionAt = std::chrono::steady_clock::now();
@@ -4081,16 +4109,18 @@ struct MainWindow::Impl {
     Relayout();
   }
 
-  // The question answered (yes) or dropped: the page takes clicks again.
-  void Answer(bool yes) {
+  // The question answered (1 yes, 2 the other way, 0 no) or dropped: the page takes clicks again.
+  void Answer(int which) {
     if (!question) {
       return;
     }
-    const std::function<void()> then = std::exchange(onYes, nullptr);
+    const std::function<void()> yes = std::exchange(onYes, nullptr);
+    const std::function<void()> other = std::exchange(onOther, nullptr);
     question.reset();
     in.focus = in.pressed = -1;
     Relayout();
-    if (yes && then) {
+    const std::function<void()>& then = which == 1 ? yes : other;
+    if (which != 0 && then) {
       then();
     }
   }
@@ -4370,7 +4400,7 @@ struct MainWindow::Impl {
         Relayout();
         return;
       case ItemAction::Hide: PostMessageW(hwnd, WM_CLOSE, 0, 0); return;
-      case ItemAction::Answer: Answer(item.index == 1); return;
+      case ItemAction::Answer: Answer(item.index); return;
       case ItemAction::Command: break;
     }
     UiArgs args;
@@ -4976,7 +5006,7 @@ struct MainWindow::Impl {
         return 0;
       case WM_SHOWWINDOW:
         if (wParam == FALSE) {
-          Answer(false);  // hidden, a question goes unanswered: no
+          Answer(0);  // hidden, a question goes unanswered: no
           // Hidden, the window hears no more of the pointer: where it was is
           // no longer where it is, and the window shown lights nothing up.
           mouse.reset();
@@ -4999,7 +5029,7 @@ struct MainWindow::Impl {
       // Only its buttons: the page under it waits for the answer. Enter
       // with neither in focus is yes.
       switch (key) {
-        case VK_ESCAPE: Answer(false); return true;
+        case VK_ESCAPE: Answer(0); return true;
         case VK_TAB:
         case VK_LEFT:
         case VK_RIGHT: MoveFocus(shift || key == VK_LEFT); return true;
@@ -5010,7 +5040,7 @@ struct MainWindow::Impl {
             const Item item = layout.items[static_cast<std::size_t>(in.focus)];
             Activate(item);
           } else if (key == VK_RETURN) {
-            Answer(true);
+            Answer(1);
           }
           return true;
         default: return true;
@@ -5170,11 +5200,11 @@ void MainWindow::EditInPlace(UiCommand anchor, int index, UiCommand onEnter, con
   impl_->EditOver(anchor, index, onEnter, initial, digitsOnly);
 }
 
-void MainWindow::Ask(UiQuestion question, std::function<void()> onYes) {
+void MainWindow::Ask(UiQuestion question, std::function<void()> onYes, std::function<void()> onOther) {
   if (!IsVisible()) {
     Show(impl_->page);
   }
-  impl_->Ask(std::move(question), std::move(onYes));
+  impl_->Ask(std::move(question), std::move(onYes), std::move(onOther));
 }
 
 void MainWindow::SetLogs(const std::vector<std::wstring>& lines) { impl_->AddLogs(lines, true); }

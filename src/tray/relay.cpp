@@ -55,6 +55,16 @@ bool IsRelayKey(std::string_view key) {
          std::all_of(key.begin(), key.end(), [](char ch) { return ch > 0x20 && ch < 0x7F; });
 }
 
+std::optional<RelayTarget> ChooseRelay(std::string_view ownUrl, std::string_view ownKey, bool shared) {
+  if (IsRelayUrl(ownUrl) && IsRelayKey(ownKey)) {
+    return RelayTarget{std::string(ownUrl), std::string(ownKey)};
+  }
+  if (shared) {
+    return RelayTarget{std::string(kSovereignRelayUrl), std::string(kSovereignRelayKey)};
+  }
+  return std::nullopt;
+}
+
 std::string RelayBase(std::string_view url) {
   std::string base(url);
   while (base.ends_with('/')) {

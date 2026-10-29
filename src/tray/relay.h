@@ -18,6 +18,21 @@
 
 namespace sovereign::tray {
 
+// Sovereign's own relay, the same Worker in the author's Cloudflare account
+// (tools/relay/README.md), for those who have none of their own and choose it
+// (Settings::sharedRelay). Its key is in the open-source client for anyone to
+// read - it keeps scanners out, and what stops abuse is the Worker's limits.
+// Whoever runs it sees the subscription links that pass through.
+inline constexpr std::string_view kSovereignRelayUrl = "https://sub.qz7mtk4rwp.workers.dev/";
+inline constexpr std::string_view kSovereignRelayKey = "ripdg3ezkp8chcvngmvgzbp4hiiq49hahb5vgazf";
+
+// The relay to fetch through: the user's own (both set and valid), else
+// Sovereign's when shared is chosen, else none.
+struct RelayTarget {
+  std::string url;
+  std::string key;
+};
+std::optional<RelayTarget> ChooseRelay(std::string_view ownUrl, std::string_view ownKey, bool shared);
 // The relay's address: https, a host, no query or fragment. The key: what
 // the worker's KEY secret is - printable ASCII without spaces, 16..256 long.
 bool IsRelayUrl(std::string_view url);

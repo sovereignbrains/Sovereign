@@ -98,6 +98,10 @@ struct TraySettings {
   // encrypted for this Windows user (DPAPI); both empty = none.
   std::string relayUrl;
   std::string relayKey;
+  // Sovereign's own relay (kSovereignRelayUrl) instead, when none of the user's
+  // own is set: opt-in, asked about on the first subscription added with no
+  // connection, or switched on in the settings.
+  bool sharedRelay = false;
 };
 
 // An app's remembered exe path, or null; and setting one (replacing).

@@ -79,3 +79,5 @@ Testing/
 # go build -buildmode=c-shared side output when built manually in-tree
 # (CMake builds it out-of-tree into build/, see src/service/CMakeLists.txt)
 /gocore/sovereign-gocore.h
+
+tools/relay/*.json

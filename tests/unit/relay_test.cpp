@@ -37,6 +37,21 @@ void TestUrlAndKey() {
   CHECK(RelayBase("https://x.workers.dev//") == "https://x.workers.dev/");
 }
 
+// Whose relay: the user's own when set, else Sovereign's only if chosen, else none.
+void TestChoice() {
+  const std::string own = "https://fetch.example.workers.dev/";
+  const std::string key = "abcdefghijkmnpqrstuvwxyz23456789abcdefgh";
+  CHECK(IsRelayUrl(kSovereignRelayUrl) && IsRelayKey(kSovereignRelayKey));  // the built-in pair is one the client accepts
+  CHECK(!ChooseRelay("", "", false));
+  CHECK(!ChooseRelay(own, "short", false));  // half a pair is none
+  const auto shared = ChooseRelay("", "", true);
+  CHECK(shared && shared->url == kSovereignRelayUrl && shared->key == kSovereignRelayKey);
+  const auto mine = ChooseRelay(own, key, true);  // his own wins over the shared one
+  CHECK(mine && mine->url == own && mine->key == key);
+  const auto half = ChooseRelay(own, "", true);
+  CHECK(half && half->url == kSovereignRelayUrl);
+}
+
 void TestRequestBody() {
   const json body = json::parse(
       RelayRequestBody("https://panel.example/sub/abc", "sing-box 1.14.2", "0123456789abcdef0123456789abcdef"));
@@ -77,6 +92,7 @@ void TestPlan() {
 int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestUrlAndKey();
+    TestChoice();
     TestRequestBody();
     TestPlan();
   } catch (const std::exception& e) {

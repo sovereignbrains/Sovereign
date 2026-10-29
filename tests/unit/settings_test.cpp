@@ -184,6 +184,15 @@ void TestRelay(const fs::path& data) {
   settings.relayKey.clear();
   SaveSettings(settings);
   CHECK(!nlohmann::json::parse(Read(data / "tray.json")).contains("relay"));
+
+  // Sovereign's own relay: a flag, nothing secret in it; off, it leaves no trace.
+  CHECK(!LoadSettings().sharedRelay);
+  settings.sharedRelay = true;
+  SaveSettings(settings);
+  CHECK(LoadSettings().sharedRelay);
+  settings.sharedRelay = false;
+  SaveSettings(settings);
+  CHECK(!nlohmann::json::parse(Read(data / "tray.json")).contains("sharedRelay"));
 }
 
 void TestFiles(const fs::path& data) {

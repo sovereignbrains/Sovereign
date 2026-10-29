@@ -268,6 +268,9 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("logLevel"); v != json.end() && v->is_string() && IsLogLevel(v->get<std::string>())) {
     settings.logLevel = v->get<std::string>();
   }
+  if (const auto v = json.find("sharedRelay"); v != json.end() && v->is_boolean()) {
+    settings.sharedRelay = v->get<bool>();
+  }
   if (const auto v = json.find("relay"); v != json.end() && v->is_object()) {
     const std::string url = v->value("url", std::string());
     const std::string key = v->contains("key") && (*v)["key"].is_string() ? UnprotectSecret((*v)["key"].get<std::string>())
@@ -335,6 +338,9 @@ void SaveSettings(const TraySettings& settings) {
   json["lanAllowed"] = nlohmann::json::array();
   for (const LanHost& host : settings.lanAllowed) {
     json["lanAllowed"].push_back({{"address", host.address}, {"name", host.name}});
+  }
+  if (settings.sharedRelay) {
+    json["sharedRelay"] = true;
   }
   if (!settings.relayUrl.empty() && !settings.relayKey.empty()) {
     json["relay"] = {{"url", settings.relayUrl}, {"key", ProtectSecret(settings.relayKey)}};

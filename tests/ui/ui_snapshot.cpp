@@ -359,6 +359,24 @@ int Snapshots(const std::wstring& dir) {
                                 .no = L"",
                                 .tone = UiQuestion::Tone::Warning};
     sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Logs, logs, 400, 620, 96, dir + L"\\question-note.png");
+    // Three ways on: a subscription added with no connection and no relay.
+    asked.question = UiQuestion{.title = L"Как скачать подписку?",
+                                .text = L"Подключения нет. Напрямую сервер подписки увидит твой настоящий IP-адрес. Через "
+                                        L"сервер Sovereign (Cloudflare) он увидит адрес Cloudflare, но ссылку на подписку "
+                                        L"увидит тот, кто держит этот сервер, — автор Sovereign. Выбор запомнится: "
+                                        L"Настройки → «Скачивать без подключения».",
+                                .yes = L"Через сервер Sovereign",
+                                .no = L"Не добавлять",
+                                .other = L"Напрямую",
+                                .tone = UiQuestion::Tone::Warning,
+                                .glyph = L"\xE896"};
+    sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Overview, logs, 400, 620, 96,
+                                              dir + L"\\question-relay.png");
+    asked.question.reset();
+    asked.settingsMore = true;
+    asked.sharedRelay = true;
+    sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Subscription, logs, 400, 620, 96,
+                                              dir + L"\\relay-open.png");
   });
   // The exit's address hidden: the flag and the country.
   variant([&](UiContent& hidden) {
@@ -774,10 +792,20 @@ int LayoutTest(const std::wstring& dir) {
   routed.routing.localDns = L"свой · dns.adguard-dns.com";
   // A question open over the overview (MainWindow::Ask), its title long enough to wrap.
   UiContent asked = content;
-  asked.question = UiQuestion{.title = L"Скачать подписку напрямую, без VPN и пересыльщика?",
-                              .text = L"Сервер этой подписки увидит твой настоящий IP-адрес.",
-                              .yes = L"Скачать напрямую",
-                              .tone = UiQuestion::Tone::Warning};
+  asked.question = UiQuestion{.title = L"Как скачать подписку?",
+                              .text = L"Подключения нет. Напрямую сервер подписки увидит твой настоящий IP-адрес. Через сервер "
+                                      L"Sovereign (Cloudflare) он увидит адрес Cloudflare, но ссылку на подписку увидит тот, "
+                                      L"кто держит этот сервер, — автор Sovereign. Выбор запомнится: Настройки → "
+                                      L"«Скачивать без подключения».",
+                              .yes = L"Через сервер Sovereign",
+                              .no = L"Не добавлять",
+                              .other = L"Напрямую",
+                              .tone = UiQuestion::Tone::Warning,
+                              .glyph = L"\xE896"};
+  // The relay fold open, Sovereign's own chosen.
+  UiContent relayOpen = content;
+  relayOpen.settingsMore = true;
+  relayOpen.sharedRelay = true;
   // Updates installed unasked, the longest of the row's values, one waiting
   // for a quiet moment; and only by the button, the longest idle status.
   UiContent installing = content;
@@ -793,7 +821,7 @@ int LayoutTest(const std::wstring& dir) {
     const wchar_t* name;
     const UiContent* content;
   };
-  const std::array<Page, 11> pages = {{{UiPage::Overview, L"overview", &content},
+  const std::array<Page, 12> pages = {{{UiPage::Overview, L"overview", &content},
                                       {UiPage::Servers, L"servers", &content},
                                       {UiPage::Subscription, L"subscription", &content},
                                       {UiPage::Logs, L"logs", &content},
@@ -802,6 +830,7 @@ int LayoutTest(const std::wstring& dir) {
                                       {UiPage::Routing, L"routing", &routed},
                                       {UiPage::Checks, L"checks", &content},
                                       {UiPage::Overview, L"question", &asked},
+                                      {UiPage::Subscription, L"relay-open", &relayOpen},
                                       {UiPage::Settings, L"settings-install", &installing},
                                       {UiPage::Settings, L"settings-idle", &idle}}};
   CreateDirectoryW(dir.c_str(), nullptr);

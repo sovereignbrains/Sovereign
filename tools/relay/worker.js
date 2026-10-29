@@ -1,7 +1,8 @@
 // Subscription relay: fetches a subscription for the tray from Cloudflare's
 // network, so the subscription's server sees Cloudflare's address, not the
-// user's. Deployed in the user's own Cloudflare account (never a shared one:
-// whoever runs it sees the subscription links). See README.md.
+// user's. Whoever runs it sees the subscription links (tokens included): one
+// in the user's own account, or the one Sovereign offers as an opt-in. It keeps
+// nothing but a big answer's pieces for five minutes, and logs nothing. See README.md.
 //
 // POST / with header X-Relay-Key: <the KEY secret> and a JSON body
 //   {"url": "https://...", "headers": {"User-Agent": "...", "x-hwid": "..."}}
@@ -12,6 +13,9 @@
 // Why pieces: Russian networks cut connections to Cloudflare after about
 // 24 KB (measured 03.10.2026) - every piece comes over a connection of its own.
 // Anything else - a wrong key, another method or path - gets a plain 404.
+// The key ships inside the open-source client, so it only keeps scanners out;
+// what stops abuse is the per-address limit (LIMIT binding) and the rules in
+// allowedTarget(): this is a subscription fetcher, not an open proxy.
 
 import { DurableObject } from "cloudflare:workers";
 
@@ -47,11 +51,56 @@ function sameKey(a, b) {
   return diff === 0;
 }
 
+// Only a public host name: no addresses, no local names, no credentials in the link.
+function allowedTarget(target) {
+  if (target.protocol !== "https:" && target.protocol !== "http:") {
+    return false;
+  }
+  if (target.username !== "" || target.password !== "") {
+    return false;
+  }
+  const host = target.hostname.toLowerCase();
+  if (host.startsWith("[") || /^[0-9.x]+$/.test(host) || !host.includes(".")) {
+    return false;  // an IPv6 or IPv4 literal (any spelling), or a name without a dot
+  }
+  return !/\.(local|localhost|internal|lan|home|corp|workers\.dev|pages\.dev)$/.test(host);
+}
+
 function plain(body, status, headers) {
   // no-transform: Cloudflare mustn't recompress a piece (its size is the point).
   const h = new Headers(headers);
   h.set("Cache-Control", "no-store, no-transform");
   return new Response(body, { status, headers: h });
+}
+
+// The body, or null if it is over MAX_BODY - read piece by piece, so a huge answer never sits in memory.
+async function readCapped(response) {
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > MAX_BODY || !response.body) {
+    return declared > MAX_BODY ? null : new Uint8Array(0);
+  }
+  const reader = response.body.getReader();
+  const parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    size += value.byteLength;
+    if (size > MAX_BODY) {
+      await reader.cancel();
+      return null;
+    }
+    parts.push(value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    body.set(part, at);
+    at += part.byteLength;
+  }
+  return body;
 }
 
 async function fetchSubscription(job) {
@@ -61,7 +110,7 @@ async function fetchSubscription(job) {
   } catch {
     return { error: plain("bad url", 400) };
   }
-  if (target.protocol !== "https:" && target.protocol !== "http:") {
+  if (!allowedTarget(target)) {
     return { error: plain("bad url", 400) };
   }
   const headers = new Headers();
@@ -76,8 +125,8 @@ async function fetchSubscription(job) {
   } catch (e) {
     return { error: plain("fetch failed: " + e.message, 502) };
   }
-  const body = new Uint8Array(await upstream.arrayBuffer());
-  if (body.byteLength > MAX_BODY) {
+  const body = await readCapped(upstream);
+  if (body === null) {
     return { error: plain("too large", 502) };
   }
   const out = { "X-Relay-Status": String(upstream.status) };
@@ -137,6 +186,10 @@ export default {
 
     if (request.method !== "POST" || url.pathname !== "/") {
       return notFound();
+    }
+    // Per address, per location (the LIMIT binding: 12 a minute); a missing binding means no limit.
+    if (env.LIMIT && !(await env.LIMIT.limit({ key: request.headers.get("CF-Connecting-IP") ?? "-" })).success) {
+      return plain("slow down", 429);
     }
     let job;
     try {

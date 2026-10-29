@@ -21,10 +21,14 @@ if (-not $sub) { throw 'no workers.dev subdomain yet: open Workers in the dashbo
 
 function Upload([bool]$withMigration) {
     # JOBS: a big answer's pieces (Durable Object, SQLite-backed: on the free plan too).
+    # LIMIT: 12 fetches a minute per address (and location) - for a relay others use too.
     $meta = @{
         main_module        = 'worker.js'
         compatibility_date = '2026-09-01'
-        bindings           = @(@{ type = 'durable_object_namespace'; name = 'JOBS'; class_name = 'Job' })
+        bindings           = @(
+            @{ type = 'durable_object_namespace'; name = 'JOBS'; class_name = 'Job' },
+            @{ type = 'ratelimit'; name = 'LIMIT'; namespace_id = '1001'; simple = @{ limit = 12; period = 60 } }
+        )
     }
     if ($withMigration) { $meta.migrations = @{ new_tag = 'v1'; new_sqlite_classes = @('Job') } }
     $metaFile = Join-Path $env:TEMP 'relay-meta.json'

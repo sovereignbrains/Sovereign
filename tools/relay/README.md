@@ -7,8 +7,9 @@ account. The subscription's server sees a Cloudflare address
 (`2a06:98c0:3600::103` and the like) and your workers.dev name in the
 `CF-Worker` header - not your IP. Cloudflare sees your IP.
 
-Never use someone else's relay, and don't run one for others: whoever runs it
-sees every subscription link that passes through, tokens included.
+Whoever runs a relay sees every subscription link that passes through, tokens
+included - so the safest is your own. Sovereign also offers its author's, as an
+opt-in for those who have none (below).
 
 ## What it does
 
@@ -25,6 +26,12 @@ no key, a wrong key, another method or path - gets a plain 404.
 
 Free plan limits are far beyond what this needs (100 000 requests a day).
 
+It is a subscription fetcher, not an open proxy: only a host *name* (no IP
+addresses, no local names, no credentials in the link), the headers above, 4 MB
+at most, and a limit per address (12 fetches a minute; Cloudflare's rate limit
+binding is approximate, a soft guard). It logs nothing and keeps nothing but a
+big answer's pieces, for five minutes.
+
 ## Deploying
 
 1. In the Cloudflare dashboard, open Workers once and pick a workers.dev
@@ -33,16 +40,27 @@ Free plan limits are far beyond what this needs (100 000 requests a day).
 2. Create an API token with **Account -> Workers Scripts: Edit** and
    **Account -> Account Settings: Read**.
 3. `$env:CLOUDFLARE_API_TOKEN = '...'; .\deploy.ps1`
-4. In Sovereign: Настройки -> Скачивать без подключения -> the address and the
-   key from `relay.json`. The tray keeps the key encrypted for your Windows
+4. In Sovereign: Настройки -> Скачивать без подключения -> "Свой адрес" and "Свой ключ":
+   the address and the key from `relay.json`. The tray keeps the key encrypted for your Windows
    user (DPAPI).
+
+## Sovereign's relay (opt-in)
+
+The same Worker runs in the author's Cloudflare account as `sub`; its address and
+key are in `src/tray/relay.h` (`kSovereignRelayUrl`/`kSovereignRelayKey`) - in the
+open, so the key only keeps scanners out. The tray never uses it unasked: the
+first subscription added with no connection offers three ways - through it,
+directly, or not at all - and Settings has a switch. A relay of your own, if
+set, wins. What the author could see in it: the subscription links, and your
+address to Cloudflare. Redeploying it (e.g. a new key, then a release):
+`.\deploy.ps1 -Script sub -Out relay-shared.json` (git-ignored).
 
 ## How the tray uses it
 
 - The connection is up and runs a config whose rules send the subscription's
   host through the proxy: fetched as before, through the proxy.
-- Otherwise, with a relay set: through the relay.
+- Otherwise, with a relay set (your own, or Sovereign's if chosen): through the relay.
 - Otherwise not at all. A scheduled refresh waits quietly for a connection or a
-  relay; a new subscription is asked about right away - "Скачать напрямую"
-  (its server will see your IP) or not added at all. One kept "не скачана"
+  relay; a new subscription is asked about right away - through Sovereign's
+  relay, "Напрямую" (its server will see your IP) or not added at all. One kept "не скачана"
   (the connection was coming) offers "Скачать напрямую" in its menu.
