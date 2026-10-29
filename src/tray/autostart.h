@@ -11,6 +11,11 @@ namespace sovereign::tray {
 // Started without it (a shortcut, a double click) the tray opens its window.
 inline constexpr wchar_t kBackgroundArg[] = L"--background";
 
+// The argument the service starts the tray with after it installed an update
+// (sovereign-core --launch-tray): in the notification area, connected as the
+// user left it, telling about the new version.
+inline constexpr wchar_t kUpdatedArg[] = L"--updated";
+
 // Whether the Run value exists (whatever path it holds).
 bool AutostartEnabled();
 

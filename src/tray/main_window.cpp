@@ -607,6 +607,7 @@ std::wstring UpdateStatus(const UiContent& c) {
     case UiUpdate::Available:
       return c.updateError.empty() ? L"Доступна версия " + c.updateVersion : L"Не удалось: " + c.updateError;
     case UiUpdate::Downloading: return L"Скачиваю версию " + c.updateVersion + L"…";
+    case UiUpdate::Waiting: return L"Версия " + c.updateVersion + L" скачана, поставлю, когда компьютер будет свободен.";
     case UiUpdate::Failed: return L"Не удалось проверить: " + c.updateError;
     case UiUpdate::Off: return L"Сборка для разработки: обновления не проверяются.";
   }
@@ -1557,8 +1558,9 @@ class Painter {
     }
     // Leftmost, so the keys the hand knows stay where they were; in the
     // accent (checked, DrawChrome). Downloading, a click opens the settings,
-    // where the update's state is told in full.
-    if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading) {
+    // where the update's state is told in full. Waiting for a quiet moment, a
+    // click installs it now.
+    if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading || c.update == UiUpdate::Waiting) {
       Item update = chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
                                        L"Обновить до " + c.updateVersion, kGlyphDownload, UiCommand::InstallUpdate));
       update.checked = true;
@@ -1566,6 +1568,9 @@ class Painter {
         update.action = ItemAction::Page;
         update.index = static_cast<int>(UiPage::Settings);
         update.tip = L"Скачиваю версию " + c.updateVersion + L"…";
+      } else if (c.update == UiUpdate::Waiting) {
+        update.tip = L"Версия " + c.updateVersion +
+                     L" скачана и поставится, когда компьютер будет свободен. Нажми, чтобы поставить сейчас";
       } else if (!c.updateError.empty()) {
         update.tip = L"Обновление не удалось: " + c.updateError + L". Нажми, чтобы повторить";
       } else {
@@ -2720,9 +2725,10 @@ class Painter {
       l.items.push_back(std::move(updates));
       HintAfter(l, L"Обновления", body_.get(), x0 + 20, x1 - 220, top + kRow / 2,
                 L"«Проверять автоматически» — раз в 12 часов; новая версия появится значком в заголовке окна, "
-                L"обновляешь нажатием на него. «Ставить автоматически» — новая версия скачивается и "
-                L"ставится сама, Windows только спросит разрешение. «Не проверять» — только кнопкой внизу этой "
-                L"страницы.");
+                L"обновляешь нажатием на него. «Ставить автоматически» — новая версия скачивается сама и "
+                L"ставится без вопросов, когда компьютер свободен: 10 минут никто не трогал мышь и клавиатуру, "
+                L"ничего не открыто на весь экран, нет загрузок. VPN пропадает примерно на полминуты. «Не "
+                L"проверять» — только кнопкой внизу этой страницы.");
       top += kRow;
       // The local network: open, or closed both ways but for what the user
       // lets in - the router, a device around, an address typed in. Closed, a
@@ -2799,9 +2805,11 @@ class Painter {
     check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
     l.items.push_back(std::move(check));
     y += 40;
-    if (c.update == UiUpdate::Available) {
+    if (c.update == UiUpdate::Available || c.update == UiUpdate::Waiting) {
       y += 10;
-      l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton}, L"Обновить до " + c.updateVersion,
+      l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton},
+                                    c.update == UiUpdate::Waiting ? L"Обновить сейчас до " + c.updateVersion
+                                                                  : L"Обновить до " + c.updateVersion,
                                     kGlyphDownload, UiCommand::InstallUpdate));
       y += kButton;
     }

@@ -35,7 +35,9 @@ struct UiDelay {
 
 // Where the updater is (updater.h), as the windows show it.
 // Off: a development build, which never checks (update.h IsDevelopmentBuild).
-enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Failed, Off };
+// Waiting: downloaded unasked, it waits for the computer to be quiet
+// (update.h QuietForUpdate) - or for a click.
+enum class UiUpdate : std::uint8_t { Idle, Checking, UpToDate, Available, Downloading, Waiting, Failed, Off };
 
 // Where a server is: its exit's country and the network it's in, as looked
 // up through it - not what its name says.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <compare>
 #include <cstdint>
 #include <optional>
@@ -28,8 +29,9 @@ inline bool IsDevelopmentBuild(const Version& v) { return v == Version{}; }
 
 // What the updater does unasked (tray.json "updates", the settings' row):
 // Check looks a minute after start and every 12 hours and says what it
-// found; Install also installs it (Windows asks first: UAC); Off looks only
-// when the user asks.
+// found; Install also downloads it and has the service install it once the
+// computer is quiet (QuietForUpdate) - no UAC; Off looks only when the user
+// asks.
 enum class UpdateMode : std::uint8_t { Off, Check, Install };
 std::string_view UpdateModeName(UpdateMode mode);  // "off" / "check" / "install"
 UpdateMode ParseUpdateMode(std::string_view name);  // unknown -> Check
@@ -42,6 +44,19 @@ std::string ToString(const Version& version);
 // The installer a release carries: Sovereign-Setup-1.2.3.exe, and next to it
 // its checksum, Sovereign-Setup-1.2.3.exe.sha256.
 std::string InstallerName(const Version& version);
+
+// Where the release v1.2.3 keeps that checksum - what the service, asked to
+// install 1.2.3 (update_install), trusts rather than anything the tray says.
+std::string ChecksumUrl(const Version& version);
+
+// Whether nobody would miss the connection for the half a minute an update
+// takes it away (the service stops, the box with it): nobody at the mouse or
+// the keyboard for kQuietFor, nothing full screen (a game, a film, a
+// presentation), and next to no traffic for kQuietFor (a download left
+// running overnight).
+inline constexpr std::chrono::minutes kQuietFor{10};
+inline constexpr double kBusyBytesPerSecond = 64.0 * 1024;
+bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic);
 
 struct Release {
   Version version;

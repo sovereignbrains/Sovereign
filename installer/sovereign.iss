@@ -7,9 +7,10 @@
 ; Installs into Program Files, registers the service (sovereign-core.exe
 ; --install: auto start, restart on failure, the ETW recorder) and starts it,
 ; puts the tray in the Start menu and starts it for the user. The same file
-; updates an installed Sovereign - the tray's updater runs it with /SILENT:
-; the tray and the service are stopped first (they hold the files), started
-; again after. Uninstalling stops and removes both; the user's settings in
+; updates an installed Sovereign - the tray's updater runs it with /SILENT
+; (UAC), or the service does, /VERYSILENT /SESSION=<id> (no UAC: SelfUpdate,
+; once the tray finds the computer quiet): the tray and the service are
+; stopped first (they hold the files), started again after. Uninstalling stops and removes both; the user's settings in
 ; %LOCALAPPDATA%\Sovereign and the logs in %ProgramData%\Sovereign stay.
 
 #ifndef AppVersion
@@ -72,7 +73,11 @@ Filename: "{sys}\sc.exe"; Parameters: "start SovereignCore"; Flags: runhidden wa
 ; Through explorer.exe, so the tray runs at the shell's level, not elevated -
 ; the updater starts this setup elevated directly, and runasoriginaluser has
 ; no original user to fall back to then.
-Filename: "{win}\explorer.exe"; Parameters: """{app}\sovereign-tray.exe"""; Description: "Запустить Sovereign"; Flags: postinstall nowait
+Filename: "{win}\explorer.exe"; Parameters: """{app}\sovereign-tray.exe"""; Description: "Запустить Sovereign"; Flags: postinstall nowait; Check: not FromService
+; Run by the service (SelfUpdate, /SESSION=<id>): this setup is SYSTEM's,
+; explorer.exe would start the tray in no one's session - the core puts it
+; back in the user's, as the user.
+Filename: "{app}\sovereign-core.exe"; Parameters: "--launch-tray {param:SESSION}"; Flags: runhidden nowait; Check: FromService
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM sovereign-tray.exe /F"; Flags: runhidden waituntilterminated; RunOnceId: "StopTray"
@@ -84,6 +89,20 @@ Filename: "{sys}\reg.exe"; Parameters: "delete HKCU\Software\Microsoft\Windows\C
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+// The service runs this setup for an update while nobody is at the computer
+// (src/service/self_update_win.cpp), with the session to bring the tray back to.
+function FromService(): Boolean;
+var
+  Session: String;
+  I: Integer;
+begin
+  Session := ExpandConstant('{param:SESSION|}');
+  Result := Session <> '';
+  for I := 1 to Length(Session) do
+    if (Session[I] < '0') or (Session[I] > '9') then
+      Result := False;
+end;
+
 // Before any file is replaced: the tray (in the user's session) and the
 // service hold sovereign-*.exe and the DLLs. The tray first gets a normal
 // close (its window quits and takes the icon away), then a forced one.

@@ -109,13 +109,14 @@ bool IsTestUrl(const Json& url) {
 
 ControlHandler::ControlHandler(ICore* core, const LogRing& coreLog,
                                std::optional<std::string>& lastConfig, CommandObserver observer,
-                               IKillSwitch* killSwitch, IBootStore* boot)
+                               IKillSwitch* killSwitch, IBootStore* boot, IUpdateRunner* updates)
     : core_(core),
       coreLog_(coreLog),
       lastConfig_(lastConfig),
       observer_(std::move(observer)),
       killSwitch_(killSwitch),
       boot_(boot),
+      updates_(updates),
       killActive_(killSwitch != nullptr && killSwitch->Active()) {
   killSettings_.enabled = killActive_;
 }
@@ -210,7 +211,7 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
   const std::string cmd = parsed.value("cmd", "");
   for (const std::string_view known :
        {"box_ping", "box_start", "box_stop", "box_stats", "box_logs", "box_urltest", "box_delays", "box_exitip",
-        "box_select", "box_route", "box_boot", "kill_switch"}) {
+        "box_select", "box_route", "box_boot", "kill_switch", "update_install"}) {
     if (cmd == known) {
       outcome.cmd = known;
     }
@@ -523,6 +524,30 @@ std::string ControlHandler::Dispatch(const std::string& request, Outcome& outcom
         response["rule"] = seen->rule;
       }
     }
+    return Dump(response);
+  }
+
+  if (cmd == "update_install") {
+    if (updates_ == nullptr) {
+      return fail("updates unavailable");
+    }
+    const Json version = parsed.value("version", Json());
+    const Json installer = parsed.value("installer", Json());
+    const Json session = parsed.value("session", Json());
+    if (!version.is_string() || !installer.is_string() || installer.get<std::string>().empty() ||
+        installer.get<std::string>().size() > kMaxInstallerPathBytes) {
+      return fail("version and installer must be strings");
+    }
+    if (!session.is_number_unsigned() || session.get<std::uint64_t>() > UINT32_MAX) {
+      return fail("session must be a session id");
+    }
+    if (const std::string error = updates_->Install(version.get<std::string>(), installer.get<std::string>(),
+                                                    static_cast<std::uint32_t>(session.get<std::uint64_t>()));
+        !error.empty()) {
+      return fail(error);
+    }
+    Json response;
+    response["cmd"] = "update_install";
     return Dump(response);
   }
 

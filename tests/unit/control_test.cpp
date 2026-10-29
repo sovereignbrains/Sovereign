@@ -117,6 +117,22 @@ class FakeBootStore final : public sovereign::service::IBootStore {
   std::string saveError;
 };
 
+class FakeUpdates final : public sovereign::service::IUpdateRunner {
+ public:
+  std::string Install(const std::string& version, const std::string& installer, std::uint32_t session) override {
+    asked = {version, installer, session};
+    return error;
+  }
+
+  struct Asked {
+    std::string version;
+    std::string installer;
+    std::uint32_t session = 0;
+  };
+  std::optional<Asked> asked;
+  std::string error;
+};
+
 json Send(ControlHandler& handler, const std::string& request) {
   return json::parse(handler.Handle(request));
 }
@@ -697,6 +713,46 @@ void TestLogsCarryTime() {
         time.get<std::int64_t>() < before + 60'000);
 }
 
+void TestUpdateInstall() {
+  LogRing log(10);
+  std::optional<std::string> lastConfig;
+  FakeUpdates updates;
+  ControlHandler handler(nullptr, log, lastConfig, {}, nullptr, nullptr, &updates);
+
+  const json ok = Send(handler, R"({"cmd":"update_install","version":"0.5.46","installer":"C:\\t\\s.exe","session":3})");
+  CHECK(ok.value("cmd", "") == "update_install");
+  CHECK(updates.asked && updates.asked->version == "0.5.46" && updates.asked->installer == "C:\\t\\s.exe" &&
+        updates.asked->session == 3);
+
+  // The runner's refusal (a checksum that doesn't match...) reaches the tray as it is.
+  updates.error = "установщик не совпал с контрольной суммой";
+  CHECK(IsError(Send(handler, R"({"cmd":"update_install","version":"0.5.46","installer":"x","session":1})"),
+                updates.error));
+
+  // Malformed: the runner is never asked.
+  updates.asked.reset();
+  CHECK(IsError(Send(handler, R"({"cmd":"update_install","version":5,"installer":"x","session":1})"),
+                "version and installer must be strings"));
+  CHECK(IsError(Send(handler, R"({"cmd":"update_install","version":"0.5.46","installer":"","session":1})"),
+                "version and installer must be strings"));
+  const std::string longPath(ControlHandler::kMaxInstallerPathBytes + 1, 'a');
+  CHECK(IsError(Send(handler, R"({"cmd":"update_install","version":"0.5.46","installer":")" + longPath +
+                                  R"(","session":1})"),
+                "version and installer must be strings"));
+  CHECK(IsError(Send(handler, R"({"cmd":"update_install","version":"0.5.46","installer":"x","session":-1})"),
+                "session must be a session id"));
+  CHECK(IsError(Send(handler, R"({"cmd":"update_install","version":"0.5.46","installer":"x","session":4294967296})"),
+                "session must be a session id"));
+  CHECK(IsError(Send(handler, R"({"cmd":"update_install","version":"0.5.46","installer":"x"})"),
+                "session must be a session id"));
+  CHECK(!updates.asked);
+
+  // A service without a runner (tests, older wiring) says so.
+  ControlHandler none(nullptr, log, lastConfig);
+  CHECK(IsError(Send(none, R"({"cmd":"update_install","version":"0.5.46","installer":"x","session":1})"),
+                "updates unavailable"));
+}
+
 }  // namespace
 
 int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
@@ -719,6 +775,7 @@ int main() {  // NOLINT(bugprone-exception-escape) — see the catch below
     TestBoot();
     TestKillSwitch();
     TestResumeAfterSleep();
+    TestUpdateInstall();
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;

@@ -80,6 +80,14 @@ UpdateMode ParseUpdateMode(std::string_view name) {
 
 std::string InstallerName(const Version& version) { return "Sovereign-Setup-" + ToString(version) + ".exe"; }
 
+std::string ChecksumUrl(const Version& version) {
+  return std::string(kReleaseDownloads) + "v" + ToString(version) + "/" + InstallerName(version) + ".sha256";
+}
+
+bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic) {
+  return !fullScreen && sinceInput >= kQuietFor && sinceTraffic >= kQuietFor;
+}
+
 bool IsReleaseAssetUrl(std::string_view url) {
   return url.starts_with(kReleaseDownloads) && url.size() > kReleaseDownloads.size() &&
          std::none_of(url.begin(), url.end(), [](char c) { return static_cast<unsigned char>(c) <= ' ' || c == 0x7F; });

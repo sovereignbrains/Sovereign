@@ -13,6 +13,7 @@
 #include "core.h"
 #include "kill_switch.h"
 #include "log_ring.h"
+#include "self_update.h"
 
 namespace sovereign::service {
 
@@ -41,7 +42,8 @@ using CommandObserver = std::function<void(const CommandRecord&)>;
 // Commands: ping (echo), box_ping, box_start {config, at_boot?}, box_stop, box_boot {at_boot},
 // box_stats, box_logs {since}, box_urltest {tags, url?, timeout_ms?},
 // box_delays, box_exitip {tag, refresh?}, box_route {targets},
-// kill_switch {enabled, allow_lan?, lan_closed?, lan_allowed?}.
+// kill_switch {enabled, allow_lan?, lan_closed?, lan_allowed?},
+// update_install {version, installer, session}.
 class ControlHandler {
  public:
   // box_urltest's limits: what one test may ask of the core.
@@ -82,8 +84,15 @@ class ControlHandler {
   // started for the next boot, {at_boot: false} drops it (no at_boot: as it
   // was); box_boot {at_boot} does the same for the running config - the
   // user's "connect at startup" switched while connected.
+  //
+  // updates may be null too: update_install then answers an error. It runs
+  // outside the state lock - it downloads a checksum.
   ControlHandler(ICore* core, const LogRing& coreLog, std::optional<std::string>& lastConfig,
-                 CommandObserver observer = {}, IKillSwitch* killSwitch = nullptr, IBootStore* boot = nullptr);
+                 CommandObserver observer = {}, IKillSwitch* killSwitch = nullptr, IBootStore* boot = nullptr,
+                 IUpdateRunner* updates = nullptr);
+
+  // update_install's limit on the installer's path.
+  static constexpr std::size_t kMaxInstallerPathBytes = 2048;
 
   std::string Handle(const std::string& request);
 
@@ -131,6 +140,7 @@ class ControlHandler {
   CommandObserver observer_;
   IKillSwitch* killSwitch_;
   IBootStore* boot_;
+  IUpdateRunner* updates_;
   KillSwitchSettings killSettings_;  // as last applied
   bool killActive_ = false;          // filters in place
   bool bootDone_ = false;            // StartAtBoot started it, or the tray took over

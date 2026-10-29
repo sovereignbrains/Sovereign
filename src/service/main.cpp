@@ -25,6 +25,7 @@
 #include "log_ring.h"
 #include "pipe_server.h"
 #include "protocol.h"
+#include "self_update_win.h"
 #include "trace.h"
 
 namespace trace = sovereign::service::trace;
@@ -74,6 +75,7 @@ class ServiceState {
   // Declared after what it points into, so it goes first.
   std::optional<sovereign::service::WfpKillSwitch> killSwitch;  // the handler's; holds only a path
   std::optional<sovereign::service::FileBootStore> bootStore;   // the handler's: the config started at boot
+  std::optional<sovereign::service::SelfUpdate> selfUpdate;     // the handler's: update_install
   std::optional<sovereign::service::ControlHandler> handler;
   std::atomic<bool> handlerReady{false};
 };
@@ -181,9 +183,13 @@ sovereign::service::ControlHandler& CreateHandler(ServiceState& state) {
   auto& killSwitch = state.killSwitch.emplace(OwnPath());
   auto& bootStore =
       state.bootStore.emplace(sovereign::service::BootStorePath(), sovereign::service::kBootStoreSddl);
+  auto& selfUpdate = state.selfUpdate.emplace(
+      sovereign::tray::ParseVersion(SOVEREIGN_VERSION_A).value_or(sovereign::tray::Version{}),
+      sovereign::service::UpdateDirectory(), L"Sovereign/" SOVEREIGN_VERSION_W);
   auto& handler = state.handler.emplace(
       state.core.get(), state.coreLog, state.lastConfig,
-      [](const sovereign::service::CommandRecord& record) { trace::Command(record); }, &killSwitch, &bootStore);
+      [](const sovereign::service::CommandRecord& record) { trace::Command(record); }, &killSwitch, &bootStore,
+      &selfUpdate);
   state.handlerReady.store(true, std::memory_order_release);
   return handler;
 }
@@ -407,6 +413,14 @@ int wmain(int argc, wchar_t* argv[]) {
     if (arg == L"--run") {
       RunInConsole();
       return 0;
+    }
+    if (arg == L"--launch-tray" && argc > 2) {
+      // The installer the service ran (SelfUpdate), done: the tray back.
+      const std::wstring session = argv[2];
+      if (session.empty() || session.size() > 10 || session.find_first_not_of(L"0123456789") != std::wstring::npos) {
+        return 1;
+      }
+      return sovereign::service::LaunchTray(static_cast<std::uint32_t>(std::stoull(session))) ? 0 : 1;
     }
   } catch (const wil::ResultException& e) {
     std::wcerr << L"Ошибка: " << e.what() << L"\n";

@@ -61,6 +61,7 @@ add_library(sovereign_service_lib STATIC
   kill_switch.h
   log_ring.cpp
   log_ring.h
+  self_update.h
 )
 target_include_directories(sovereign_service_lib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(sovereign_service_lib PUBLIC sovereign_common crypt32)
@@ -85,9 +86,15 @@ add_executable(sovereign-core
   autologger.h
   kill_switch_wfp.cpp
   kill_switch_wfp.h
+  self_update_win.cpp
+  self_update_win.h
 )
+target_compile_definitions(sovereign-core PRIVATE "SOVEREIGN_VERSION_A=\"${SOVEREIGN_VERSION}\""
+                                                  "SOVEREIGN_VERSION_W=L\"${SOVEREIGN_VERSION}\"")
 
-target_link_libraries(sovereign-core PRIVATE sovereign_gocore_host sovereign_service_lib sovereign_common advapi32 fwpuclnt)
+# The update's checks are the tray's (update.h) and its download (fetch.h).
+target_link_libraries(sovereign-core PRIVATE sovereign_gocore_host sovereign_service_lib sovereign_tray_net sovereign_tray_lib
+                                             sovereign_common advapi32 fwpuclnt wtsapi32 userenv)
 sovereign_copy_asan_runtime(sovereign-core)
 
 add_dependencies(sovereign-core sovereign_gocore_dll)

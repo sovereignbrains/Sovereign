@@ -108,6 +108,10 @@ constexpr UINT kViewChangedMessage = WM_APP + 2;
 constexpr UINT kUpdateChangedMessage = WM_APP + 3;
 // The worker to the window: the protection's quiet check after a connect is due (StartChecks quiet).
 constexpr UINT kAutoCheckMessage = WM_APP + 4;
+// The service's answer to update_install (LaunchUpdate): wParam 1 - it runs.
+constexpr UINT kUpdateLaunchedMessage = WM_APP + 5;
+// While a downloaded update waits for the computer to be quiet: a look a minute.
+constexpr UINT_PTR kUpdateTimer = 1;
 constexpr wchar_t kTrayClassName[] = L"SovereignTrayWindow";
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kMenuAddRunning = 400;  // + index in RunningApps()
@@ -4258,6 +4262,18 @@ sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater 
 // What the updater does unasked: the UI thread's copy of tray.json's, which
 // the worker keeps (pendingUpdates) - a pick acts at once, before it's saved.
 sovereign::tray::UpdateMode g_updateMode = sovereign::tray::UpdateMode::Check;
+// The user asked for the update (the key, the button): it installs at once.
+// Not asked - installing unasked - it waits for a quiet moment (QuietForUpdate).
+bool g_updateAsked = false;
+// The last time the box carried more than kBusyBytesPerSecond, as the UI
+// thread saw it; from the tray's start, so quiet needs that long watched.
+auto g_lastTraffic = std::chrono::steady_clock::now();
+
+// The downloaded update waits for a quiet moment rather than installing.
+bool UpdateWaits(const sovereign::tray::Updater::State& update) {
+  return update.status == sovereign::tray::Updater::Status::Ready && !g_updateAsked &&
+         g_updateMode == sovereign::tray::UpdateMode::Install;
+}
 
 // The local network's list as the settings show it - the index a click on
 // it carries is into this.
@@ -4693,8 +4709,10 @@ UiContent ContentFrom(const View& v) {
       case Status::Checking: c.update = sovereign::tray::UiUpdate::Checking; break;
       case Status::UpToDate: c.update = sovereign::tray::UiUpdate::UpToDate; break;
       case Status::Available: c.update = sovereign::tray::UiUpdate::Available; break;
-      case Status::Downloading:
-      case Status::Ready: c.update = sovereign::tray::UiUpdate::Downloading; break;
+      case Status::Downloading: c.update = sovereign::tray::UiUpdate::Downloading; break;
+      case Status::Ready:
+        c.update = UpdateWaits(update) ? sovereign::tray::UiUpdate::Waiting : sovereign::tray::UiUpdate::Downloading;
+        break;
       case Status::Failed: c.update = sovereign::tray::UiUpdate::Failed; break;
       case Status::Off: c.update = sovereign::tray::UiUpdate::Off; break;
     }
@@ -5849,7 +5867,12 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       break;
     case UiCommand::InstallUpdate:
       if (g_updater != nullptr) {
-        g_updater->Install();
+        g_updateAsked = true;
+        if (g_updater->Get().status == sovereign::tray::Updater::Status::Ready) {
+          OnUpdateChanged(trayWindow);  // downloaded, waiting for quiet: now
+        } else {
+          g_updater->Install();
+        }
       }
       break;
     case UiCommand::ChooseUpdates: {
@@ -5942,10 +5965,96 @@ void ShowTrayMenu(HWND window) {
   }
 }
 
+// Whether the computer is quiet enough to update unasked (QuietForUpdate):
+// the input as Windows counts it for this session, full screen as the shell
+// tells notifications to hold back for, the traffic as the UI thread saw it.
+bool ComputerQuiet() {
+  LASTINPUTINFO input{.cbSize = sizeof(LASTINPUTINFO), .dwTime = 0};
+  if (!GetLastInputInfo(&input)) {
+    return false;
+  }
+  const auto sinceInput = std::chrono::milliseconds(GetTickCount() - input.dwTime);  // wraps right as DWORD
+  QUERY_USER_NOTIFICATION_STATE shell = QUNS_ACCEPTS_NOTIFICATIONS;
+  const bool fullScreen = SUCCEEDED(SHQueryUserNotificationState(&shell)) &&
+                          (shell == QUNS_BUSY || shell == QUNS_RUNNING_D3D_FULL_SCREEN ||
+                           shell == QUNS_PRESENTATION_MODE || shell == QUNS_APP);
+  const auto sinceTraffic =
+      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - g_lastTraffic);
+  return sovereign::tray::QuietForUpdate(sinceInput, fullScreen, sinceTraffic);
+}
+
+std::jthread g_updateLaunch;           // asks the service to install (it checks a checksum: a second or two)
+std::optional<std::string> g_launchError;  // its answer: "" - the installer runs; nullopt - no service
+
+// Hands the verified installer to the service (update_install), off the UI
+// thread; kUpdateLaunchedMessage brings the answer back.
+void LaunchUpdate(HWND trayWindow, const sovereign::tray::Updater::State& update) {
+  DWORD session = 0;
+  ProcessIdToSessionId(GetCurrentProcessId(), &session);
+  nlohmann::json request;
+  request["cmd"] = "update_install";
+  request["version"] = update.latest;
+  request["installer"] = Narrow(update.installer);
+  request["session"] = session;
+  g_updateLaunch = std::jthread([trayWindow, request = request.dump()] {
+    std::optional<std::string> error;
+    if (const auto response = sovereign::tray::RequestService(request)) {
+      const auto json = nlohmann::json::parse(*response, nullptr, false);
+      const auto cmd = sovereign::tray::Field<std::string>(json, "cmd", {});
+      if (cmd == "update_install") {
+        error = std::string();
+      } else if (cmd != "pong") {  // pong: an older service echoes what it doesn't know - as good as none
+        error = sovereign::tray::Field<std::string>(json, "message", "служба не ответила");
+      }
+    }
+    {
+      const std::scoped_lock lock(State().mutex);
+      g_launchError = error;
+    }
+    PostMessageW(trayWindow, kUpdateLaunchedMessage, 0, 0);
+  });
+}
+
+// The service answered update_install. It runs: the tray makes way (the
+// installer stops it next and the service brings the new one back). No
+// service to ask (it's stopped, or older than update_install): UAC, if the
+// user asked; unasked, never - it waits for a click.
+void OnUpdateLaunched(HWND trayWindow) {
+  std::optional<std::string> error;
+  {
+    const std::scoped_lock lock(State().mutex);
+    error = g_launchError;
+  }
+  if (g_updater == nullptr) {
+    return;
+  }
+  if (error && error->empty()) {
+    g_installerLaunched = true;
+    DestroyWindow(trayWindow);
+    return;
+  }
+  const auto update = g_updater->Get();
+  if (!error && g_updateAsked) {
+    HWND owner = g_mainWindow != nullptr && g_mainWindow->IsVisible() ? GetForegroundWindow() : trayWindow;
+    if (const std::string uac = sovereign::tray::LaunchInstaller(owner, update.installer); !uac.empty()) {
+      g_updater->LaunchFailed(uac);
+    } else {
+      g_installerLaunched = true;
+      DestroyWindow(trayWindow);  // the installer starts the new tray when it's done
+      return;
+    }
+  } else {
+    g_updater->LaunchFailed(error.value_or("служба Sovereign не отвечает"));
+  }
+  g_installerLaunched = false;
+  UpdateWindows();
+}
+
 // The updater moved on: tell about a new version once - or, installing
-// unasked, go for it, once a version: declined (UAC) or failed, it waits for
-// a click like any other - and run a downloaded installer, which replaces
-// this tray, so the tray makes way.
+// unasked, download it, once a version: failed, it waits for a click like any
+// other - and have a downloaded installer run: asked for, now; unasked, once
+// the computer is quiet (a look a minute, kUpdateTimer). It replaces this
+// tray, so the tray makes way.
 void OnUpdateChanged(HWND trayWindow) {
   if (g_updater == nullptr) {
     return;
@@ -5961,23 +6070,26 @@ void OnUpdateChanged(HWND trayWindow) {
   if (update.status == Status::Available && update.latest != g_announcedUpdate && g_trayIcon != nullptr) {
     g_announcedUpdate = update.latest;
     if (install) {
-      g_trayIcon->Balloon(L"Sovereign обновляется до " + Widen(update.latest),
-                          L"Установщик скачивается с GitHub; Windows спросит разрешение поставить его.", NIIF_INFO);
+      g_trayIcon->Balloon(L"Sovereign: доступна версия " + Widen(update.latest),
+                          L"Поставлю сам, когда компьютер будет свободен: ты отошёл, нет игры на весь экран и "
+                          L"загрузок. VPN пропадёт на полминуты.",
+                          NIIF_INFO);
     } else {
       g_trayIcon->Balloon(L"Sovereign: доступна версия " + Widen(update.latest),
                           L"Нажми, чтобы обновить — установщик скачается с GitHub.", NIIF_INFO);
     }
     g_balloonPage = UiPage::Settings;
   }
-  if (update.status == Status::Ready && !g_installerLaunched) {
-    HWND owner = g_mainWindow != nullptr && g_mainWindow->IsVisible() ? GetForegroundWindow() : trayWindow;
-    const std::string error = sovereign::tray::LaunchInstaller(owner, update.installer);
-    if (error.empty()) {
-      g_installerLaunched = true;
-      DestroyWindow(trayWindow);  // the installer starts the new tray when it's done
-      return;
-    }
-    g_updater->LaunchFailed(error);
+  const bool waits = UpdateWaits(update);
+  if (waits) {
+    SetTimer(trayWindow, kUpdateTimer, 60 * 1000, nullptr);
+  } else {
+    KillTimer(trayWindow, kUpdateTimer);
+  }
+  if (update.status == Status::Ready && !g_installerLaunched && (!waits || ComputerQuiet())) {
+    KillTimer(trayWindow, kUpdateTimer);
+    g_installerLaunched = true;  // till the service answers: one ask at a time
+    LaunchUpdate(trayWindow, update);
   }
   UpdateWindows();
 }
@@ -6013,6 +6125,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         }
         g_trayIcon->Update(view);
       }
+      if (view.down + view.up > sovereign::tray::kBusyBytesPerSecond) {
+        g_lastTraffic = std::chrono::steady_clock::now();  // a download: no update unasked for now
+      }
       UpdateWindows();
       UpdateLogs();
       FinishPendingReport(view);
@@ -6020,6 +6135,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     }
     case kUpdateChangedMessage:
       OnUpdateChanged(window);
+      return 0;
+    case WM_TIMER:
+      if (wParam == kUpdateTimer) {
+        OnUpdateChanged(window);  // a downloaded update waits for a quiet moment: a look a minute
+      }
+      return 0;
+    case kUpdateLaunchedMessage:
+      OnUpdateLaunched(window);
       return 0;
     case kTrayCallbackMessage:
       // A click shows the window or hides it; a right click is the menu.
@@ -6099,7 +6222,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   // The file dialog ("add exe") is COM, on this thread.
   const auto com = wil::CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   // The whole command line: CommandLineToArgvW expects argv[0] first.
-  const bool background = HasArg(GetCommandLineW(), sovereign::tray::kBackgroundArg);
+  const bool updated = HasArg(GetCommandLineW(), sovereign::tray::kUpdatedArg);
+  const bool background = updated || HasArg(GetCommandLineW(), sovereign::tray::kBackgroundArg);
 
   // One tray per session: a second one would fight the first over the box.
   // Started by hand while one runs, it brings that one's window up instead.
@@ -6121,7 +6245,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   } catch (...) {
     LOG_CAUGHT_EXCEPTION_MSG("reading tray settings failed; starting turned off");
   }
-  if (background && !settings.connectAtStartup) {
+  if (background && !updated && !settings.connectAtStartup) {
     settings.wantOn = false;  // signed in: started, not connected - the user's pick
   }
 
@@ -6160,6 +6284,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   if (!background) {
     ShowMainWindow(UiPage::Overview);
   }
+  if (updated && g_trayIcon != nullptr) {
+    g_trayIcon->Balloon(L"Sovereign обновлён до " + std::wstring(SOVEREIGN_VERSION_W),
+                        L"Поставил, пока компьютер был свободен.", NIIF_INFO);
+  }
 
   int exitCode = 0;
   {
@@ -6173,6 +6301,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
     exitCode = static_cast<int>(msg.wParam);
     thread.request_stop();
     g_checks.reset();  // stops and joins a check run, while its state is still here
+    g_updateLaunch = {};  // and an update_install call
   }  // joins the worker before its state goes away
   g_updater = nullptr;
   g_mainWindow = nullptr;
