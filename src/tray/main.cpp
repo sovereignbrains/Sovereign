@@ -502,6 +502,7 @@ struct Shared {
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
   bool pendingReconnect = false;
+  bool pendingRecheck = false;  // the checks' way out was taken: the protection is checked again (StartChecks quiet)
   // The quiet check after a connect found something wrong: what, for the
   // worker's balloon (StartChecks quiet).
   std::optional<std::wstring> pendingProtectionAlert;
@@ -521,7 +522,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingServersByDelay.has_value() || pendingConnectAtStartup.has_value() || pendingUpdates.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingProtectionAlert.has_value() ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingServersByDelay.has_value() || pendingConnectAtStartup.has_value() || pendingUpdates.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingRecheck || pendingProtectionAlert.has_value() ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -713,6 +714,7 @@ class Worker {
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
       bool reconnect = false;
+      bool recheck = false;
       std::optional<std::wstring> protectionAlert;
       bool toggleLanClosed = false;
       std::vector<std::pair<sovereign::tray::LanHost, bool>> lan;
@@ -741,6 +743,7 @@ class Worker {
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
         reconnect = std::exchange(shared.pendingReconnect, false);
+        recheck = std::exchange(shared.pendingRecheck, false);
         protectionAlert = std::exchange(shared.pendingProtectionAlert, std::nullopt);
         toggleLanClosed = std::exchange(shared.pendingToggleLanClosed, false);
         lan = std::exchange(shared.pendingLan, {});
@@ -872,6 +875,10 @@ class Worker {
       // Stopped while wanted on: the next poll starts it again, with the config as it is now.
       if (reconnect && model_.WantOn()) {
         Execute(model_, Action::Stop, std::nullopt, false);
+      } else if (recheck) {
+        // No restart to start the check after (ScheduleProtectionCheck): the
+        // kill switch just switched - looked at again once it has taken hold.
+        protectionCheckAt_ = TrayModel::Clock::now() + std::chrono::seconds(3);
       }
       if (protectionAlert) {
         Notify(L"Sovereign: защита под вопросом",
@@ -1932,6 +1939,7 @@ class Worker {
       generation_ = stats->generation;  // a new box: the old results are gone with the old one
       delays_.clear();
       failedInRow_.clear();
+      badDirectInRow_ = 0;
       recheckAt_.reset();
       delaysRound_ += testing_ ? 1 : 0;  // the test that ran is over
       testing_ = false;
@@ -2052,18 +2060,41 @@ class Worker {
   // The user's own network, by the way around the proxy measured with the
   // servers (delays.h JudgeLocalNetwork). The best seen is taken only from
   // measurements that weren't bad - a bad spell doesn't become the usual.
+  // Slow or lossy needs two tests in a row (badDirectInRow_); down says at once.
   void UpdateLocalNetwork() {
     localNetwork_ = {};
     if (directTag_.empty() || model_.GetDisplay() != Display::On) {
+      badDirectInRow_ = 0;
       return;
     }
     const auto it = delays_.find(directTag_);
     if (it == delays_.end()) {
       return;
     }
+    if (it->second.state == sovereign::tray::Delay::State::Pending) {
+      return;  // a test is running: the verdict waits for it, and what it counted stays
+    }
     const auto failed = failedInRow_.find(directTag_);
     localNetwork_ = sovereign::tray::JudgeLocalNetwork(it->second, failed == failedInRow_.end() ? 0 : failed->second,
                                                        directBest_, NoServerAnswers());
+    // Slow or lossy is said only once two tests in a row found it: one spike
+    // of the way around the proxy is not the user's network. The first bad
+    // one plans the second soon (kFailRecheck).
+    using State = sovereign::tray::LocalNetwork::State;
+    if (localNetwork_.state == State::Slow || localNetwork_.state == State::Lossy) {
+      if (badDirectRound_ != delaysRound_) {
+        badDirectRound_ = delaysRound_;
+        ++badDirectInRow_;
+      }
+      if (badDirectInRow_ < 2) {
+        if (!recheckAt_ && !testing_) {
+          recheckAt_ = TrayModel::Clock::now() + kFailRecheck;
+        }
+        localNetwork_ = {};
+      }
+    } else {
+      badDirectInRow_ = 0;
+    }
     const sovereign::tray::Delay& d = it->second;
     if (d.state == sovereign::tray::Delay::State::Ok && d.ms > 0 &&
         localNetwork_.state == sovereign::tray::LocalNetwork::State::Fine && (!directBest_ || d.ms < *directBest_)) {
@@ -2902,6 +2933,8 @@ class Worker {
   std::string directTag_;               // the config's way around the proxy, measured with the servers
   std::optional<int> directBest_;       // its best seen in a good spell, ms
   sovereign::tray::LocalNetwork localNetwork_;  // UpdateLocalNetwork's
+  int badDirectInRow_ = 0;                      // tests in a row the way around the proxy was slow or lossy
+  std::uint64_t badDirectRound_ = ~0ULL;        // the delaysRound_ it was last counted in
   std::optional<TrayModel::Clock::time_point> lastOtherVpnCheck_;
   std::optional<sovereign::tray::OtherVpnFound> otherVpn_;  // OtherVpn's, while locked out
   std::optional<TrayModel::Clock::time_point> lastKillSwitchTry_;
@@ -3565,6 +3598,20 @@ std::optional<sovereign::tray::RouteWay> RouteOf(const std::vector<std::string>&
   return response ? sovereign::tray::ParseRouteAnswer(*response) : std::nullopt;
 }
 
+// The way out a failed check offered was taken (reconnect, kill switch): its
+// results are dropped at once - the banner goes, the click shows - and the
+// checks that run by themselves after it (ScheduleProtectionCheck) fill them
+// again. Not while a run is on: it's writing them. `shared.mutex` held.
+void ForgetProtectionResults(Shared& shared) {
+  using sovereign::tray::CheckId;
+  if (shared.view.checksRunning) {
+    return;
+  }
+  for (const CheckId id : {CheckId::Exit, CheckId::RussiaDirect, CheckId::WebRtc, CheckId::Ipv6}) {
+    shared.view.checks[static_cast<std::size_t>(id)] = {};
+  }
+}
+
 // `quiet`: the check after a connect - nobody asked, so a failure is said in
 // a balloon (pendingProtectionAlert), nothing else.
 void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, bool quiet = false) {
@@ -3614,6 +3661,27 @@ void StartChecks(std::vector<sovereign::tray::CheckId> which, std::string host, 
                                                .lanAllowed = lanAllowed,
                                                .vpnIp = vpn.ip,
                                                .vpnCountry = vpn.country,
+                                               .vpnNow = [&stop]() -> std::pair<std::string, std::string> {
+                                                 // The core's lookup of the exit may still be running (a
+                                                 // connect or a change of server a moment ago): waited for.
+                                                 for (int waited = 0;; ++waited) {
+                                                   sovereign::tray::ExitIp now;
+                                                   bool wanted = false;
+                                                   {
+                                                     auto& s = State();
+                                                     const std::scoped_lock lock(s.mutex);
+                                                     now = s.view.exitIp;
+                                                     wanted = s.view.wantOn;
+                                                   }
+                                                   if (!wanted) {
+                                                     return {};
+                                                   }
+                                                   if ((!now.pending && !now.ip.empty()) || waited >= 16 || stop.stop_requested()) {
+                                                     return {now.ip, now.country};
+                                                   }
+                                                   std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                                                 }
+                                               },
                                                .selective = selective};
     sovereign::tray::RunChecks(stop, which, input,
                                [&](sovereign::tray::CheckId id, const sovereign::tray::CheckResult& result) {
@@ -5772,7 +5840,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         auto& shared = State();
         const std::scoped_lock lock(shared.mutex);
         shared.pendingReconnect = true;
+        ForgetProtectionResults(shared);
       }
+      UpdateWindows();
       Wake();
       break;
     }
@@ -5783,7 +5853,12 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         const std::scoped_lock lock(shared.mutex);
         (command == UiCommand::ToggleKillSwitch ? shared.pendingToggleKillSwitch : shared.pendingToggleLanClosed) =
             true;
+        if (command == UiCommand::ToggleKillSwitch && args.index == sovereign::tray::kFromChecks) {
+          shared.pendingRecheck = true;  // the checks' banner: its result is looked at again
+          ForgetProtectionResults(shared);
+        }
       }
+      UpdateWindows();
       Wake();
       break;
     }

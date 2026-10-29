@@ -211,19 +211,83 @@ struct Slots {
   }
 };
 
+// The first 64 bits of every global IPv6 address of the computer's own
+// adapters (not the tunnel's: its are private) - where IPv6 could leave
+// without the VPN. Empty: there is no way out but the tunnel.
+std::vector<std::array<unsigned char, 8>> NativeIpv6Prefixes() {
+  std::vector<std::array<unsigned char, 8>> prefixes;
+  ULONG size = 16 * 1024;
+  std::vector<std::byte> buffer(size);
+  constexpr ULONG kFlags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+  ULONG result = GetAdaptersAddresses(AF_INET6, kFlags, nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()), &size);
+  if (result == ERROR_BUFFER_OVERFLOW) {
+    buffer.resize(size);
+    result = GetAdaptersAddresses(AF_INET6, kFlags, nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()), &size);
+  }
+  if (result != NO_ERROR) {
+    return prefixes;
+  }
+  for (auto* a = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()); a != nullptr; a = a->Next) {
+    const std::wstring_view description = a->Description != nullptr ? a->Description : L"";
+    if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+        description.find(L"sing-tun") != std::wstring_view::npos ||
+        description.find(L"Wintun") != std::wstring_view::npos) {
+      continue;
+    }
+    for (auto* u = a->FirstUnicastAddress; u != nullptr; u = u->Next) {
+      if (u->Address.lpSockaddr == nullptr || u->Address.lpSockaddr->sa_family != AF_INET6) {
+        continue;
+      }
+      const auto& bytes = reinterpret_cast<const sockaddr_in6*>(u->Address.lpSockaddr)->sin6_addr.u.Byte;
+      if ((bytes[0] & 0xE0) != 0x20) {
+        continue;  // not 2000::/3: link-local, private, the rest aren't routed out
+      }
+      std::array<unsigned char, 8> prefix{};
+      std::copy_n(bytes, 8, prefix.begin());
+      prefixes.push_back(prefix);
+    }
+  }
+  return prefixes;
+}
+
+// Whether `address` (text) is in one of `prefixes`' /64.
+bool InPrefixes(const std::string& address, const std::vector<std::array<unsigned char, 8>>& prefixes) {
+  in6_addr parsed{};
+  if (inet_pton(AF_INET6, address.c_str(), &parsed) != 1) {
+    return false;
+  }
+  return std::any_of(prefixes.begin(), prefixes.end(), [&](const std::array<unsigned char, 8>& prefix) {
+    return std::equal(prefix.begin(), prefix.end(), parsed.u.Byte);
+  });
+}
+
 struct Run {
   const DiagnoseInput& input;
   std::string exitIp;   // what foreign sites see
   std::string exitLoc;
   std::string directIp;  // what Russian ones see
+  std::string vpnIp;       // the VPN's exit as the core finds it: the input's, then as it is now (RefreshVpn)
+  std::string vpnCountry;
   // A check's result while it runs (the speed test's graph growing); may be empty.
   std::function<void(const CheckResult&)> live;
 
+  // What the core knows now of the VPN's exit, if it knows more than it did.
+  void RefreshVpn() {
+    if (!input.vpnNow) {
+      return;
+    }
+    const auto [ip, country] = input.vpnNow();
+    if (!ip.empty()) {
+      vpnIp = ip;
+      vpnCountry = country;
+    }
+  }
+
   // The VPN's exit: the core's, else - everything through the VPN - what the
   // trace saw; with only chosen things through it, unknown without the core.
-  std::string VpnIp() const { return !input.vpnIp.empty() ? input.vpnIp : input.selective ? std::string() : exitIp; }
+  std::string VpnIp() const { return !vpnIp.empty() ? vpnIp : input.selective ? std::string() : exitIp; }
   std::string VpnLoc() const {
-    return !input.vpnCountry.empty() ? input.vpnCountry : input.selective ? std::string() : exitLoc;
+    return !vpnCountry.empty() ? vpnCountry : input.selective ? std::string() : exitLoc;
   }
 
   std::optional<Trace> FetchTrace(const wchar_t* url) const {
@@ -246,14 +310,14 @@ struct Run {
     const std::string seen = trace->loc.empty() ? trace->ip : std::format("{} · {}", trace->ip, trace->loc);
     if (input.selective) {
       // The trace went directly, as anything unlisted: the VPN's exit is the core's.
-      if (input.vpnIp.empty()) {
+      if (vpnIp.empty()) {
         r.status = Status::Warn;
         r.summary = "VPN ещё не ответил";
         r.detail = "Адрес VPN пока не известен — проверь снова через пару секунд после подключения.";
         return r;
       }
       r.status = Status::Ok;
-      r.summary = input.vpnCountry.empty() ? input.vpnIp : std::format("{} · {}", input.vpnIp, input.vpnCountry);
+      r.summary = vpnCountry.empty() ? vpnIp : std::format("{} · {}", vpnIp, vpnCountry);
       r.detail = std::format("Через VPN идут только выбранные программы и сайты — они выходят с этого адреса. "
                              "Остальные сайты видят твой: {}.",
                              seen);
@@ -261,10 +325,9 @@ struct Run {
     }
     r.summary = seen;
     // Everything through the VPN: a site sees its exit - another address is the traffic going round it.
-    if (!input.vpnIp.empty() && trace->ip != input.vpnIp &&
-        (trace->loc.empty() || input.vpnCountry.empty() || trace->loc != input.vpnCountry)) {
+    if (!vpnIp.empty() && trace->ip != vpnIp && (trace->loc.empty() || vpnCountry.empty() || trace->loc != vpnCountry)) {
       r.status = Status::Fail;
-      r.detail = std::format("Сайты видят не адрес VPN ({}), а этот — трафик идёт мимо VPN.", input.vpnIp);
+      r.detail = std::format("Сайты видят не адрес VPN ({}), а этот — трафик идёт мимо VPN.", vpnIp);
       r.fix = CheckFix::KillSwitch;
       return r;
     }
@@ -401,9 +464,29 @@ struct Run {
       r.detail = proxied ? "IPv6 идёт через VPN." : "IPv6 идёт напрямую — как всё, что не в списке VPN.";
       return r;
     }
-    r.status = proxied ? Status::Ok : Status::Fail;
-    r.detail = proxied ? "IPv6 идёт через VPN." : "IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.";
-    r.fix = proxied ? CheckFix::None : CheckFix::KillSwitch;
+    if (proxied) {
+      r.status = Status::Ok;
+      r.detail = "IPv6 идёт через VPN.";
+      return r;
+    }
+    // Not the VPN's address or country: a leak only if it's the computer's
+    // own - a prefix of one of its adapters'. With none (the tunnel's are
+    // private) nothing can leave but through the tunnel; and an address that
+    // is neither the computer's nor the VPN's by country is the server's
+    // IPv6 where the country databases disagree - to look at, not an alarm
+    // (29.10.2026, false alarms).
+    const auto native = NativeIpv6Prefixes();
+    if (native.empty()) {
+      r.status = Status::Ok;
+      r.detail = "IPv6 идёт через VPN: у компьютера нет своего IPv6, выйти мимо туннеля ему некуда.";
+    } else if (InPrefixes(trace->ip, native)) {
+      r.status = Status::Fail;
+      r.detail = "IPv6 уходит мимо VPN — сайты могут увидеть твой адрес.";
+      r.fix = CheckFix::KillSwitch;
+    } else {
+      r.status = Status::Warn;
+      r.detail = "Этот IPv6-адрес не твой, но и страна не как у VPN — скорее всего, адрес сервера. Утечки не видно.";
+    }
     return r;
   }
 
@@ -697,7 +780,8 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
     }
     return;
   }
-  Run run{.input = input, .exitIp = {}, .exitLoc = {}, .directIp = {}, .live = {}};
+  Run run{.input = input, .exitIp = {}, .exitLoc = {}, .directIp = {}, .vpnIp = input.vpnIp,
+          .vpnCountry = input.vpnCountry, .live = {}};
   for (const CheckId id : which) {
     if (stop.stop_requested()) {
       break;
@@ -709,6 +793,9 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
                              .speedDown = {},
                              .speedUp = {}});
     run.live = [&progress, id](const CheckResult& partial) { progress(id, partial); };
+    if (id == CheckId::Exit || id == CheckId::RussiaDirect || id == CheckId::WebRtc || id == CheckId::Ipv6) {
+      run.RefreshVpn();  // the ones that compare with the VPN's exit: its address as it is now
+    }
     CheckResult result;
     switch (id) {
       case CheckId::Exit: result = run.Exit(); break;

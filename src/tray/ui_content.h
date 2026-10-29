@@ -394,6 +394,10 @@ struct UiArgs {
   HWND owner = nullptr;  // the window a menu or a dialog belongs to
 };
 
+// UiArgs::index of ToggleKillSwitch from the checks' banner (not the
+// settings' switch): the protection is looked at again after it.
+inline constexpr int kFromChecks = 1;
+
 // Hysteria 2's speeds to pick from (UiCommand::SetHysteriaMbps), Mbit/s; 0: auto (BBR).
 inline constexpr std::array kHysteriaSpeeds = {0, 50, 100, 200, 300, 500, 1000};
 

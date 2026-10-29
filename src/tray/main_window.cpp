@@ -2514,7 +2514,7 @@ class Painter {
           return FixAction{.label = L"включить Kill switch",
                      .action = ItemAction::Command,
                      .command = UiCommand::ToggleKillSwitch,
-                     .index = 0,
+                     .index = kFromChecks,
                      .titles = {}};
         }
         return reconnect();

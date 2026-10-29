@@ -6,6 +6,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "diagnostics.h"
@@ -43,6 +44,12 @@ struct DiagnoseInput {
   // it for the VPN's and called the home address "the VPN's exit").
   std::string vpnIp;
   std::string vpnCountry;
+  // The same, as it is now (address, country): asked for before the checks
+  // that compare with it, for the one above is from when they were asked to
+  // start - right after a connect or a change of server it's empty or the
+  // old server's, and a site seeing the new one read as a leak (29.10.2026).
+  // May wait for the lookup to finish; empty answer: nothing newer is known.
+  std::function<std::pair<std::string, std::string>()> vpnNow;
   bool selective = false;
 };
 
