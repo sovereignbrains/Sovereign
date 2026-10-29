@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "delays.h"
 #include "tray_model.h"
 #include "update.h"
 
@@ -46,6 +47,22 @@ struct UiLocation {
   std::wstring isp;      // "Brainoza" (exit_ip.h ShortIsp), or empty
   std::wstring ip;       // the exit's address, for copying
 };
+
+// Whether a site opens through a server (delays.h SiteCheck): the label is
+// the short one drawn on the server's row.
+struct UiSite {
+  std::wstring label;  // "YT", "TG", "GPT", "IG"
+  sovereign::tray::SiteCheck::State state = sovereign::tray::SiteCheck::State::Fail;
+};
+
+// The label a site id is drawn as; empty for an id this client doesn't know.
+inline std::wstring SiteLabel(const std::string& site) {
+  if (site == "youtube") return L"YT";
+  if (site == "telegram") return L"TG";
+  if (site == "chatgpt") return L"GPT";
+  if (site == "instagram") return L"IG";
+  return {};
+}
 
 // A device of the local network, or an address let into it, as the
 // settings list them (lan.h LanEntry).
@@ -242,6 +259,7 @@ struct UiContent {
   int protocol = -1;                    // index of the one in use
   std::vector<UiDelay> delays;          // one per protocol (may be shorter: untested)
   std::vector<UiLocation> locations;    // one per protocol (may be shorter: not known)
+  std::vector<std::vector<UiSite>> sites;  // one per protocol: which sites open through it (empty: not checked)
   bool delaysTesting = false;           // a latency test is running
   bool canTestDelays = false;           // the box runs: its servers can be tested
   std::wstring delayError;              // why the last test didn't start

@@ -176,6 +176,17 @@ void TestBridge(const std::wstring& stubPath) {
     CHECK(junk.ip.empty() && junk.isp.empty() && !junk.pending);
     CHECK(stub.outstanding() == 0);
 
+    // The sites: the answer parsed, entries of the wrong shapes dropped.
+    const auto sites = core->LookupSites("nl", false);
+    CHECK(sites.tag == "nl" && !sites.pending && sites.error.empty() && sites.results.size() == 3 &&
+          sites.results[1].site == "chatgpt" && sites.results[1].state == "blocked" &&
+          sites.results[2].error == "i/o timeout");
+    CHECK(core->LookupSites("nl", true).pending);
+    const auto junkSites = core->LookupSites("junk", false);
+    CHECK(!junkSites.pending && junkSites.results.size() == 1 && junkSites.results[0].site == "x" &&
+          junkSites.results[0].state.empty());
+    CHECK(stub.outstanding() == 0);
+
     const auto running = core->Stats();
     CHECK(running.running);
     CHECK(running.uplinkBytes == 1000);

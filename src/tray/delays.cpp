@@ -49,6 +49,36 @@ std::optional<std::map<std::string, Delay>> ParseDelaysResponse(std::string_view
   return delays;
 }
 
+std::optional<SiteChecks> ParseSitesResponse(std::string_view response) {
+  const auto json = nlohmann::json::parse(response, nullptr, /*allow_exceptions=*/false);
+  if (Field<std::string>(json, "cmd", {}) != "box_sites") {
+    return std::nullopt;
+  }
+  SiteChecks checks;
+  checks.pending = Field<bool>(json, "pending", false);
+  checks.error = Field<std::string>(json, "error", {});
+  if (checks.error.size() > 200) {
+    checks.error.resize(200);
+  }
+  if (!json.contains("results") || !json["results"].is_array()) {
+    return checks;
+  }
+  for (const auto& item : json["results"]) {
+    std::string site = Field<std::string>(item, "site", {});
+    // An id, not text: lowercase letters and digits, short.
+    const bool plain = !site.empty() && site.size() <= 16 &&
+                       std::all_of(site.begin(), site.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); });
+    if (!plain) {
+      continue;
+    }
+    const std::string state = Field<std::string>(item, "state", {});
+    checks.sites.push_back({std::move(site), state == "ok"        ? SiteCheck::State::Ok
+                                             : state == "blocked" ? SiteCheck::State::Blocked
+                                                                  : SiteCheck::State::Fail});
+  }
+  return checks;
+}
+
 int DelayScore(const Delay& delay) { return delay.ms + 2 * delay.jitter + 10 * delay.loss; }
 
 AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,

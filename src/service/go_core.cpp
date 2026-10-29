@@ -65,6 +65,10 @@ GoCore::GoCore(const std::wstring& dllPath) {
   boxUrlTest_ = ResolveExport<BoxUrlTestFn>(module_.get(), "box_urltest");
   boxDelays_ = ResolveExport<BoxDelaysFn>(module_.get(), "box_delays");
   boxExitIp_ = ResolveExport<BoxExitIpFn>(module_.get(), "box_exitip");
+  if (const FARPROC sites = GetProcAddress(module_.get(), "box_sites")) {
+    boxSites_ = reinterpret_cast<BoxSitesFn>(  // NOLINT(performance-no-int-to-ptr)
+        reinterpret_cast<std::uintptr_t>(sites));
+  }
   boxSelect_ = ResolveExport<BoxSelectFn>(module_.get(), "box_select");
   boxSetLogCallback_ = ResolveExport<BoxSetLogCallbackFn>(module_.get(), "box_set_log_callback");
   boxFree_ = ResolveExport<BoxFreeFn>(module_.get(), "box_free");
@@ -236,6 +240,45 @@ ExitIp GoCore::LookupExitIp(const std::string& tag, bool refresh) {
   result.error = text("error");
   const auto pending = json.find("pending");
   result.pending = pending != json.end() && pending->is_boolean() && pending->get<bool>();
+  return result;
+}
+
+SiteResults GoCore::LookupSites(const std::string& tag, bool refresh) {
+  SiteResults result;
+  result.tag = tag;
+  if (boxSites_ == nullptr) {
+    result.error = "not supported by this core";
+    return result;
+  }
+  nlohmann::json request;
+  request["tag"] = tag;
+  request["refresh"] = refresh;
+  // gocore/sites.go writes it; whatever is of the wrong shape or type is left out.
+  const auto json =
+      nlohmann::json::parse(TakeOwnedString(boxSites_(request.dump().c_str())), nullptr, /*allow_exceptions=*/false);
+  if (!json.is_object()) {
+    result.error = "unexpected answer from the core";
+    return result;
+  }
+  const auto text = [](const nlohmann::json& object, const char* key) {
+    const auto it = object.find(key);
+    return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
+  };
+  result.error = text(json, "error");
+  const auto pending = json.find("pending");
+  result.pending = pending != json.end() && pending->is_boolean() && pending->get<bool>();
+  const auto list = json.find("results");
+  if (list != json.end() && list->is_array()) {
+    for (const auto& item : *list) {
+      if (!item.is_object()) {
+        continue;
+      }
+      SiteResult site{.site = text(item, "site"), .state = text(item, "state"), .error = text(item, "error")};
+      if (!site.site.empty()) {
+        result.results.push_back(std::move(site));
+      }
+    }
+  }
   return result;
 }
 

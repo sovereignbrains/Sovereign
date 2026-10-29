@@ -73,6 +73,13 @@ class FakeCore final : public ICore {
     return result;
   }
 
+  sovereign::service::SiteResults LookupSites(const std::string& tag, bool refresh) override {
+    sitesAsked = {tag, refresh};
+    sovereign::service::SiteResults result = sites;
+    result.tag = tag;
+    return result;
+  }
+
   std::string Select(const std::string& selector, const std::string& outbound) override {
     selected = {selector, outbound};
     return selectError;
@@ -94,6 +101,8 @@ class FakeCore final : public ICore {
   std::vector<sovereign::service::DelayResult> delays;
   sovereign::service::ExitIp exitIp;
   std::optional<std::pair<std::string, bool>> exitIpAsked;
+  sovereign::service::SiteResults sites;
+  std::optional<std::pair<std::string, bool>> sitesAsked;
   std::string startError;
   std::string stopError;
   std::string startedWith;
@@ -285,6 +294,30 @@ void TestExitIp() {
   core.exitIp = {.tag = {}, .pending = false, .ip = {}, .country = {}, .isp = {}, .error = "i/o timeout"};
   answer = Send(handler, R"({"cmd":"box_exitip","tag":"nl"})");
   CHECK(answer == json::parse(R"({"cmd":"box_exitip","tag":"nl","error":"i/o timeout"})"));
+
+  // box_sites: checked like box_exitip, answered with what the core knows.
+  const auto sitesRejected = [&](const std::string& request) {
+    return Send(handler, request).value("cmd", "") == "error" && !core.sitesAsked;
+  };
+  CHECK(sitesRejected(R"({"cmd":"box_sites"})"));
+  CHECK(sitesRejected(R"({"cmd":"box_sites","tag":""})"));
+  CHECK(sitesRejected(R"({"cmd":"box_sites","tag":5})"));
+  CHECK(sitesRejected(json{{"cmd", "box_sites"}, {"tag", std::string(300, 'x')}}.dump()));
+  CHECK(sitesRejected(R"({"cmd":"box_sites","tag":"a","refresh":"yes"})"));
+
+  core.sites = {.tag = {}, .pending = true, .results = {}, .error = {}};
+  answer = Send(handler, R"({"cmd":"box_sites","tag":"nl"})");
+  CHECK(core.sitesAsked == std::make_pair(std::string("nl"), false));
+  CHECK(answer == json::parse(R"({"cmd":"box_sites","tag":"nl","pending":true,"results":[]})"));
+
+  core.sites = {.tag = {},
+                .pending = false,
+                .results = {{"youtube", "ok", {}}, {"instagram", "fail", "i/o timeout"}},
+                .error = {}};
+  answer = Send(handler, R"({"cmd":"box_sites","tag":"nl","refresh":true})");
+  CHECK(core.sitesAsked == std::make_pair(std::string("nl"), true));
+  CHECK(answer == json::parse(R"({"cmd":"box_sites","tag":"nl","results":[{"site":"youtube","state":"ok"},)"
+                              R"({"site":"instagram","state":"fail","error":"i/o timeout"}]})"));
 }
 
 // The config kept for boot: a start with at_boot keeps or drops it, a stop

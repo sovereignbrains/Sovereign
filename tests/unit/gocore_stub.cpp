@@ -127,6 +127,19 @@ __declspec(dllexport) char* __cdecl box_exitip(const char* request) {
   return Allocate(R"({"tag":"nl","ip":"185.12.34.56","country":"NL","isp":"Hetzner Online GmbH"})");
 }
 
+// A fixed answer, like box_exitip's; "junk" gets entries of the wrong shapes.
+__declspec(dllexport) char* __cdecl box_sites(const char* request) {
+  const std::string text = request != nullptr ? request : "";
+  if (text.find("\"tag\":\"junk\"") != std::string::npos) {
+    return Allocate(R"({"tag":"junk","pending":"yes","results":[5,{"site":7},{"state":"ok"},{"site":"x","state":5}]})");
+  }
+  if (text.find("\"refresh\":true") != std::string::npos) {
+    return Allocate(R"({"tag":"nl","pending":true,"results":[]})");
+  }
+  return Allocate(R"({"tag":"nl","results":[{"site":"youtube","state":"ok"},)"
+                  R"({"site":"chatgpt","state":"blocked"},{"site":"instagram","state":"fail","error":"i/o timeout"}]})");
+}
+
 // A fixed answer covering every result shape.
 __declspec(dllexport) char* __cdecl box_delays() {
   return Allocate(R"({"results":[{"tag":"nl","delay":48,"jitter":3,"loss":10,"samples":9,"connect":412},)"

@@ -41,7 +41,7 @@ using CommandObserver = std::function<void(const CommandRecord&)>;
 //
 // Commands: ping (echo), box_ping, box_start {config, at_boot?}, box_stop, box_boot {at_boot},
 // box_stats, box_logs {since}, box_urltest {tags, url?, timeout_ms?},
-// box_delays, box_exitip {tag, refresh?}, box_route {targets},
+// box_delays, box_exitip {tag, refresh?}, box_sites {tag, refresh?}, box_route {targets},
 // kill_switch {enabled, allow_lan?, lan_closed?, lan_allowed?},
 // update_install {version, installer, session}.
 class ControlHandler {

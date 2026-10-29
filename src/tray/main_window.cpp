@@ -3002,7 +3002,21 @@ class Painter {
         // With a detail: the name and the latency on top, the detail under them.
         const float mid = (r.top + r.bottom) / 2;
         const D2D1_RECT_F line = it.detail.empty() ? r : D2D1_RECT_F{r.left, r.top + 4, r.right, mid + 2};
-        k.Text(it.text, body_.get(), {line.left + 42, line.top, line.right - 120, line.bottom}, primary);
+        // Which sites open through the server, right to left before the latency:
+        // green opens, red answers "not from here", dim doesn't answer.
+        float nameRight = line.right - 120;
+        if (it.command == UiCommand::SetProtocol && it.index >= 0 && static_cast<std::size_t>(it.index) < c.sites.size()) {
+          const auto& sites = c.sites[static_cast<std::size_t>(it.index)];
+          for (auto site = sites.rbegin(); site != sites.rend(); ++site) {
+            const float width = TextWidth(site->label, caption_.get()) + 6;
+            const D2D1_COLOR_F ink = site->state == SiteCheck::State::Ok        ? FromColorRef(ui::kUpload)
+                                     : site->state == SiteCheck::State::Blocked ? FromColorRef(ui::kDanger)
+                                                                                : secondary;
+            k.Text(site->label, caption_.get(), {nameRight - width, line.top, nameRight, line.bottom}, ink);
+            nameRight -= width + 6;
+          }
+        }
+        k.Text(it.text, body_.get(), {line.left + 42, line.top, nameRight - 8, line.bottom}, primary);
         if (!it.detail.empty()) {
           k.Text(it.detail, caption_.get(), {r.left + 42, mid + 2, r.right - 12, r.bottom - 4}, secondary);
         }

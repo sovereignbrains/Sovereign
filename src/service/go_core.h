@@ -43,6 +43,7 @@ class GoCore final : public ICore {
   std::string StartUrlTest(const UrlTestRequest& request) override;
   std::vector<DelayResult> Delays() override;
   ExitIp LookupExitIp(const std::string& tag, bool refresh) override;
+  SiteResults LookupSites(const std::string& tag, bool refresh) override;
   std::string Select(const std::string& selector, const std::string& outbound) override;
   void SetLogSink(LogSink sink) override;
 
@@ -56,6 +57,7 @@ class GoCore final : public ICore {
   using BoxUrlTestFn = char*(__cdecl*)(const char*);
   using BoxDelaysFn = char*(__cdecl*)();
   using BoxExitIpFn = char*(__cdecl*)(const char*);
+  using BoxSitesFn = char*(__cdecl*)(const char*);
   using BoxSelectFn = char*(__cdecl*)(const char*, const char*);
   using LogCallbackFn = void(__cdecl*)(void*, int, const char*);
   using BoxSetLogCallbackFn = void(__cdecl*)(LogCallbackFn, void*);
@@ -81,6 +83,7 @@ class GoCore final : public ICore {
   BoxUrlTestFn boxUrlTest_ = nullptr;
   BoxDelaysFn boxDelays_ = nullptr;
   BoxExitIpFn boxExitIp_ = nullptr;
+  BoxSitesFn boxSites_ = nullptr;  // optional: a DLL without box_sites (older) leaves it empty
   BoxSelectFn boxSelect_ = nullptr;
   BoxSetLogCallbackFn boxSetLogCallback_ = nullptr;
   BoxFreeFn boxFree_ = nullptr;

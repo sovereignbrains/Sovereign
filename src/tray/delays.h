@@ -26,6 +26,23 @@ struct Delay {
 // (an error, or garbage). Entries that aren't a result are skipped.
 std::optional<std::map<std::string, Delay>> ParseDelaysResponse(std::string_view response);
 
+// Which sites open through a server, as the service's box_sites reports it
+// (gocore/sites.go): one verdict per site id ("youtube", "telegram", ...).
+struct SiteCheck {
+  enum class State : std::uint8_t { Ok, Blocked, Fail };  // Blocked: it answered, but not to this exit
+  std::string site;
+  State state = State::Fail;
+};
+struct SiteChecks {
+  bool pending = false;  // a check runs; `sites` may be partial
+  std::string error;     // why there is nothing (an older core, box not running...)
+  std::vector<SiteCheck> sites;
+};
+
+// nullopt unless it's a box_sites answer. Entries whose id isn't a short
+// lowercase word are dropped; an unknown state reads as a failure.
+std::optional<SiteChecks> ParseSitesResponse(std::string_view response);
+
 // What a measured server costs, in milliseconds: the median, plus its spread
 // and its losses - a jumpy or lossy server is worse than its median says.
 // Only for State::Ok.

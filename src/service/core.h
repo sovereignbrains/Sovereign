@@ -92,6 +92,20 @@ struct ExitIp {
   std::string error;     // why the last lookup failed
 };
 
+// Which of a few sites open through an outbound: "youtube", "telegram",
+// "chatgpt", "instagram" (gocore/sites.go owns the list).
+struct SiteResult {
+  std::string site;
+  std::string state;  // "ok", "blocked" (it answered, but not this exit) or "fail" (no answer)
+  std::string error;  // fail: why, short
+};
+struct SiteResults {
+  std::string tag;
+  bool pending = false;  // a check runs; `results` may be partial
+  std::vector<SiteResult> results;
+  std::string error;  // why there is nothing (box not running, no such outbound...)
+};
+
 // Called for every log line the core emits (already filtered by the config's
 // log level). May be invoked from any thread, concurrently, for as long as
 // it is installed — implementations of the sink must be thread-safe.
@@ -148,6 +162,14 @@ class ICore {
   // outbound) when there's none for `tag` yet or `refresh` asks - so it's
   // polled like the delays. Everything is forgotten on Start().
   virtual ExitIp LookupExitIp(const std::string& tag, bool refresh) = 0;
+
+  // Which sites open through the outbound `tag`: polled like LookupExitIp (a
+  // check starts when there's none for `tag` yet or `refresh` asks, and runs
+  // in the background). An engine that can't tell - or an older DLL - says so
+  // in `error`.
+  virtual SiteResults LookupSites(const std::string& tag, bool /*refresh*/) {
+    return {.tag = tag, .error = "not supported by this engine"};
+  }
 
   // Switches the selector outbound `selector` to its option `outbound`, for
   // new connections, without a restart. Empty string, or why not.

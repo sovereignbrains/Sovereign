@@ -101,6 +101,24 @@ void TestNextWarpServer() {
 
 }  // namespace
 
+// The service's box_sites answers.
+void TestParsesSites() {
+  using State = SiteCheck::State;
+  const auto got = ParseSitesResponse(
+      R"({"cmd":"box_sites","tag":"nl","pending":true,"results":[{"site":"youtube","state":"ok"},)"
+      R"({"site":"chatgpt","state":"blocked"},{"site":"instagram","state":"fail","error":"i/o timeout"},)"
+      R"({"site":"Bad Site!","state":"ok"},{"site":"telegram","state":"???"},{"state":"ok"},7]})");
+  CHECK(got && got->pending && got->error.empty() && got->sites.size() == 4);
+  CHECK(got->sites[0].site == "youtube" && got->sites[0].state == State::Ok);
+  CHECK(got->sites[1].site == "chatgpt" && got->sites[1].state == State::Blocked);
+  CHECK(got->sites[2].site == "instagram" && got->sites[2].state == State::Fail);
+  CHECK(got->sites[3].site == "telegram" && got->sites[3].state == State::Fail);  // unknown: a failure
+  const auto old = ParseSitesResponse(R"({"cmd":"box_sites","tag":"nl","error":"not supported by this core","results":[]})");
+  CHECK(old && old->sites.empty() && old->error == "not supported by this core");
+  CHECK(!ParseSitesResponse(R"({"cmd":"box_delays","results":[]})"));
+  CHECK(!ParseSitesResponse("not json"));
+}
+
 // The user's own network, judged by the way around the proxy.
 void TestLocalNetwork() {
   Delay direct{.state = Delay::State::Ok, .ms = 12};
@@ -129,6 +147,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestJudgeAuto();
     TestNextWarpServer();
     TestLocalNetwork();
+    TestParsesSites();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

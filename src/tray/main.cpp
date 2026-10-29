@@ -161,6 +161,7 @@ constexpr std::chrono::minutes kExitIpRecheck{5};
 // Where each server is: lookups a box makes for one before giving up on it
 // (QUIC-based servers drop a first connection now and then).
 constexpr int kServerExitTries = 3;
+constexpr int kServerSitesTries = 2;  // reached by a server whose site check is answered or can't be asked
 
 // A latency test the service never finishes stops being waited for (a server
 // takes up to 12 s, eight at a time).
@@ -344,6 +345,7 @@ struct View {
   std::string selectError;  // why the box couldn't be switched to the pick
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
   std::vector<sovereign::tray::ExitIp> locations;  // per protocol: where it is, once known
+  std::vector<sovereign::tray::SiteChecks> sites;  // per protocol: which sites open through it, once known
   bool hideExitIp = false;
   bool delaysDetailed = false;
   bool serversByDelay = true;
@@ -841,6 +843,7 @@ class Worker {
       WatchWarp(stats);
       UpdateExitIp(stats);
       UpdateServerExits(stats);
+      UpdateServerSites(stats);
       if (toggleExitIp) {
         settings_.hideExitIp = !settings_.hideExitIp;
         Save();
@@ -2237,6 +2240,54 @@ class Worker {
     }
   }
 
+  // Which sites open through each server that answered the latency test:
+  // checked once a box (the core runs two servers at a time, the rest wait),
+  // polled until done. A core that can't tell (an older DLL) is asked once.
+  void UpdateServerSites(const std::optional<sovereign::tray::Stats>& stats) {
+    if (!stats || !stats->running || model_.GetDisplay() != Display::On) {
+      return;
+    }
+    const auto now = TrayModel::Clock::now();
+    if (stats->generation != serverSitesGeneration_) {
+      serverSitesGeneration_ = stats->generation;
+      serverSitesTries_.clear();
+      serverSites_.clear();
+    } else if (serverSitesPolled_ && now - *serverSitesPolled_ < kExitIpPoll) {
+      return;
+    }
+    serverSitesPolled_ = now;
+    const auto [choices, current] = Choices();
+    for (const std::string& tag : choices.options) {
+      const auto delay = delays_.find(tag);
+      if (choices.groups.contains(tag) || delay == delays_.end() ||
+          delay->second.state != sovereign::tray::Delay::State::Ok) {
+        continue;  // auto is wherever its server is; one that doesn't answer opens nothing
+      }
+      int& tries = serverSitesTries_[tag];
+      sovereign::tray::SiteChecks& known = serverSites_[tag];
+      if (!known.pending && tries >= kServerSitesTries) {
+        continue;
+      }
+      const bool refresh = !known.pending || tries == 0;  // else: polling the check this box runs
+      const auto response = sovereign::tray::RequestService(
+          nlohmann::json{{"cmd", "box_sites"}, {"tag", tag}, {"refresh", refresh}}.dump());
+      const auto parsed = response ? sovereign::tray::ParseSitesResponse(*response) : std::nullopt;
+      if (!parsed) {
+        continue;  // the service didn't answer: asked again at the next poll
+      }
+      tries += refresh ? 1 : 0;
+      if (!parsed->error.empty() && parsed->sites.empty()) {
+        known = {};
+        tries = kServerSitesTries;  // can't tell (an older core, a box going down): not asked again this box
+        continue;
+      }
+      known = *parsed;
+      if (!parsed->pending) {
+        tries = kServerSitesTries;  // answered: done for this box
+      }
+    }
+  }
+
   // The running box's selector switched to what it should be on (Wanted) -
   // after every start of a box too: sing-box starts it on what its cache
   // file kept, not necessarily what is wanted now.
@@ -2811,6 +2862,11 @@ class Worker {
         const auto it = serverExits_.find(option);
         v.locations.push_back(it == serverExits_.end() ? sovereign::tray::ExitIp{} : it->second);
       }
+      v.sites.clear();
+      for (const std::string& option : v.protocols) {
+        const auto it = serverSites_.find(option);
+        v.sites.push_back(it == serverSites_.end() ? sovereign::tray::SiteChecks{} : it->second);
+      }
       v.hideExitIp = settings_.hideExitIp;
       v.delaysDetailed = settings_.delaysDetailed;
       v.serversByDelay = settings_.serversByDelay;
@@ -2922,6 +2978,10 @@ class Worker {
   std::map<std::string, int> serverExitsTries_;  // lookups started in this box, per tag
   std::int64_t serverExitsGeneration_ = -1;   // which box
   std::optional<TrayModel::Clock::time_point> serverExitsPolled_;
+  std::map<std::string, sovereign::tray::SiteChecks> serverSites_;  // which sites open through each server, by tag
+  std::map<std::string, int> serverSitesTries_;  // checks started in this box, per tag
+  std::int64_t serverSitesGeneration_ = -1;      // which box
+  std::optional<TrayModel::Clock::time_point> serverSitesPolled_;
   bool killSwitchActive_ = false;
   std::string killSwitchError_;
   std::optional<TrayModel::Clock::time_point> lockedSince_;  // UpdateLockout's
@@ -4757,6 +4817,14 @@ UiContent ContentFrom(const View& v) {
     c.locations.push_back({.country = Widen(location.country),
                            .isp = Widen(sovereign::tray::ShortIsp(location.isp)),
                            .ip = Widen(location.ip)});
+  }
+  for (const auto& checks : v.sites) {
+    std::vector<sovereign::tray::UiSite>& row = c.sites.emplace_back();
+    for (const auto& site : checks.sites) {
+      if (std::wstring label = sovereign::tray::SiteLabel(site.site); !label.empty()) {
+        row.push_back({.label = std::move(label), .state = site.state});
+      }
+    }
   }
   c.exitIp = Widen(v.exitIp.ip);
   c.exitCountry = Widen(v.exitIp.country);
