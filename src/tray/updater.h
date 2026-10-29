@@ -34,6 +34,7 @@ class Updater {
     std::string latest;      // the newest release's version, once known
     std::string error;       // Failed, or Available after a failed download: why
     std::wstring installer;  // Ready: the verified installer on disk
+    std::string boxLatest;   // the newest stable sing-box, once known (kSingBoxReleasesApi)
   };
 
   // `changed` runs on the updater's thread after every state change.

@@ -4700,7 +4700,8 @@ UiContent ContentFrom(const View& v) {
   c.killSwitchActive = v.killSwitchActive;
   c.killSwitchError = Widen(v.killSwitchError);
   c.autostart = sovereign::tray::AutostartEnabled();
-  c.version = SOVEREIGN_VERSION_W L" · sing-box " SOVEREIGN_SINGBOX_VERSION_W;
+  c.version = SOVEREIGN_VERSION_W;
+  c.boxVersion = SOVEREIGN_SINGBOX_VERSION_W;
   if (g_updater != nullptr) {
     using Status = sovereign::tray::Updater::Status;
     const auto update = g_updater->Get();
@@ -4718,6 +4719,11 @@ UiContent ContentFrom(const View& v) {
     }
     c.updateVersion = Widen(update.latest);
     c.updateError = Widen(update.error);
+    const auto inside = sovereign::tray::ParseVersion(Narrow(c.boxVersion));
+    if (const auto newest = sovereign::tray::ParseVersion(update.boxLatest); inside && newest) {
+      c.boxIsLatest = *inside >= *newest;
+      c.boxLatest = Widen(update.boxLatest);
+    }
   }
   c.updateMode = g_updateMode;
   return c;
@@ -5973,7 +5979,7 @@ bool ComputerQuiet() {
   if (!GetLastInputInfo(&input)) {
     return false;
   }
-  const auto sinceInput = std::chrono::milliseconds(GetTickCount() - input.dwTime);  // wraps right as DWORD
+  const auto sinceInput = std::chrono::milliseconds(static_cast<DWORD>(GetTickCount64()) - input.dwTime);  // wraps right as DWORD
   QUERY_USER_NOTIFICATION_STATE shell = QUNS_ACCEPTS_NOTIFICATIONS;
   const bool fullScreen = SUCCEEDED(SHQueryUserNotificationState(&shell)) &&
                           (shell == QUNS_BUSY || shell == QUNS_RUNNING_D3D_FULL_SCREEN ||

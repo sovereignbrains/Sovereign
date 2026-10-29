@@ -71,6 +71,14 @@ struct Release {
 // repository's releases (IsReleaseAssetUrl). nullopt otherwise.
 std::optional<Release> ParseLatestRelease(std::string_view json);
 
+// sing-box's own latest stable release (/latest skips prereleases): whether
+// the sing-box inside is the newest - the mark by the version line.
+inline constexpr std::string_view kSingBoxReleasesApi = "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
+
+// The version of that API's answer; nullopt for a draft, a prerelease or no
+// plain vX.Y.Z tag.
+std::optional<Version> ParseUpstreamRelease(std::string_view json);
+
 bool IsReleaseAssetUrl(std::string_view url);
 
 // A sha256sum-style checksum file: "<64 hex>  <name>" lines, or a bare hash.

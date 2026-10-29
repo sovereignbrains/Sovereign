@@ -137,7 +137,10 @@ UiContent SampleContent() {
   c.update = sovereign::tray::UiUpdate::Available;
   c.updateVersion = L"0.3.0";
   c.autostart = true;
-  c.version = L"0.2.0 · sing-box 1.14.1";
+  c.version = L"0.12.40";  // the widest a version gets soon
+  c.boxVersion = L"1.14.11";
+  c.boxIsLatest = false;
+  c.boxLatest = L"1.15.10";
   return c;
 }
 
@@ -247,11 +250,12 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(fine, UiPage::Settings, logs, 400, 1000, 96,
                                               dir + L"\\settings-fine.png");
   });
-  // Updates installed unasked, one downloading: its key in the bar, the
-  // row's "?" open; and looked for only when asked, nothing found yet.
+  // Updates installed unasked, one downloaded and waiting for a quiet
+  // moment: its key in the bar, "update now" under the foot, the row's "?"
+  // open; and looked for only when asked, nothing found yet.
   variant([&](UiContent& updating) {
     updating.updateMode = sovereign::tray::UpdateMode::Install;
-    updating.update = sovereign::tray::UiUpdate::Downloading;
+    updating.update = sovereign::tray::UiUpdate::Waiting;
     sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Settings, logs, 400, 860, 96,
                                               dir + L"\\settings-updates-install.png", L"«Проверять автоматически»");
     updating.updateMode = sovereign::tray::UpdateMode::Off;
@@ -264,6 +268,7 @@ int Snapshots(const std::wstring& dir) {
   UiContent empty;
   empty.display = sovereign::tray::Display::Off;
   empty.version = content.version;
+  empty.boxVersion = content.boxVersion;
   sovereign::tray::RenderMainWindowSnapshot(empty, UiPage::Overview, {}, 400, 620, 96, dir + L"\\overview-empty.png");
   variant([&](UiContent& failed) {
     failed.display = sovereign::tray::Display::Error;
@@ -773,16 +778,22 @@ int LayoutTest(const std::wstring& dir) {
                               .text = L"Сервер этой подписки увидит твой настоящий IP-адрес.",
                               .yes = L"Скачать напрямую",
                               .tone = UiQuestion::Tone::Warning};
-  // Updates installed unasked, the longest of the row's values, one downloading.
+  // Updates installed unasked, the longest of the row's values, one waiting
+  // for a quiet moment; and only by the button, the longest idle status.
   UiContent installing = content;
   installing.updateMode = sovereign::tray::UpdateMode::Install;
-  installing.update = sovereign::tray::UiUpdate::Downloading;
+  installing.update = sovereign::tray::UiUpdate::Waiting;
+  installing.updateVersion = L"0.12.41";
+  UiContent idle = content;
+  idle.updateMode = sovereign::tray::UpdateMode::Off;
+  idle.update = sovereign::tray::UiUpdate::Idle;
+  idle.boxIsLatest = true;
   struct Page {
     UiPage page;
     const wchar_t* name;
     const UiContent* content;
   };
-  const std::array<Page, 10> pages = {{{UiPage::Overview, L"overview", &content},
+  const std::array<Page, 11> pages = {{{UiPage::Overview, L"overview", &content},
                                       {UiPage::Servers, L"servers", &content},
                                       {UiPage::Subscription, L"subscription", &content},
                                       {UiPage::Logs, L"logs", &content},
@@ -791,7 +802,8 @@ int LayoutTest(const std::wstring& dir) {
                                       {UiPage::Routing, L"routing", &routed},
                                       {UiPage::Checks, L"checks", &content},
                                       {UiPage::Overview, L"question", &asked},
-                                      {UiPage::Settings, L"settings-install", &installing}}};
+                                      {UiPage::Settings, L"settings-install", &installing},
+                                      {UiPage::Settings, L"settings-idle", &idle}}};
   CreateDirectoryW(dir.c_str(), nullptr);
   int failures = 0;
   int cut = 0;

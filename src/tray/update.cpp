@@ -130,6 +130,14 @@ std::optional<Release> ParseLatestRelease(std::string_view json) {
   return release;
 }
 
+std::optional<Version> ParseUpstreamRelease(std::string_view json) {
+  const auto root = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+  if (!root.is_object() || Field<bool>(root, "draft", false) || Field<bool>(root, "prerelease", false)) {
+    return std::nullopt;
+  }
+  return ParseVersion(Field<std::string>(root, "tag_name", {}));
+}
+
 std::optional<std::string> ParseChecksum(std::string_view text, std::string_view fileName) {
   const std::string_view whole = Trim(text);
   if (whole.size() == 64 && IsHex(whole)) {

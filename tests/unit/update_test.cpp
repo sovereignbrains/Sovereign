@@ -91,6 +91,14 @@ void TestChecksum() {
         "https://github.com/sovereignbrains/Sovereign/releases/download/v0.5.46/Sovereign-Setup-0.5.46.exe.sha256");
 }
 
+void TestUpstream() {
+  CHECK((ParseUpstreamRelease(R"({"tag_name":"v1.14.5","draft":false,"prerelease":false})") == Version{1, 14, 5}));
+  CHECK(!ParseUpstreamRelease(R"({"tag_name":"v1.15.0-alpha.3","prerelease":true})"));
+  CHECK(!ParseUpstreamRelease(R"({"tag_name":"v1.14.5","draft":true})"));
+  CHECK(!ParseUpstreamRelease(R"({"message":"API rate limit exceeded"})"));
+  CHECK(!ParseUpstreamRelease("not json"));
+}
+
 void TestQuiet() {
   using std::chrono::minutes;
   using std::chrono::seconds;
@@ -110,6 +118,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
     TestLatestRelease();
     TestChecksum();
     TestQuiet();
+    TestUpstream();
   } catch (const std::exception& e) {
     std::cerr << "unexpected exception: " << e.what() << "\n";
     return 2;

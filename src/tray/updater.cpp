@@ -172,6 +172,12 @@ void Updater::DoCheck() {
       s.status = Status::Checking;
     }
   });
+  // sing-box's newest, by the way: an ask that fails keeps what was known.
+  if (const auto box = Download(Widen(std::string(kSingBoxReleasesApi)), userAgent_, kMaxSmallBytes)) {
+    if (const auto version = ParseUpstreamRelease(*box)) {
+      Set([&](State& s) { s.boxLatest = ToString(*version); });
+    }
+  }
   const auto body = Download(Widen(std::string(kReleasesApi)), userAgent_, kMaxSmallBytes);
   const auto release = body ? ParseLatestRelease(*body) : std::nullopt;
   if (!release) {

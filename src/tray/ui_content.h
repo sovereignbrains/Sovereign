@@ -276,7 +276,13 @@ struct UiContent {
   bool lockedOut = false;               // on, the kill switch holding the internet shut, nothing getting through
   std::wstring lockoutReason;           // why nothing gets through
   std::wstring localNetwork;            // the user's own network bad around the proxy too: said so; empty if fine
-  std::wstring version;                 // "0.1.0 · sing-box 1.14.1"
+  std::wstring version;                 // Sovereign's, "0.1.0"
+  std::wstring boxVersion;              // the sing-box inside, "1.14.1"
+  // That sing-box against its newest stable release, once the updater asked:
+  // the newest (true) or behind boxLatest - which then waits for a Sovereign
+  // release that carries it.
+  std::optional<bool> boxIsLatest;
+  std::wstring boxLatest;
   UiUpdate update = UiUpdate::Idle;
   UpdateMode updateMode = UpdateMode::Check;  // what the updater does unasked
   std::wstring updateVersion;           // the newest release, once known

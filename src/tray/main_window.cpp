@@ -599,15 +599,15 @@ std::wstring RoutingLine(const UiContent& c) {
 std::wstring UpdateStatus(const UiContent& c) {
   switch (c.update) {
     case UiUpdate::Idle:
-      return c.updateMode == UpdateMode::Off       ? L"Обновления проверяются только кнопкой справа."
-             : c.updateMode == UpdateMode::Install ? L"Обновления проверяются и ставятся сами."
-                                                   : L"Обновления проверяются сами, раз в 12 часов.";
+      return c.updateMode == UpdateMode::Off       ? L"Обновления: только кнопкой справа."
+             : c.updateMode == UpdateMode::Install ? L"Обновления ставятся сами."
+                                                   : L"Обновления — раз в 12 часов.";
     case UiUpdate::Checking: return L"Проверяю…";
     case UiUpdate::UpToDate: return L"Это последняя версия.";
     case UiUpdate::Available:
       return c.updateError.empty() ? L"Доступна версия " + c.updateVersion : L"Не удалось: " + c.updateError;
     case UiUpdate::Downloading: return L"Скачиваю версию " + c.updateVersion + L"…";
-    case UiUpdate::Waiting: return L"Версия " + c.updateVersion + L" скачана, поставлю, когда компьютер будет свободен.";
+    case UiUpdate::Waiting: return L"Версия " + c.updateVersion + L" скачана, ждёт паузы.";
     case UiUpdate::Failed: return L"Не удалось проверить: " + c.updateError;
     case UiUpdate::Off: return L"Сборка для разработки: обновления не проверяются.";
   }
@@ -1012,6 +1012,12 @@ class Painter {
         case Kind::CheckRow:
           room = w - 30 - (it.checked ? 44.0f : 12.0f);
           need = TextWidth(it.text, body_.get()) + 6 + kHint + 8 + TextWidth(it.detail, trailing_.get());
+          break;
+        case Kind::Muted:  // a line of its own; a taller one wraps
+          if (it.rect.bottom - it.rect.top <= 24 && it.text.find(L'\n') == std::wstring::npos) {
+            room = w;
+            need = TextWidth(it.text, caption_.get());
+          }
           break;
         default: break;
       }
@@ -2791,10 +2797,13 @@ class Painter {
 
     // The foot, no card - it's about the app, nothing to set: the version and
     // whether it's the last, the data folder and the update check beside it;
-    // an update waiting, its button under them.
+    // an update waiting, its button under them. The sing-box inside a line of
+    // its own, with whether it's sing-box's newest.
     y += 8;
+    const std::wstring box = !c.boxIsLatest ? std::wstring() : *c.boxIsLatest ? L" · последняя" : L" · вышла " + c.boxLatest;
     l.items.push_back(Make(Kind::Muted, {x0 + 4, y, x1 - 88, y + 20}, L"Sovereign " + c.version));
-    l.items.push_back(Make(Kind::Muted, {x0 + 4, y + 20, x1 - 88, y + 40},
+    l.items.push_back(Make(Kind::Muted, {x0 + 4, y + 20, x1 - 88, y + 40}, L"sing-box " + c.boxVersion + box));
+    l.items.push_back(Make(Kind::Muted, {x0 + 4, y + 40, x1 - 88, y + 60},
                            c.update == UiUpdate::Downloading ? std::wstring(L"скачиваю обновление…") : UpdateStatus(c)));
     Item folder =
         CommandItem(Kind::IconButton, {x1 - 80, y + 2, x1 - 44, y + 38}, L"Папка данных", kGlyphFolder, UiCommand::OpenFolder);
@@ -2804,7 +2813,7 @@ class Painter {
                              kGlyphRefresh, UiCommand::CheckUpdate);
     check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
     l.items.push_back(std::move(check));
-    y += 40;
+    y += 60;
     if (c.update == UiUpdate::Available || c.update == UiUpdate::Waiting) {
       y += 10;
       l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton},
