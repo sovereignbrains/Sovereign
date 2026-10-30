@@ -137,9 +137,9 @@ wil::com_ptr<ID2D1PathGeometry> Polygon(ID2D1RenderTarget* t, const std::array<D
 
 CubePose CubePoseFor(Display display) {
   CubePose p;
-  // Dark see-through glass, light thin edges - the same in every state; the
-  // one colour is the core's, the state's. On, it shines through the glass
-  // and round it; off, a grey ember.
+  // Clear glass, light thin edges - the same in every state; the one colour
+  // is the light under the box, the state's. On, it shines up the box's sides
+  // and pools on the glass floor; off, a grey ember.
   p.body = Color(0.12f, 0.13f, 0.15f, 0.62f);
   p.rim = Color(0.92f, 0.93f, 0.96f, 0.80f);
   p.signal = Color(0.62f, 0.64f, 0.70f, 0.55f);
@@ -284,52 +284,109 @@ void DrawCube(ID2D1RenderTarget* t, const CubePose& pose, D2D1_RECT_F box, bool 
     }
   }
 
-  // The core: an orb of the state's colour, white at its heart while on.
-  const float r = half * (0.26f + 0.32f * lit);
-  Spot(t, middle, r * 2.6f, r * 2.6f, WithAlpha(p.signal, 0.55f * (0.35f + 0.65f * lit)));
-  {
-    const std::array<D2D1_GRADIENT_STOP, 3> stops{{{0, Mix(p.signal, Color(1, 1, 1), 0.75f * lit)},
-                                                    {0.45f, WithAlpha(p.signal, 0.85f)},
-                                                    {1, WithAlpha(p.signal, 0)}}};
-    wil::com_ptr<ID2D1GradientStopCollection> collection;
-    wil::com_ptr<ID2D1RadialGradientBrush> orb;
-    if (SUCCEEDED(t->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()), collection.put())) &&
-        SUCCEEDED(t->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(middle, {0, 0}, r, r),
-                                               collection.get(), orb.put()))) {
-      t->FillEllipse(D2D1::Ellipse(middle, r, r), orb.get());
+  // The state's light on the glass floor, under where the box floats.
+  const D2D1_POINT_2F pool = at({0, -1, 0});
+  const float poolX = half * 1.15f;
+  Spot(t, pool, poolX, poolX * std::sin(p.pitch * kDegrees) + 2, WithAlpha(p.signal, 0.6f * (0.25f + 0.75f * lit)));
+
+  // The box: a graphite parcel afloat in the middle, its near faces lit from
+  // above and, up their sides from under, by the state's light; a strip of
+  // silver tape over its top and down its front.
+  const float hb = half * 0.58f;
+  const float rise = -half * 0.2f;  // its middle below the glass's
+  const auto inBox = [&](Vec v) {
+    const Vec r = Rotate({v.x * hb, v.y * hb + rise, v.z * hb}, p.yaw, p.pitch);
+    return D2D1_POINT_2F{center.x + r.x, center.y - r.y - p.lift};
+  };
+  const Vec light = Light();
+  const D2D1_COLOR_F graphite = Scale(Color(0.20f, 0.21f, 0.24f), 0.85f + 0.15f * lit);
+  for (const FaceDef& def : kFaces) {
+    const Vec n = Rotate(def.normal, p.yaw, p.pitch);
+    if (n.z <= 0.001f) {
+      continue;
+    }
+    std::array<D2D1_POINT_2F, 4> corners;
+    for (std::size_t c = 0; c < 4; ++c) {
+      corners[c] = inBox(def.corners[c]);
+    }
+    const auto path = Polygon(t, corners);
+    if (!path) {
+      continue;
+    }
+    const float shade = std::clamp(0.25f + 0.75f * std::max(0.0f, Dot(n, light)), 0.0f, 1.0f);
+    const auto [topIt, bottomIt] = std::minmax_element(
+        corners.begin(), corners.end(), [](const auto& a, const auto& b) { return a.y < b.y; });
+    const D2D1_COLOR_F face = Scale(graphite, 0.45f + 0.95f * shade);
+    if (const auto fill = Linear(t, *topIt, *bottomIt, Scale(face, 1.08f), Scale(face, 0.92f))) {
+      t->FillGeometry(path.get(), fill.get());
+    }
+    if (def.normal.y < 0.5f) {
+      const D2D1_POINT_2F mid{(topIt->x + bottomIt->x) / 2, (topIt->y + bottomIt->y) / 2};
+      if (const auto under = Linear(t, *bottomIt, mid, WithAlpha(p.signal, 0.55f * lit), WithAlpha(p.signal, 0))) {
+        t->FillGeometry(path.get(), under.get());
+      }
+    }
+  }
+  const D2D1_COLOR_F silver = Color(0.66f, 0.67f, 0.70f);
+  const auto tape = [&](const std::array<Vec, 4>& c, Vec normal) {
+    const Vec n = Rotate(normal, p.yaw, p.pitch);
+    if (n.z <= 0.001f) {
+      return;
+    }
+    const float shade = std::clamp(0.25f + 0.75f * std::max(0.0f, Dot(n, light)), 0.0f, 1.0f);
+    const auto path = Polygon(t, {inBox(c[0]), inBox(c[1]), inBox(c[2]), inBox(c[3])});
+    if (const auto brush = Solid(t, Scale(silver, 0.55f + 0.85f * shade)); brush && path) {
+      t->FillGeometry(path.get(), brush.get());
+    }
+  };
+  constexpr float w = 0.2f;  // half the tape's width, in the box's half-edges
+  tape({{{-w, 1, -1}, {w, 1, -1}, {w, 1, 1}, {-w, 1, 1}}}, {0, 1, 0});
+  tape({{{-w, 1, 1}, {w, 1, 1}, {w, 0.2f, 1}, {-w, 0.2f, 1}}}, {0, 0, 1});
+  tape({{{-w, 1, -1}, {w, 1, -1}, {w, 0.2f, -1}, {-w, 0.2f, -1}}}, {0, 0, -1});
+  // The light along the box's lower edges that show.
+  if (const auto lamp = Solid(t, Mix(p.signal, Color(1, 1, 1), 0.35f)); lamp && lit > 0.01f) {
+    const std::array<std::array<Vec, 3>, 4> lower = {{{{{-1, -1, -1}, {1, -1, -1}, {0, 0, -1}}},
+                                                       {{{-1, -1, 1}, {1, -1, 1}, {0, 0, 1}}},
+                                                       {{{-1, -1, -1}, {-1, -1, 1}, {-1, 0, 0}}},
+                                                       {{{1, -1, -1}, {1, -1, 1}, {1, 0, 0}}}}};
+    for (const auto& edge : lower) {
+      if (Rotate(edge[2], p.yaw, p.pitch).z > 0.001f) {
+        lamp->SetOpacity(0.25f * lit);
+        t->DrawLine(inBox(edge[0]), inBox(edge[1]), lamp.get(), 4);
+        lamp->SetOpacity(0.9f * lit);
+        t->DrawLine(inBox(edge[0]), inBox(edge[1]), lamp.get(), 1.3f);
+      }
     }
   }
 
-  // The near faces: dark glass the core shows through - lit from above, the
-  // core's colour on them, a gloss down from each one's top corner.
+  // The near glass: clear, a faint tint and a gloss down from each face's top corner.
   const std::vector<CubeFace> faces = CubeFaces(p, center, half);
   for (const CubeFace& face : faces) {
     const auto path = Polygon(t, face.corners);
     if (!path) {
       continue;
     }
+    if (const auto tint = Solid(t, Color(0.60f, 0.82f, 0.90f, 0.03f + 0.05f * face.shade))) {
+      t->FillGeometry(path.get(), tint.get());
+    }
     const auto [topIt, bottomIt] = std::minmax_element(
         face.corners.begin(), face.corners.end(), [](const auto& a, const auto& b) { return a.y < b.y; });
-    D2D1_COLOR_F glass = Scale(p.body, 0.55f + 0.75f * face.shade);
-    glass = Mix(glass, WithAlpha(p.signal, glass.a), 0.16f * p.glow);
-    if (const auto fill = Linear(t, *topIt, *bottomIt, Scale(glass, 1.15f), Scale(glass, 0.85f))) {
-      t->FillGeometry(path.get(), fill.get());
-    }
     const D2D1_POINT_2F mid{(topIt->x + bottomIt->x) / 2, (topIt->y + bottomIt->y) / 2};
     if (const auto gloss =
-            Linear(t, *topIt, mid, Color(1, 1, 1, face.top ? 0.14f : 0.08f), Color(1, 1, 1, 0))) {
+            Linear(t, *topIt, mid, Color(1, 1, 1, face.top ? 0.10f : 0.06f), Color(1, 1, 1, 0))) {
       t->FillGeometry(path.get(), gloss.get());
     }
   }
-  // The core's light through the glass.
-  Spot(t, middle, r * 1.8f, r * 1.8f, WithAlpha(Mix(p.signal, Color(1, 1, 1), 0.3f), 0.38f * lit));
-  Spot(t, middle, r * 0.55f, r * 0.55f, Color(1, 1, 1, 0.55f * lit * lit));  // its white-hot heart
 
-  // The near edges catch the light: the outline bright, the ones inside it softer.
+  // The near edges are thick glass catching the light: a soft wide stroke
+  // under a bright thin one; the outline brightest, the ones inside softer.
   if (ink) {
     for (const Edge& e : edges) {
       if (e.toward > 0) {
-        ink->SetOpacity(e.toward == 1 ? 0.95f : 0.55f);
+        const float strength = e.toward == 1 ? 1.0f : 0.6f;
+        ink->SetOpacity(0.22f * strength);
+        t->DrawLine(e.a, e.b, ink.get(), 3.2f);
+        ink->SetOpacity(0.95f * strength);
         t->DrawLine(e.a, e.b, ink.get(), e.toward == 1 ? 1.3f : 1.0f);
       }
     }

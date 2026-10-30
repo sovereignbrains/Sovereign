@@ -7,10 +7,11 @@
 
 #include "tray_model.h"
 
-// The connect button as a cube of dark see-through glass with a core of
-// light inside (main screen; the plan of 04.10, the glass and core of
-// 15.10): its pose says the state - a grey ember while off, turning while it
-// connects, lifted and lit from inside while on, knocked askew on an error.
+// The connect button as a cube of thick clear glass with a graphite box
+// afloat in it, taped with silver (main screen; the plan of 04.10, the box
+// of 30.10): its pose says the state - the box's underside and the glass
+// floor grey while off, turning while it connects, lifted and lit from under
+// in the accent while on, knocked askew and red on an error.
 // A change of state is a quarter turn into the new pose; nothing moves
 // otherwise (no timer, no CPU), and with Windows' animations off it takes
 // the pose at once.
@@ -58,8 +59,8 @@ struct CubeFace {
 // (lift moves it up), that face the viewer.
 std::vector<CubeFace> CubeFaces(const CubePose& pose, D2D1_POINT_2F center, float half);
 
-// The cube in `box` (square), with its shadow and the core's light. Hovered,
-// the core brightens; pressed, it dims for the moment.
+// The cube in `box` (square), with its shadow and the state's light. Hovered,
+// the light brightens; pressed, it dims for the moment.
 void DrawCube(ID2D1RenderTarget* target, const CubePose& pose, D2D1_RECT_F box, bool hovered, bool pressed);
 
 }  // namespace sovereign::tray
