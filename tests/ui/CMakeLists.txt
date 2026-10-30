@@ -16,3 +16,6 @@ add_test(NAME ui-ask COMMAND ui-snapshot --ask-test)
 # Every page's layout as text: no clickable items overlapping, nothing past
 # the window's edge, at the default width and the narrowest.
 add_test(NAME ui-layout COMMAND ui-snapshot --layout-test "${CMAKE_CURRENT_BINARY_DIR}/layout")
+# A tip over a title bar key, shown on the overview whose live traffic redraws
+# without pause (a desktop, as above).
+add_test(NAME ui-tip COMMAND ui-snapshot --tip-test)

@@ -170,6 +170,22 @@ constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
 constexpr const wchar_t* kGlyphCalendar = L"\xE787";
 constexpr const wchar_t* kGlyphReport = L"\xEBE8";  // Bug: "something's wrong", plainer than the feedback bubble
 
+// The three ways to add a configuration, each a key of its own with its tip
+// where there was one "+" with a list dropping from it (his, 30.10.2026:
+// 'вместо кнопки добавить и плюсика эти 3 расположить и подсказку на каждую').
+struct AddWay {
+  const wchar_t* name;
+  const wchar_t* glyph;
+  UiCommand command;
+  const wchar_t* tip;
+};
+const std::array<AddWay, 3> kAddWays = {{
+    {L"Вставить из буфера", kGlyphPaste, UiCommand::PasteSubscription,
+     L"Вставить из буфера: ссылка подписки, ключ или конфиг"},
+    {L"QR-код с экрана", kGlyphQrCode, UiCommand::ScanScreen, L"QR-код с экрана: найти его и добавить подписку"},
+    {L"Из файла…", kGlyphFile, UiCommand::ImportFile, L"Из файла: конфиг, ключи или картинка с QR-кодом"},
+}};
+
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
   Divider,       // a line across a card
@@ -672,29 +688,6 @@ UiPage BackOf(UiPage page) {
     case UiPage::Checks: return UiPage::Settings;  // its row is there
     default: return UiPage::Overview;  // the routing and the log too: the title bar's keys open them
   }
-}
-
-// The routing's line in the settings.
-std::wstring RoutingLine(const UiContent& c) {
-  std::vector<std::wstring> parts;
-  switch (c.routing.russia) {
-    case kBucketDirect: parts.emplace_back(L"РФ напрямую"); break;
-    case kBucketProxy: parts.emplace_back(L"РФ через VPN"); break;
-    case kBucketBlock: parts.emplace_back(L"РФ в блоке"); break;
-    case kBucketWarp: parts.emplace_back(L"РФ через WARP"); break;
-    default: break;
-  }
-  if (!c.routing.rules.empty()) {
-    parts.push_back(std::format(L"правил: {}", c.routing.rules.size()));
-  }
-  if (!c.apps.empty()) {
-    parts.push_back(std::format(L"{} {} прог.", c.appsInclude ? L"только" : L"кроме", c.apps.size()));
-  }
-  std::wstring line;
-  for (const std::wstring& part : parts) {
-    line += (line.empty() ? L"" : L" · ") + part;
-  }
-  return line.empty() ? std::wstring(L"всё через VPN") : line;
 }
 
 std::wstring UpdateStatus(const UiContent& c) {
@@ -1818,11 +1811,14 @@ class Painter {
       page_key(L"Маршруты", kGlyphRoute, UiPage::Routing, L"Маршруты: что идёт через VPN, а что напрямую");
     }
     if (page == UiPage::Subscription) {
-      Item add = chrome(CommandItem(Kind::IconButton, {right - kKey, 0, right, kCaption},
-                                    L"Добавить: из буфера, QR-код, файл", kGlyphAdd, UiCommand::AddMenu));
-      add.tip = L"Добавить: ссылка из буфера, QR-код с экрана, файл";
-      keys.push_back(std::move(add));
-      right -= kKey;
+      // `keys` is read backwards, so the last way goes first: they stand paste, QR, file.
+      for (auto way = kAddWays.rbegin(); way != kAddWays.rend(); ++way) {
+        Item add = chrome(CommandItem(Kind::IconButton, {right - kKey, 0, right, kCaption}, way->name, way->glyph,
+                                      way->command));
+        add.tip = way->tip;
+        keys.push_back(std::move(add));
+        right -= kKey;
+      }
     }
     // By the name: the app's own icon, its name, and the report beside them
     // (his: "сообщить о проблеме около иконки приложения").
@@ -2007,15 +2003,21 @@ class Painter {
     card.tip = L"Конфигурации: обновить, выключить отдельные серверы";
     l.items.push_back(std::move(card));
 
-    // The head: how many, and "+ Добавить" - another configuration (the
-    // clipboard, a QR code, a file), a list drops from it (he wanted it back
-    // here 16.10.2026, and said a bare "+" had nowhere to sit, 30.10.2026).
-    const std::wstring addText = L"Добавить";
-    const float addWidth = TextWidth(addText, body_.get()) + 26 + 28;
-    Item add = CommandItem(Kind::Button, {right - addWidth, y + 5, right, y + kHeader - 5}, addText, kGlyphAdd,
-                           UiCommand::AddMenu);
-    add.tip = L"Добавить: ссылка из буфера, QR-код с экрана, файл";
-    l.items.push_back(std::move(add));
+    // The head: how many, and the three ways to add another configuration
+    // (the clipboard, a QR code, a file) as keys, each with its tip (he
+    // wanted adding here 16.10.2026; the "+ Добавить" and its list gone,
+    // 30.10.2026).
+    constexpr float kAddKey = 32;
+    constexpr float kAddStep = kAddKey + 2;
+    const float addWidth = kAddStep * static_cast<float>(kAddWays.size()) - 2;
+    float addLeft = right - addWidth;
+    for (const AddWay& way : kAddWays) {
+      Item add = CommandItem(Kind::IconButton, {addLeft, y + 4, addLeft + kAddKey, y + kHeader - 4}, way.name, way.glyph,
+                             way.command);
+      add.tip = way.tip;
+      l.items.push_back(std::move(add));
+      addLeft += kAddStep;
+    }
     Item label = Make(Kind::Muted, {left, y + 9, right - addWidth - 8, y + kHeader - 9},
                       std::format(L"КОНФИГУРАЦИИ · {}", shown.size()));
     label.engraved = true;
@@ -3019,16 +3021,11 @@ class Painter {
 
     {
       const std::size_t card = open(y);
-      Item routing = Make(Kind::ValueRow, row(y), L"Маршруты");
-      routing.detail = RoutingLine(c);
-      routing.action = ItemAction::Page;
-      routing.index = static_cast<int>(UiPage::Routing);
-      l.items.push_back(std::move(routing));
-      line(y + kRow);
-      Item checks = CommandItem(Kind::ValueRow, row(y + kRow), L"Проверка подключения", nullptr, UiCommand::OpenChecks);
+      // The routing is not here: the title bar's key opens it (30.10.2026, his: "на главной пусть будут").
+      Item checks = CommandItem(Kind::ValueRow, row(y), L"Проверка подключения", nullptr, UiCommand::OpenChecks);
       checks.detail = L"утечки, скорость";
       l.items.push_back(std::move(checks));
-      y = close(card, y + 2 * kRow);
+      y = close(card, y + kRow);
     }
 
     y = Heading(l, L"Подключение", x0, x1, y);
@@ -3987,11 +3984,17 @@ class Painter {
   }
   // A title bar key's pill: inset from the bar's top and the window's edge,
   // not the whole cell up to them.
-  // A key's pill; a new version's with its number on it, as wide as its cell.
+  // A key's pill; a new version's is thinner (30.10.2026, his: the button was
+  // big, its top edge flush with the window's), with its number on it as wide
+  // as its cell.
   static D2D1_RECT_F KeyPill(const Item& it) {
-    if (it.checked && !it.detail.empty()) {
+    if (it.checked) {
       const float cy = (it.rect.top + it.rect.bottom) / 2;
-      return {it.rect.left + 2, cy - 14, it.rect.right - 2, cy + 14};
+      if (it.detail.empty()) {
+        const float cx = (it.rect.left + it.rect.right) / 2;
+        return {cx - 16, cy - 10, cx + 16, cy + 10};
+      }
+      return {it.rect.left + 2, cy - 10, it.rect.right - 2, cy + 10};
     }
     return ChromePill(it.rect);
   }
@@ -4210,6 +4213,12 @@ struct MainWindow::Impl {
   std::function<void()> onOther;
   std::function<void(const UiCalendar&)> onDate;  // a calendar's yes (AskDate)
   std::chrono::steady_clock::time_point questionAt{};
+  // When the pointer's wait for a tip is over. The timer alone isn't enough:
+  // while the live traffic keeps a WM_PAINT waiting, WM_TIMER is never
+  // handed out (a paint outranks it) and no tip showed on the main screen
+  // (30.10.2026, he: 'при наводке на таракана подсказку бы'). The paint
+  // looks at the clock too.
+  std::optional<std::chrono::steady_clock::time_point> tipDue;
   std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
   ULONGLONG panSince = 0;        // the middle button went down (log.pan)
   bool panMoved = false;         // the pointer left the still zone since
@@ -4485,9 +4494,11 @@ struct MainWindow::Impl {
     const bool tipShown = in.tip >= 0 && !IsKind(in.tip, Kind::Hint);
     in.hover = h;
     KillTimer(hwnd, kTipTimer);
+    tipDue.reset();
     in.tip = IsKind(h, Kind::Hint) || (tipShown && HasTip(h)) ? h : -1;
     if (in.tip < 0 && HasTip(h)) {
       SetTimer(hwnd, kTipTimer, kTipDelayMs, nullptr);
+      tipDue = std::chrono::steady_clock::now() + std::chrono::milliseconds(kTipDelayMs);
     }
     InvalidateRect(hwnd, nullptr, FALSE);
   }
@@ -5297,6 +5308,13 @@ struct MainWindow::Impl {
   LRESULT Handle(HWND w, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
       case WM_PAINT: {
+        if (tipDue && std::chrono::steady_clock::now() >= *tipDue) {
+          tipDue.reset();
+          KillTimer(w, kTipTimer);
+          if (HasTip(in.hover)) {
+            in.tip = in.hover;
+          }
+        }
         const bool going = liveAt && StepLiveTraffic();
         const bool easing = StepSpeed();
         const bool coming = StepQuestion();
@@ -5429,6 +5447,7 @@ struct MainWindow::Impl {
         }
         if (wParam == kTipTimer) {
           KillTimer(w, kTipTimer);
+          tipDue.reset();
           if (HasTip(in.hover)) {
             in.tip = in.hover;
             InvalidateRect(w, nullptr, FALSE);
@@ -5448,6 +5467,7 @@ struct MainWindow::Impl {
         // A press puts a tip away (a "?"'s stays: it's what it's for), and it
         // stays away until the pointer comes to something else.
         KillTimer(w, kTipTimer);
+        tipDue.reset();
         if (!IsKind(in.tip, Kind::Hint)) {
           in.tip = -1;
         }

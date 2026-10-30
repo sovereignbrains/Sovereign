@@ -408,7 +408,7 @@ int Snapshots(const std::wstring& dir) {
   const std::array<std::pair<const wchar_t*, const wchar_t*>, 5> tips = {{
       {L"Доступна версия", L"tip-update"},
       {L"Сообщить о проблеме", L"tip-report"},
-      {L"Добавить: ссылка", L"tip-add"},
+      {L"Вставить из буфера:", L"tip-add"},
       {L"Отключить VPN", L"tip-switch"},
       {L"Выбрать сервер", L"tip-server"},
   }};
@@ -577,11 +577,11 @@ int EditTest(HINSTANCE instance) {
   // Tab goes through the window's own caption first (0.4.97 on) - then the
   // page's back arrow. Before, the count left them out: Enter landed on "+"
   // and its menu waited for a click (CI failed from dc9e160 on, a desktop run
-  // hung). The configurations' list has "+", "hide" and the cross there, a
+  // hung). The configurations' list has the three ways to add (paste, QR, file), "hide" and the cross there, a
   // configuration's page "hide" and the cross (MainWindow's Caption); both
   // "report a problem" and the new version's key before them (0.5.52 on), the
   // sample having one found.
-  constexpr int kListCaption = 5;
+  constexpr int kListCaption = 7;
   constexpr int kProfileCaption = 4;
   const auto tabs = [&](int n) {
     for (int i = 0; i < n; ++i) {
@@ -634,6 +634,55 @@ int EditTest(HINSTANCE instance) {
     check(commands == 2 && got.text == L"kept", "leaving the box didn't keep the name");
   }
   window.Hide();
+  return failures == 0 ? 0 : 1;
+}
+
+// --tip-test: the pointer rests on the title bar's report key; after the wait
+// its tip (a dark box under the key) is in the window's frame.
+int TipTest(HINSTANCE instance) {
+  if (!OnDesktop("tip")) {
+    return 0;
+  }
+  sovereign::tray::MainWindow window(instance, [](sovereign::tray::UiCommand, const sovereign::tray::UiArgs&) {});
+  const UiContent content = SampleContent();
+  window.Update(content);
+  window.Show(UiPage::Overview);
+  const HWND hwnd = OwnWindow();
+  if (hwnd == nullptr) {
+    return 1;
+  }
+  Pump();
+  RECT client{};
+  GetClientRect(hwnd, &client);
+  const float scale = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+  const std::wstring text = sovereign::tray::DescribeMainWindowLayout(
+      content, UiPage::Overview, static_cast<float>(client.right) / scale, static_cast<float>(client.bottom) / scale);
+  const std::size_t found = text.find(L"Сообщить о проблеме");
+  const std::size_t open = text.rfind(L'[', found);
+  std::array<float, 4> r{};
+  if (found == std::wstring::npos || swscanf_s(text.c_str() + open + 1, L"%f %f %f %f", &r[0], &r[1], &r[2], &r[3]) != 4) {
+    std::fputs("tip: no report key in the layout\n", stderr);
+    return 1;
+  }
+  const POINT centre{std::lround((r[0] + r[2]) / 2 * scale), std::lround((r[1] + r[3]) / 2 * scale)};
+  // The cursor really there: else Windows says the mouse left (TrackMouseEvent) at once.
+  POINT onScreen = centre;
+  ClientToScreen(hwnd, &onScreen);
+  SetCursorPos(onScreen.x, onScreen.y);
+  SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(centre.x, centre.y));
+  for (int i = 0; i < 4; ++i) {  // the wait is half a second; a second and the pointer is said to have left
+    Pump();
+  }
+  int failures = 0;
+  for (const int dy : {10, 16, 22}) {
+    const POINT p{centre.x, std::lround(r[3] * scale) + std::lround(static_cast<float>(dy) * scale)};
+    const std::optional<COLORREF> c = ShownPixel(hwnd, p);
+    std::printf("tip: %d under the key: %d %d %d\n", dy, c ? GetRValue(*c) : -1, c ? GetGValue(*c) : -1,
+                c ? GetBValue(*c) : -1);
+    if (!c || GetRValue(*c) != 44 || GetBValue(*c) != 49) {
+      ++failures;
+    }
+  }
   return failures == 0 ? 0 : 1;
 }
 
@@ -918,6 +967,7 @@ int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - se
     result = arg == L"--window"      ? Window(GetModuleHandleW(nullptr))
              : arg == L"--edit-test" ? EditTest(GetModuleHandleW(nullptr))
              : arg == L"--ask-test"  ? AskTest(GetModuleHandleW(nullptr))
+             : arg == L"--tip-test"  ? TipTest(GetModuleHandleW(nullptr))
              : arg == L"--layout-test" ? LayoutTest(argc > 2 ? argv[2] : L"ui-layout")
                                      : Snapshots(arg);
   } catch (const wil::ResultException& e) {
