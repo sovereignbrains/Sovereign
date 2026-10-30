@@ -78,7 +78,7 @@ constexpr float kSettingsGap = 8;   // between the settings' cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
-constexpr float kTag = 30;         // a thing on the routing board
+constexpr float kTag = 28;         // a thing on the routing board
 constexpr ULONGLONG kToggleGraceMs = 400;  // a tray click right after the window lost focus hides it
 
 // The log page: a line's height, and how many lines it keeps (the tray keeps
@@ -266,7 +266,22 @@ struct Item {
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
   bool chrome = false;  // an IconButton of the title bar (DrawChrome): its pill inset from the bar's edges
   bool engraved = false;  // a Muted label set as engraved capitals (engraved_)
+  int rail = -1;        // a Card or Pill of the routing board: the way it's of (a bucket, BucketColor); -1: none
+  bool quiet = false;   // a Card with a rail: only the rail, no panel - an empty way, a line to find
 };
+
+// A way's colour on the routing board: a rail down its card's left edge and
+// a dot on its labels, the one place colour tells the ways apart. Dull on
+// purpose (30.10.2026, his: "менее цвета неоновые"): the board is read, not
+// glowed at. By bucket: 0 directly, 1 through the VPN, 2 blocked, 3 WARP.
+constexpr COLORREF BucketColor(int bucket) {
+  switch (bucket) {
+    case kBucketDirect: return RGB(163, 166, 173);
+    case kBucketBlock: return RGB(201, 116, 116);
+    case kBucketWarp: return RGB(201, 152, 92);
+    default: return RGB(110, 155, 214);
+  }
+}
 
 // What an item's tip says: a "?"'s text, its own tip, an icon button's name;
 // empty: it has none.
@@ -1677,22 +1692,25 @@ class Painter {
     const int restBucket = r.finalDirect ? kBucketDirect : kBucketProxy;
     const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
     const std::wstring rest = idle > 0 ? std::format(L"и всё остальное · скрыто {}", idle) : std::wstring(L"и всё остальное");
-    const std::wstring restHint =
-        idle > 0 ? std::wstring(L"Скрытое и так идёт сюда вместе со всем остальным, поэтому ничего не меняет. Оно "
-                                L"не удалено: переключи режим наверху — и вернётся на экран.")
-                 : std::wstring();
+    const std::wstring restHint = RestHint(idle);
     const std::array<Bucket, 4> buckets = {{
         {kBucketProxy, L"Через VPN", restBucket == kBucketProxy ? rest : std::wstring(),
          restBucket == kBucketProxy ? restHint : std::wstring()},
         {kBucketDirect, L"Напрямую", restBucket == kBucketDirect ? rest : std::wstring(),
          restBucket == kBucketDirect ? restHint : std::wstring()},
         {kBucketWarp, L"Через WARP", r.warpState, warpHint},
-        {kBucketBlock, L"Блок", std::wstring(), std::wstring()},
+        {kBucketBlock, L"Блок", std::wstring(),
+         L"Что сюда попадёт, не откроется: ни сайт, ни программа. Пока там пусто — блокировать нечего. "
+         L"Рекламу и баннеры cookie убирают настройки."},
     }};
-    constexpr float kHead = 42;
-    constexpr float kChipGap = 6;
-    const float left = x0 + 12;
-    const float right = x1 - 12;
+    // A way's card: a rail of its colour down the left edge, its head - name,
+    // "?", how many things, "+" - and its things wrapped under it. Compact
+    // since 30.10.2026 (his: "компактнее карточки"): a head of 34, things of 28.
+    constexpr float kHead = 34;
+    constexpr float kChipGap = 5;
+    constexpr float kAddKey = 28;
+    const float left = x0 + 17;  // past the rail
+    const float right = x1 - 10;
     for (const Bucket& b : buckets) {
       // Its things in rows from the card's left, wrapped at its right.
       std::vector<std::pair<std::size_t, D2D1_RECT_F>> placed;
@@ -1718,38 +1736,51 @@ class Painter {
       if (b.id == restBucket && placed.empty()) {
         continue;  // where everything else goes, and nothing else: not an exception, not shown
       }
-      if (b.id == kBucketBlock && placed.empty()) {
-        // Nothing blocked by hand: a muted line and its "+", no card - it's
-        // there to be found, not to be looked at.
-        constexpr float kQuiet = 32;
-        const float nameWidth = TextWidth(b.name, caption_.get());
-        l.items.push_back(Make(Kind::Muted, {left + 2, y, left + 2 + nameWidth + 4, y + kQuiet}, b.name));
-        HintAfter(l, b.name, caption_.get(), left + 2, right - 40, y + kQuiet / 2,
-                  L"Что сюда попадёт, не откроется: ни сайт, ни программа. Пока там пусто — блокировать нечего. "
-                  L"Рекламу и баннеры cookie убирают настройки.");
-        Item add = CommandItem(Kind::IconButton, {right - 32, y, right, y + kQuiet}, L"Добавить", kGlyphAdd,
+      const auto addKey = [&](float top, float height) {
+        Item add = CommandItem(Kind::IconButton, {right - kAddKey, top, right, top + height}, L"Добавить", kGlyphAdd,
                                UiCommand::BoardAdd, b.id);
         add.tip = std::format(L"Добавить в «{}»: сервис, программу или сайт", b.name);
-        l.items.push_back(std::move(add));
-        y += kQuiet + 8;
+        return add;
+      };
+      if (placed.empty()) {
+        // Nothing sent this way: a muted line of its own, its rail faint and
+        // no card - it's there to be found, not to be looked at (the block's
+        // way since 30.10.2026, his: "оставил тут просто чтоб он не
+        // мешался"; every empty way's since).
+        constexpr float kQuiet = 30;
+        Item rail = Make(Kind::Card, {x0, y, x1, y + kQuiet});
+        rail.rail = b.id;
+        rail.quiet = true;
+        l.items.push_back(std::move(rail));
+        const float nameWidth = TextWidth(b.name, caption_.get());
+        l.items.push_back(Make(Kind::Muted, {left + 2, y, left + 2 + nameWidth + 4, y + kQuiet}, b.name));
+        if (!b.hint.empty()) {
+          HintAfter(l, b.name, caption_.get(), left + 2, right - kAddKey - 8, y + kQuiet / 2, b.hint);
+        }
+        l.items.push_back(addKey(y + 1, kQuiet - 2));
+        y += kQuiet + 6;
         continue;
       }
-      const float h = placed.empty() ? kHead + 2 : kHead + cy + kTag + 12;  // empty: its head alone
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
+      const float h = kHead + cy + kTag + 9;
+      Item card = Make(Kind::Card, {x0, y, x1, y + h});
+      card.rail = b.id;
+      l.items.push_back(std::move(card));
       const float nameWidth = TextWidth(b.name, heading_.get());
-      l.items.push_back(Make(Kind::Heading, {left + 2, y + 6, left + 2 + nameWidth + 4, y + kHead - 4}, b.name));
+      l.items.push_back(Make(Kind::Heading, {left + 2, y + 3, left + 2 + nameWidth + 4, y + kHead - 3}, b.name));
       float noteLeft = left + nameWidth + 16;
       if (!b.hint.empty()) {
-        HintAfter(l, b.name, heading_.get(), left + 2, right - 40, y + kHead / 2 + 1, b.hint);
+        HintAfter(l, b.name, heading_.get(), left + 2, right - kAddKey - 8, y + kHead / 2 + 1, b.hint);
         noteLeft += kHint + 6;
       }
+      // How many are on it, engraved in a pill by the "+".
+      const std::wstring count = std::format(L"{:02}", placed.size());
+      const float countWidth = TextWidth(count, caption_.get()) + 2 * kPillPad;
+      const float countRight = right - kAddKey - 6;
+      l.items.push_back(Make(Kind::Pill, {countRight - countWidth, y + kHead / 2 - 10, countRight, y + kHead / 2 + 10}, count));
       if (!b.note.empty()) {
-        l.items.push_back(Make(Kind::Muted, {noteLeft, y + 6, right - 40, y + kHead - 4}, b.note));
+        l.items.push_back(Make(Kind::Muted, {noteLeft, y + 3, countRight - countWidth - 8, y + kHead - 3}, b.note));
       }
-      Item add = CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd,
-                             UiCommand::BoardAdd, b.id);
-      add.tip = std::format(L"Добавить в «{}»: сервис, программу или сайт", b.name);
-      l.items.push_back(std::move(add));
+      l.items.push_back(addKey(y + 3, kAddKey));
       for (const auto& [n, at] : placed) {
         const UiChip& chip = r.board[n];
         const D2D1_RECT_F place = {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom};
@@ -1760,11 +1791,18 @@ class Painter {
         tag.logo = chip.logo;
         l.items.push_back(std::move(tag));
       }
-      y += h + 8;
+      y += h + 6;
     }
     return y;
   }
 
+  // What the hidden things on the way everything else goes to say of
+  // themselves (UiChip::idle); empty with none.
+  static std::wstring RestHint(std::ptrdiff_t idle) {
+    return idle > 0 ? std::wstring(L"Скрытое и так идёт сюда вместе со всем остальным, поэтому ничего не меняет. Оно "
+                                   L"не удалено: переключи режим наверху — и вернётся на экран.")
+                    : std::wstring();
+  }
   float Paragraph(Layout& l, Kind kind, const std::wstring& text, float x0, float x1, float y) const {
     const float indent = kind == Kind::ErrorText ? 28.0f : 0.0f;
     const float h =
@@ -2621,23 +2659,50 @@ class Painter {
       // of what doesn't, uncaptioned, was a lie; "всё, кроме исключений" on
       // the segment said both at once and outweighed the board).
       l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 20}, L"Через VPN идёт"));
-      y += 20 + 6;
+      y += 20 + 4;
+      // One card holds the mode and what it comes to: "всё остальное → VPN"
+      // (or "напрямую"), the way everything the board doesn't name goes. The
+      // board under it is what goes otherwise ("Идёт иначе": WARP is no
+      // exception to anything, 30.10.2026, his: "варп вряд ли исключением
+      // можно назвать"), so the mode's own way isn't a card among them.
+      constexpr float kModePad = 9;
+      constexpr float kSegment = 32;
+      constexpr float kRestLine = 22;
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kModePad + kSegment + 8 + kRestLine + kModePad}));
       const float mid = (x0 + x1) / 2;
-      Item all = CommandItem(Kind::Segment, {x0, y, mid - 4, y + 36}, L"всё", nullptr,
+      const float inLeft = x0 + kModePad;
+      const float inRight = x1 - kModePad;
+      Item all = CommandItem(Kind::Segment, {inLeft, y + kModePad, mid - 3, y + kModePad + kSegment}, L"всё", nullptr,
                              UiCommand::SetRouteMode, 0);
       all.checked = !r.finalDirect;
-      Item chosen =
-          CommandItem(Kind::Segment, {mid + 4, y, x1, y + 36}, L"только выбранное", nullptr, UiCommand::SetRouteMode, 1);
+      Item chosen = CommandItem(Kind::Segment, {mid + 3, y + kModePad, inRight, y + kModePad + kSegment},
+                                L"только выбранное", nullptr, UiCommand::SetRouteMode, 1);
       chosen.checked = r.finalDirect;
       l.items.push_back(std::move(all));
       l.items.push_back(std::move(chosen));
-      y += 36 + kGap;
-      if (!r.finalDirect) {  // everything through the VPN: the board is what isn't
-        l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 20}, L"Исключения"));
-        y += 20 + 6;
+      const float lineTop = y + kModePad + kSegment + 8;
+      const std::wstring lead = L"всё остальное →";
+      const float leadWidth = TextWidth(lead, caption_.get());
+      l.items.push_back(Make(Kind::Muted, {inLeft + 3, lineTop, inLeft + 3 + leadWidth + 4, lineTop + kRestLine}, lead));
+      const std::wstring way = r.finalDirect ? L"Напрямую" : L"VPN";
+      Item restWay = Make(Kind::Pill, {inLeft + 3 + leadWidth + 8, lineTop,
+                                       inLeft + 3 + leadWidth + 8 + TextWidth(way, caption_.get()) + kPillPad + 22,
+                                       lineTop + kRestLine},
+                          way);
+      restWay.rail = r.finalDirect ? kBucketDirect : kBucketProxy;
+      l.items.push_back(std::move(restWay));
+      const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
+      if (idle > 0) {  // what the other mode keeps, not shown here
+        const std::wstring hidden = std::format(L"скрыто {}", idle);
+        const float hiddenWidth = TextWidth(hidden, caption_.get());
+        Item note = Make(Kind::Muted, {inRight - hiddenWidth - 2, lineTop, inRight, lineTop + kRestLine}, hidden);
+        note.tip = RestHint(idle);
+        l.items.push_back(std::move(note));
       }
-    }
-    // Where everything goes: the board. (The fine settings - QUIC, IPv4, DNS -
+      y += kModePad + kSegment + 8 + kRestLine + kModePad + kGap;
+      l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 18}, L"Идёт иначе"));
+      y += 18 + 4;
+    }    // Where everything goes: the board. (The fine settings - QUIC, IPv4, DNS -
     // are the settings' since 17.10.2026: nothing of where a site goes.)
     y = Board(l, r, x0, x1, y);
     if (!r.lists.empty()) {  // only while the lists are downloading, or failed
@@ -3260,11 +3325,20 @@ class Painter {
     switch (it.kind) {
       case Kind::Card:
         // Glass: a breath of white over what's behind, a brighter edge; else the card's own colour.
-        k.Round(r, kRadius, it.glass ? Rgb(255, 255, 255, 0.035f) : FromColorRef(ui::kCardColor));
-        if (hoverAlpha > 0 && it.action != ItemAction::None) {  // a card that is a link
-          k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha * 0.5f));
+        if (!it.quiet) {
+          k.Round(r, kRadius, it.glass ? Rgb(255, 255, 255, 0.035f) : FromColorRef(ui::kCardColor));
+          if (hoverAlpha > 0 && it.action != ItemAction::None) {  // a card that is a link
+            k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha * 0.5f));
+          }
+          k.Outline(r, kRadius, Rgb(255, 255, 255, it.glass ? 0.10f : 0.06f));
         }
-        k.Outline(r, kRadius, Rgb(255, 255, 255, it.glass ? 0.10f : 0.06f));
+        if (it.rail >= 0) {  // a way's card: a faint tint and the rail down its edge
+          const COLORREF tone = BucketColor(it.rail);
+          if (!it.quiet) {
+            k.Round(r, kRadius, FromColorRef(tone, 0.035f));
+          }
+          k.Round({r.left, r.top + 8, r.left + 3, r.bottom - 8}, 1.5f, FromColorRef(tone, it.quiet ? 0.35f : 0.85f));
+        }
         break;
       case Kind::Divider:  // a groove cut in the panel: dark, and the lit lip under it
         k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(0, 0, 0, 0.35f));
@@ -3505,6 +3579,15 @@ class Painter {
         break;
       case Kind::Pill: {
         // A window cut into the panel: dark, a hairline, a shadow along its top edge.
+        if (it.rail >= 0) {  // a way's label: tinted in its colour, a dot before the name
+          const COLORREF tone = BucketColor(it.rail);
+          const float cy = (r.top + r.bottom) / 2;
+          k.Round(r, (r.bottom - r.top) / 2, FromColorRef(tone, 0.13f));
+          k.Outline(r, (r.bottom - r.top) / 2, FromColorRef(tone, 0.40f));
+          k.t->FillEllipse(D2D1::Ellipse({r.left + 11, cy}, 3, 3), k.Color(FromColorRef(tone)));
+          k.Text(it.text, caption_.get(), {r.left + 22, r.top, r.right, r.bottom}, primary);
+          break;
+        }
         const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kWarning) : secondary;
         k.Round(r, 5, Rgb(0, 0, 0, 0.30f));
         if (it.warn) {
