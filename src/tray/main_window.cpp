@@ -168,7 +168,6 @@ constexpr const wchar_t* kGlyphClock = L"\xE917";
 constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
 constexpr const wchar_t* kGlyphShield = L"\xEA18";
 constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
-constexpr const wchar_t* kGlyphCalendar = L"\xE787";
 constexpr const wchar_t* kGlyphReport = L"\xEBE8";  // Bug: "something's wrong", plainer than the feedback bubble
 
 // The three ways to add a configuration, each a key of its own with its tip
@@ -536,7 +535,8 @@ std::int64_t DaysFromCivil(int year, int month, int day) {
   const int y = year - (month <= 2 ? 1 : 0);
   const std::int64_t era = (y >= 0 ? y : y - 399) / 400;
   const auto yoe = static_cast<std::int64_t>(y - era * 400);
-  const std::int64_t doy = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
+  const std::int64_t shifted = month > 2 ? month - 3 : month + 9;
+  const std::int64_t doy = (153 * shifted + 2) / 5 + day - 1;
   const std::int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
   return era * 146097 + doe - 719468;
 }
@@ -556,7 +556,7 @@ void CivilFromDays(std::int64_t days, int& year, int& month, int& day) {
 int DaysInMonth(int year, int month) {
   constexpr std::array<int, 12> days = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
   const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-  return days[static_cast<std::size_t>(month - 1)] + (month == 2 && leap ? 1 : 0);
+  return days.at(static_cast<std::size_t>(std::clamp(month, 1, 12) - 1)) + (month == 2 && leap ? 1 : 0);
 }
 
 // 0 for Monday: 1970-01-01 was a Thursday.
@@ -1030,8 +1030,10 @@ class Painter {
   static D2D1_RECT_F CalendarDay(D2D1_RECT_F grid, int firstWeekday, int day) {
     const int slot = firstWeekday + day - 1;
     const float width = (grid.right - grid.left) / 7;
-    const float left = grid.left + width * static_cast<float>(slot % 7);
-    const float top = grid.top + kCalCell * static_cast<float>(slot / 7);
+    const int column = slot % 7;
+    const int row = slot / 7;
+    const float left = grid.left + width * static_cast<float>(column);
+    const float top = grid.top + kCalCell * static_cast<float>(row);
     return {left + 3, top + 1, left + width - 3, top + kCalCell - 1};
   }
   AskBoxes AskBox(const UiQuestion& q, float width, float height) const {
@@ -3614,7 +3616,7 @@ class Painter {
       // the weekdays over the grid, a hairline under them.
       const UiCalendar& cal = *q.calendar;
       const CalendarKeys keys = CalendarHead(b.calHead);
-      k.Text(kMonthNames[static_cast<std::size_t>(cal.month - 1)], center_.get(), keys.monthName,
+      k.Text(kMonthNames.at(static_cast<std::size_t>(std::clamp(cal.month, 1, 12) - 1)), center_.get(), keys.monthName,
              FromColorRef(ui::kPrimaryText));
       k.Text(std::to_wstring(cal.year), center_.get(), keys.yearName, FromColorRef(ui::kPrimaryText));
       const float width = (b.calGrid.right - b.calGrid.left) / 7;

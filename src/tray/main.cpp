@@ -5050,17 +5050,16 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       ask.other = profile.paidTill != 0 ? L"Не следить" : std::wstring();
       ask.glyph = L"\xE787";
       ask.calendar = calendar;
-      const std::string id = profile.id;
       g_mainWindow->AskDate(
           std::move(ask),
-          [id, offset](const sovereign::tray::UiCalendar& picked) {
+          [id = profile.id, offset](const sovereign::tray::UiCalendar& picked) {
             const std::string text = std::format("{}.{}.{}", picked.day, picked.month, picked.year);
             if (const auto till = sovereign::tray::PaidDate(text, std::time(nullptr), offset)) {
               RequestProfileChange({.id = id, .what = ProfileChange::What::PaidTill, .on = false,
                                     .text = std::to_string(*till), .hours = 0});
             }
           },
-          [id] {
+          [id = profile.id] {
             RequestProfileChange({.id = id, .what = ProfileChange::What::PaidTill, .on = false, .text = {}, .hours = 0});
           });
       break;

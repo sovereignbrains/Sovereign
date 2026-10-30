@@ -383,6 +383,7 @@ int Snapshots(const std::wstring& dir) {
                                               dir + L"\\question-relay.png");
     // A date on a calendar, in the window's least height and width.
     asked.question = UiQuestion{.title = L"Оплачено до",
+                                .text = {},
                                 .yes = L"Готово",
                                 .other = L"Не следить",
                                 .calendar = UiCalendar{.year = 2026, .month = 2, .day = 28,
@@ -846,7 +847,9 @@ int AskTest(HINSTANCE instance) {
 int LayoutTest(const std::wstring& dir) {
   UiContent content = SampleContent();
   content.checks = SampleChecks();
-  UiContent routed = content;
+  // The variants live on the heap: eight UiContents on the stack pass /analyze's 16 KB (C6262).
+  std::vector<UiContent> variants(7, content);
+  UiContent& routed = variants[0];
   // WARP on, with a site of its own: its card lists it, "Свои правила" doesn't.
   routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
                           {L"chatgpt.com, openai.com", L"через WARP", true}};
@@ -859,7 +862,7 @@ int LayoutTest(const std::wstring& dir) {
   routed.routing.remoteDns = L"авто · Cloudflare";
   routed.routing.localDns = L"свой · dns.adguard-dns.com";
   // A question open over the overview (MainWindow::Ask), its title long enough to wrap.
-  UiContent asked = content;
+  UiContent& asked = variants[1];
   asked.question = UiQuestion{.title = L"Как скачать подписку?",
                               .text = L"Подключения нет. Напрямую сервер подписки увидит твой настоящий IP-адрес. Через сервер "
                                       L"Sovereign (Cloudflare) он увидит адрес Cloudflare, но ссылку на подписку увидит тот, "
@@ -872,30 +875,32 @@ int LayoutTest(const std::wstring& dir) {
                               .glyph = L"\xE896"};
   // A date asked on a calendar (MainWindow::AskDate), a month of 31 days that
   // starts late in the week, the three buttons in one row.
-  UiContent dated = content;
+  UiContent& dated = variants[2];
   dated.question = UiQuestion{.title = L"Оплачено до",
+                              .text = {},
                               .yes = L"Готово",
                               .other = L"Не следить",
                               .calendar = UiCalendar{.year = 2026, .month = 12, .day = 15,
                                                      .todayYear = 2026, .todayMonth = 12, .todayDay = 3},
                               .glyph = L"\xE787"};
   // The relay fold open, Sovereign's own chosen.
-  UiContent relayOpen = content;
+  UiContent& relayOpen = variants[3];
   relayOpen.settingsMore = true;
   relayOpen.sharedRelay = true;
   // Updates installed unasked, the longest of the row's values, one waiting
   // for a quiet moment; and only by the button, the longest idle status.
-  UiContent installing = content;
+  UiContent& installing = variants[4];
   installing.updateMode = sovereign::tray::UpdateMode::Install;
   installing.update = sovereign::tray::UiUpdate::Waiting;
   installing.updateVersion = L"0.12.41";
-  UiContent idle = content;
+  UiContent& idle = variants[5];
   idle.updateMode = sovereign::tray::UpdateMode::Off;
   idle.update = sovereign::tray::UiUpdate::Idle;
   idle.boxIsLatest = true;
   // A new version in the bar with the longest number, and things wrong: the
   // main screen's one line, the log's red paragraphs.
-  UiContent troubled = installing;
+  UiContent& troubled = variants[6];
+  troubled = installing;
   troubled.update = sovereign::tray::UiUpdate::Available;
   troubled.display = sovereign::tray::Display::ServiceDown;
   troubled.killSwitch = true;
