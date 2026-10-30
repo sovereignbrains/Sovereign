@@ -1,0 +1,661 @@
+@charset "utf-8";
+/* Sovereign: компоненты макета «Закон судьбы» (docs/design/law.md).
+ *
+ * Цвета, радиусы, штрихи, времена и шаги отступов берутся только из
+ * tokens.css; ?selftest проверяет это по отрисованным стилям, а не по
+ * тексту файла. Геометрия отдельной вещи (ядро лампы, ручка переключателя,
+ * ширина меню) записана здесь: общей у неё не бывает. Нет градиентов, теней,
+ * фильтров и размытия.
+ *
+ * Порядок: основа, стенд, окно и карточка, строка, складка, переключатель,
+ * сегменты, пилюля и точка, пути и фишки, всплывающее, кнопки, паспорт.
+ */
+
+@font-face {
+  font-family: "Geist";
+  src: url("../../assets/fonts/Geist.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* ---- Основа ---------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  background: var(--surface-window);
+  color: var(--ink-1);
+  font: var(--w-regular) var(--t-body) / var(--lh-body) var(--font);
+  font-synthesis: none;
+  -webkit-text-size-adjust: 100%;
+}
+body { margin: 0; min-width: var(--w-min); }
+h1, h2, h3, h4, p, ul, ol, figure, table { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+button, input { font: inherit; color: inherit; letter-spacing: inherit; }
+button { margin: 0; padding: 0; background: none; border: 0; text-align: inherit; cursor: pointer; }
+button:disabled { cursor: default; }
+img, svg { display: block; }
+[hidden] { display: none !important; }
+:focus { outline: none; }
+:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: var(--focus-gap); }
+::placeholder { color: var(--ink-2); opacity: 1; }
+
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.icon {
+  flex: none;
+  width: var(--icon);
+  height: var(--icon);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--stroke-icon);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.logo { flex: none; width: var(--icon); height: var(--icon); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ---- Стенд: одна колонка, две, две и паспорт ------------------------- */
+.stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-6) var(--s-4);
+  align-items: start;
+  max-width: calc(2 * var(--w-page-max) + 400px + 4 * var(--s-4));
+  margin: 0 auto;
+  padding: var(--s-6) var(--s-4) var(--s-8);
+}
+.stage-head { grid-column: 1 / -1; display: grid; gap: var(--s-1); }
+.stage-head h1 { font-size: var(--t-title); font-weight: var(--w-strong); line-height: var(--lh-tight); }
+.stage-head p { max-width: 76ch; color: var(--ink-2); font-size: var(--t-caption); }
+.screen {
+  display: grid;
+  gap: var(--s-2);
+  align-content: start;
+  width: 100%;
+  max-width: var(--w-page-max);
+  min-width: 0;
+  justify-self: center;
+}
+.engraved {
+  padding-inline: var(--s-1);
+  color: var(--ink-2);
+  font-size: var(--t-micro);
+  font-weight: var(--w-strong);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.passport { min-width: 0; }
+
+/* Две страницы рядом, когда каждой хватает 360 (меньше окно приложения не бывает):
+   2 x 360 + зазор 16 + поля 2 x 16 = 768. */
+@media (min-width: 768px) {
+  .stage { grid-template-columns: repeat(2, minmax(0, var(--w-page-max))); justify-content: center; }
+  .passport { grid-column: 1 / -1; }
+}
+@media (min-width: 1360px) {
+  .stage { grid-template-columns: repeat(2, minmax(0, var(--w-page-max))) minmax(320px, 400px); }
+  .passport {
+    grid-column: auto;
+    grid-row: 2 / span 1;
+    position: sticky;
+    top: var(--s-4);
+    max-height: calc(100vh - 2 * var(--s-4));
+    overflow: auto;
+  }
+}
+/* На экране уже 400 окно идёт от края до края. */
+@media (max-width: 400px) {
+  .stage { padding-inline: 0; }
+  .stage-head, .passport, .engraved { padding-inline: var(--s-4); }
+  .win, .win::after { border-radius: 0; }
+  .win::after { border-inline: 0; }
+}
+
+/* ---- Окно и карточка -------------------------------------------------- */
+.win {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-card);
+  min-width: 0;
+  padding: var(--pad);
+  background: var(--surface-panel);
+  border-radius: var(--r-card);
+}
+.win::after, .card::after, .passport-body::after, .menu::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: var(--stroke-hair) solid var(--hair);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.card { position: relative; isolation: isolate; background: var(--surface-card); border-radius: var(--r-card); }
+.board { display: flex; flex-direction: column; gap: var(--gap-card); }
+
+.page-title { display: flex; align-items: center; gap: var(--s-2); min-height: var(--s-8); }
+.page-title h3 { font-size: var(--t-title); font-weight: var(--w-strong); line-height: var(--lh-tight); }
+.group-title {
+  margin-top: var(--s-2);
+  font-size: var(--t-heading);
+  font-weight: var(--w-strong);
+  line-height: var(--s-6);
+}
+
+/* Три линии от края карточки: 4 (зона строки), 8 (плиты), 20 (содержимое).
+   Закон проверяется глазом: включи «Линии 4 · 8 · 20» в паспорте. */
+.guide {
+  position: absolute; top: 0; bottom: 0; width: var(--stroke-hair);
+  background: rgb(var(--lit-rgb) / var(--a-edge));
+  pointer-events: none; z-index: var(--z-bar);
+}
+.guide[data-at="4"] { left: var(--inset-row); }
+.guide[data-at="8"] { left: var(--inset-plate); }
+.guide[data-at="20"] { left: var(--line); }
+.guide[data-at="-4"] { right: var(--inset-row); }
+.guide[data-at="-8"] { right: var(--inset-plate); }
+.guide[data-at="-20"] { right: var(--line); }
+
+/* ---- Строка ----------------------------------------------------------- */
+.row {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--row);
+  padding: var(--s-1) var(--line);
+}
+.row > :not(.hit) { position: relative; z-index: var(--z-rail); pointer-events: none; }
+.row > .hint, .row > .btn, .row > .key { z-index: var(--z-key); pointer-events: auto; }
+.hit {
+  position: absolute;
+  z-index: var(--z-base);
+  inset: var(--u) var(--inset-row);
+  border-radius: var(--r-plate);
+  transition: background-color var(--d-press) var(--ease);
+}
+.hit:hover { background: var(--hover); }
+.hit:active { background: var(--press); }
+.hit:focus-visible { outline-offset: calc(-1 * var(--focus-w)); }
+.hit[aria-disabled="true"]:hover { background: none; }
+
+.lead { display: grid; place-items: center; width: var(--icon); height: var(--icon); color: var(--ink-2); }
+.label {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--ink-1);
+  font-size: var(--t-body);
+  line-height: var(--s-5);
+  overflow-wrap: anywhere;
+}
+.value {
+  flex: 0 100 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--t-caption);
+  line-height: var(--s-5);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.end { flex: none; margin-left: auto; color: var(--ink-2); }
+.row > :is(.btn, .key) { margin-left: auto; }
+.value + :is(.end, .btn, .key) { margin-left: 0; }
+.row[data-disabled="true"] .label,
+.row[data-disabled="true"] .value,
+.row[data-disabled="true"] .end,
+.row[data-disabled="true"] .lead { color: var(--disabled-ink); }
+
+/* Шов: канавка между строками. Высота нуль, чтобы строки остались 34 / 44 / 56. */
+.groove { position: relative; height: 0; margin: 0; border: 0; }
+.groove::after {
+  content: "";
+  position: absolute;
+  left: var(--line);
+  right: var(--line);
+  top: calc(-1 * var(--stroke-hair));
+  height: calc(2 * var(--stroke-hair));
+  border-top: var(--stroke-hair) solid var(--groove);
+  border-bottom: var(--stroke-hair) solid var(--plate);
+}
+
+/* Знак судьбы: тик на кромке карточки у строки, чья судьба известна, и рейка
+   пути. Одна краска; длина и место разные. Появляется за --d-state. */
+.row::before, .way::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: var(--rail-w);
+  border-radius: var(--r-rail);
+  background: rgb(var(--fate-rgb) / var(--a-rail));
+  pointer-events: none;
+  z-index: var(--z-rail);
+}
+.row::before {
+  top: 50%;
+  height: var(--rail-quiet);
+  margin-top: calc(var(--rail-quiet) / -2);
+  opacity: 0;
+  transition: opacity var(--d-state) var(--ease);
+}
+/* Судьба строки - её признак и стоит всегда; у выключенного переключателя-закрывателя
+   (data-on="false") тик не горит: закрывать нечего. */
+.row[data-fate]:not([data-on="false"])::before { opacity: 1; }
+
+/* ---- Подсказка «?» ---------------------------------------------------- */
+.hint {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--hit-min);
+  height: var(--hit-min);
+  margin-inline: calc((var(--hint) - var(--hit-min)) / 2);
+  border-radius: 50%;
+  color: var(--ink-2);
+}
+.hint > span {
+  display: grid;
+  place-items: center;
+  width: var(--hint);
+  height: var(--hint);
+  border: var(--stroke-hair) solid var(--hair);
+  border-radius: 50%;
+  background: var(--plate);
+  font-size: var(--t-micro);
+  font-weight: var(--w-strong);
+  line-height: 1;
+  transition: background-color var(--d-press) var(--ease), color var(--d-press) var(--ease);
+}
+.hint:hover > span, .hint[data-open="true"] > span { background: var(--hover); color: var(--ink-1); }
+
+/* ---- Складка: ручка + итог + шов -------------------------------------- */
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--d-fold) var(--ease);
+}
+.fold[data-open="true"] { grid-template-rows: 1fr; }
+.fold-body { min-height: 0; overflow: hidden; }
+.fold-body > .groove:first-child::after { top: 0; }
+.card[data-open="true"] .fold-handle .end .icon { transform: rotate(180deg); }
+.fold-handle .end .icon { transition: transform var(--d-fold) var(--ease); }
+
+/* ---- Переключатель: рука белая ---------------------------------------- */
+.switch {
+  position: relative;
+  flex: none;
+  width: var(--switch-w);
+  height: var(--switch-h);
+  margin-left: auto;
+  border-radius: var(--r-pill);
+  transition: background-color var(--d-state) var(--ease);
+}
+.switch::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: calc(var(--stroke-icon) * 1px) solid var(--ink-2);
+  border-radius: inherit;
+  transition: border-color var(--d-state) var(--ease);
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 5px;
+  width: 10px;
+  height: 10px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--ink-2);
+  transition: left var(--d-state) var(--ease), width var(--d-state) var(--ease), height var(--d-state) var(--ease),
+    margin-top var(--d-state) var(--ease), background-color var(--d-state) var(--ease);
+}
+.row[data-on="true"] .switch { background: var(--lit); }
+.row[data-on="true"] .switch::before { border-color: var(--lit); }
+.row[data-on="true"] .switch::after {
+  left: 24px; width: 12px; height: 12px; margin-top: -6px; background: var(--lit-ink);
+}
+.row[data-disabled="true"] .switch::before { border-color: var(--disabled-ink); }
+.row[data-disabled="true"] .switch::after { background: var(--disabled-ink); }
+
+/* ---- Сегменты: выбранный горит лампой руки ---------------------------- */
+.segments { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-2); }
+.seg {
+  display: grid;
+  place-items: center;
+  height: var(--segment);
+  padding-inline: var(--s-2);
+  overflow: hidden;
+  border: var(--stroke-edge) solid var(--hair);
+  border-radius: var(--r-plate);
+  background: var(--well);
+  color: var(--ink-2);
+  font-size: var(--t-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background-color var(--d-state) var(--ease), border-color var(--d-state) var(--ease),
+    color var(--d-state) var(--ease);
+}
+.seg:hover { background: var(--hover); color: var(--ink-1); }
+.seg:active { background: var(--press); }
+.seg[aria-checked="true"] {
+  border-color: rgb(var(--lit-rgb) / var(--a-edge));
+  background: rgb(var(--lit-rgb) / var(--a-glow));
+  color: var(--ink-1);
+}
+.seg[aria-checked="true"]:hover { background: rgb(var(--lit-rgb) / var(--a-glow-hover)); }
+.seg[aria-checked="true"]:active { background: rgb(var(--lit-rgb) / var(--a-glow-press)); }
+
+/* ---- Лампа: пилюля, точка. Круглое - состояние ------------------------ */
+.pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--pill);
+  padding: 0 var(--s-3) 0 var(--s-2);
+  border: var(--stroke-edge) solid rgb(var(--fate-rgb) / var(--a-edge));
+  border-radius: var(--r-pill);
+  background: rgb(var(--fate-rgb) / var(--a-glow));
+  color: var(--ink-1);
+  font-size: var(--t-caption);
+  font-weight: var(--w-strong);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--fate-rgb));
+}
+/* Без вердикта точка графитовая: ничего не известно, оттенка нет. */
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgb(var(--verdict-rgb, var(--ink-2-rgb)));
+}
+/* Точка судьбы: тот же круг, но краска пути (пункт меню «Перенести»). */
+.dot[data-fate] { background: rgb(var(--fate-rgb)); }
+.muted { color: var(--ink-2); font-size: var(--t-caption); line-height: var(--s-5); white-space: nowrap; }
+button.muted { border-radius: var(--r-plate); }
+button.muted:hover { color: var(--ink-1); }
+
+/* ---- Режим ------------------------------------------------------------ */
+.mode { display: grid; gap: var(--s-2); padding: var(--inset-plate); }
+.rest {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--s-6);
+  padding-inline: calc(var(--line) - var(--inset-plate));
+}
+.rest .tail { margin-left: auto; }
+
+/* ---- Пути и фишки ----------------------------------------------------- */
+.way { position: relative; padding-bottom: var(--inset-plate); }
+.way::before { top: var(--inset-plate); bottom: var(--inset-plate); }
+.way-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--head);
+  padding-inline: var(--line) calc(var(--line) - var(--bleed));
+}
+.way-name { flex: none; font-size: var(--t-heading); font-weight: var(--w-strong); line-height: var(--s-6); white-space: nowrap; }
+.way-note { min-width: 0; overflow: hidden; color: var(--ink-2); font-size: var(--t-caption); text-overflow: ellipsis; white-space: nowrap; }
+.way-head .pill { margin-left: auto; }
+.way[data-empty="true"] { padding-bottom: 0; }
+.way[data-empty="true"] .way-head { height: var(--head-quiet); }
+.way[data-empty="true"]::before {
+  top: 50%;
+  bottom: auto;
+  height: var(--rail-quiet);
+  margin-top: calc(var(--rail-quiet) / -2);
+}
+.way[data-empty="true"] .way-name { color: var(--ink-2); font-size: var(--t-caption); font-weight: var(--w-regular); }
+.way[data-empty="true"] .key { margin-left: auto; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--gap-tag); padding-inline: var(--line); }
+
+/* Кнопка-значок: стеклянный квадрат 28; значок 16 лежит внутри, зона нажатия шире чернил. */
+.key {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--icon-key);
+  height: var(--icon-key);
+  border-radius: var(--r-plate);
+  color: var(--ink-2);
+  transition: background-color var(--d-press) var(--ease), color var(--d-press) var(--ease);
+}
+.key:hover { background: var(--hover); color: var(--ink-1); }
+.key:active { background: var(--press); }
+
+.chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  max-width: 100%;
+  height: var(--tag);
+  padding-inline: var(--s-3);
+  border: var(--stroke-hair) solid var(--hair);
+  border-radius: var(--r-tag);
+  background: var(--plate);
+  color: var(--ink-1);
+  font-size: var(--t-body);
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color var(--d-press) var(--ease);
+}
+.chip:hover { background: var(--hover); }
+.chip:active { background: var(--press); }
+.chip > .text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip > .detail { color: var(--ink-2); font-size: var(--t-caption); }
+.chip > .icon { color: var(--ink-2); }
+
+/* ---- Всплывающее: подсказка, меню, форма ------------------------------ */
+.tip {
+  position: fixed;
+  z-index: var(--z-tip);
+  max-width: min(320px, calc(100vw - 2 * var(--s-2)));
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-plate);
+  background: var(--surface-raised);
+  color: var(--ink-1);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity var(--d-state) var(--ease-in), visibility 0s linear var(--d-state);
+}
+.tip[data-open="true"] {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity var(--d-state) var(--ease), visibility 0s;
+}
+.tip p { white-space: pre-line; }
+.tip p + p { margin-top: var(--s-2); }
+.tip::before {
+  content: "";
+  position: absolute;
+  left: var(--nose, 16px);
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: inherit;
+  transform: rotate(45deg);
+}
+.tip[data-side="above"]::before { top: auto; bottom: -4px; }
+
+.menu {
+  position: fixed;
+  z-index: var(--z-menu);
+  display: grid;
+  gap: 0;
+  min-width: 200px;
+  max-width: calc(100vw - 2 * var(--s-2));
+  max-height: min(70vh, 360px);
+  padding: var(--s-1);
+  overflow: auto;
+  border-radius: var(--r-card);
+  background: var(--surface-raised);
+  opacity: 1;
+  transition: opacity var(--d-state) var(--ease);
+}
+.menu[data-enter] { opacity: 0; }
+.menu[data-leave] { opacity: 0; transition: opacity var(--d-state) var(--ease-in); pointer-events: none; }
+.menu[data-form="true"] { padding: var(--s-3); gap: var(--s-2); width: 320px; max-width: calc(100vw - 2 * var(--s-2)); overflow: visible; }
+.menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--button);
+  padding-inline: var(--s-3);
+  border-radius: var(--r-plate);
+  color: var(--ink-1);
+  font-size: var(--t-body);
+  white-space: nowrap;
+}
+.menu-item:hover, .menu-item:focus-visible { background: var(--hover); }
+.menu-item:active { background: var(--press); }
+.menu-item:focus-visible { outline-offset: calc(-1 * var(--focus-w)); }
+.menu-item .end { margin-left: auto; color: var(--ink-1); }
+.menu-item[aria-disabled="true"] { color: var(--disabled-ink); pointer-events: none; }
+.menu-label { padding: var(--s-1) var(--s-3); color: var(--ink-2); font-size: var(--t-caption); line-height: var(--s-5); }
+.menu-gap { height: 0; margin: var(--s-1) 0; }
+.menu-gap::after {
+  content: ""; display: block; margin-inline: var(--s-3);
+  border-top: var(--stroke-hair) solid var(--groove); border-bottom: var(--stroke-hair) solid var(--plate);
+}
+
+.field-label { color: var(--ink-1); font-size: var(--t-body); line-height: var(--s-5); }
+.field-help { color: var(--ink-2); font-size: var(--t-caption); line-height: var(--lh-body); }
+.field-error { color: var(--ink-1); font-size: var(--t-caption); line-height: var(--lh-body); display: flex; align-items: center; gap: var(--s-2); }
+.field {
+  width: 100%;
+  height: var(--button);
+  padding-inline: var(--s-3);
+  border: var(--stroke-hair) solid var(--hair);
+  border-radius: var(--r-plate);
+  background: var(--well);
+  color: var(--ink-1);
+  font-size: var(--t-body);
+}
+.field:focus-visible { outline-offset: 0; border-color: rgb(var(--lit-rgb) / var(--a-edge)); }
+.form-actions { display: flex; justify-content: flex-end; gap: var(--s-2); }
+
+/* ---- Кнопки ------------------------------------------------------------ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: var(--button);
+  padding-inline: var(--s-4);
+  border: var(--stroke-hair) solid var(--hair);
+  border-radius: var(--r-plate);
+  background: var(--plate);
+  color: var(--ink-1);
+  font-size: var(--t-body);
+  white-space: nowrap;
+  transition: background-color var(--d-press) var(--ease);
+}
+.btn:hover { background: var(--hover); }
+.btn:active { background: var(--press); }
+.btn[aria-pressed="true"] {
+  border-color: rgb(var(--lit-rgb) / var(--a-edge));
+  background: rgb(var(--lit-rgb) / var(--a-glow));
+}
+.btn[data-kind="primary"] { border-color: transparent; background: var(--lit); color: var(--lit-ink); font-weight: var(--w-strong); }
+.btn[data-kind="primary"]:hover { background: var(--ink-1); }
+.btn[data-kind="primary"]:active { background: var(--lit); }
+.btn[data-kind="danger"] {
+  border-color: rgb(var(--fate-rgb) / var(--a-edge));
+  background: rgb(var(--fate-rgb) / var(--a-glow));
+}
+.btn[data-kind="danger"]:hover { background: rgb(var(--fate-rgb) / var(--a-glow-hover)); }
+.btn[data-kind="danger"]:active { background: rgb(var(--fate-rgb) / var(--a-glow-press)); }
+.is-focus { outline: var(--focus-w) solid var(--focus); outline-offset: var(--focus-gap); }
+.btn:disabled { border-color: transparent; background: var(--plate); color: var(--disabled-ink); }
+
+/* Баннер: плита руки, точка вердикта слева, шеврон справа; заливки цветом нет. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: var(--s-8);
+  padding: var(--s-2) var(--line);
+  border-radius: var(--r-card);
+  background: rgb(var(--lit-rgb) / var(--a-hover));
+  color: var(--ink-1);
+  font-size: var(--t-body);
+}
+.banner .end { margin-left: auto; color: var(--ink-1); }
+
+/* Последнее действие: видно глазу; скринридеру его говорит #live. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--s-6);
+  padding-inline: var(--s-1);
+  color: var(--ink-2);
+  font-size: var(--t-caption);
+  line-height: var(--s-5);
+}
+
+/* ---- Паспорт закона ---------------------------------------------------- */
+.passport-body {
+  position: relative;
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--pad);
+  background: var(--surface-panel);
+  border-radius: var(--r-card);
+}
+.pp-sec { display: grid; gap: var(--s-2); min-width: 0; }
+.pp-sec > h3 { font-size: var(--t-heading); font-weight: var(--w-strong); line-height: var(--s-6); }
+.pp-text { color: var(--ink-2); font-size: var(--t-caption); line-height: var(--lh-body); }
+.pp-law { font-size: var(--t-lead); font-weight: var(--w-strong); line-height: var(--lh-tight); }
+.pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--gap-card); }
+.pp-cell { display: grid; gap: var(--s-1); align-content: start; padding: var(--s-2) var(--s-3); border-radius: var(--r-plate); background: var(--plate); }
+.pp-cell > .caption { color: var(--ink-2); font-size: var(--t-caption); line-height: var(--s-5); }
+.pp-cell > .mono { font-family: var(--font-mono); font-size: var(--t-caption); line-height: var(--s-5); }
+.pp-bar { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.specimen { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); pointer-events: none; }
+.specimen * { pointer-events: none; }
+.swatch { flex: none; width: var(--s-8); height: var(--s-1); border-radius: var(--r-rail); background: rgb(var(--fate-rgb) / var(--a-rail)); }
+.pp-table { width: 100%; border-collapse: collapse; font-size: var(--t-caption); font-variant-numeric: tabular-nums; }
+.pp-table th { color: var(--ink-2); font-weight: var(--w-regular); text-align: left; }
+.pp-table th, .pp-table td { padding: var(--s-1) var(--s-2) var(--s-1) 0; vertical-align: middle; }
+.pp-table td:last-child, .pp-table th:last-child { padding-right: 0; }
+.pp-table tr + tr td { border-top: var(--stroke-hair) solid var(--hair); }
+.pp-table .num { text-align: right; white-space: nowrap; }
+.pp-table .ok { display: inline-flex; align-items: center; gap: var(--s-1); }
+.type-step { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); }
+.type-step > .caption { flex: none; color: var(--ink-2); font-size: var(--t-caption); font-variant-numeric: tabular-nums; }
+.pp-mark { display: flex; align-items: center; gap: var(--s-3); }
+.pp-selftest {
+  max-height: 240px; overflow: auto; margin: 0; padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-plate); background: var(--well); color: var(--ink-1);
+  font: var(--w-regular) var(--t-caption) / var(--lh-body) var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.probe-frames { display: grid; gap: var(--s-2); }
+.probe-frames iframe { width: 0; height: 0; border: 0; }
