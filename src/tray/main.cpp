@@ -2376,8 +2376,17 @@ class Worker {
     if (IsAuto(choices, current)) {
       autoPick_ = sovereign::tray::JudgeAuto(std::move(autoPick_),
                                              choices.groups.at(choices.options[static_cast<std::size_t>(current)]),
-                                             delays_);
+                                             delays_, ServerHosts());
     }
+  }
+
+  // Where each server connects: the protocols of one machine share a host.
+  std::map<std::string, std::string> ServerHosts() const {
+    std::map<std::string, std::string> hosts;
+    for (const auto& [tag, title] : serverTitles_) {
+      hosts[tag] = title.host;
+    }
+    return hosts;
   }
 
   void StartUrlTest() {
@@ -2750,7 +2759,12 @@ class Worker {
       } else {
         const std::string best = sovereign::tray::BestServer(
             choices.groups.at(choices.options[static_cast<std::size_t>(current)]), delays_);
-        autoIsBest = best.empty() || best == autoServer;
+        const auto hosts = ServerHosts();
+        const auto hostOf = [&](const std::string& tag) {
+          const auto it = hosts.find(tag);
+          return it != hosts.end() && !it->second.empty() ? it->second : tag;
+        };
+        autoIsBest = best.empty() || hostOf(best) == hostOf(autoServer);
       }
     }
     const auto autoOption = std::find_if(choices.options.begin(), choices.options.end(),

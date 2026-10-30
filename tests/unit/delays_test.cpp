@@ -74,6 +74,23 @@ void TestJudgeAuto() {
   delays = {{"nl", Ok(50, 0, 5)}, {"fi", Ok(90)}, {"de", Ok(95)}};
   CHECK(JudgeAuto({}, members, delays).server == "fi");
 
+  // Protocols of one host: the host is judged by its best, the protocol on it
+  // is the best of its own at once (ten ms), the other host needs a clear win twice.
+  const std::map<std::string, std::string> hosts = {{"de-naive", "de"}, {"de-vless", "de"}, {"nl-naive", "nl"}};
+  const std::vector<std::string> servers = {"de-naive", "de-vless", "nl-naive"};
+  std::map<std::string, Delay> hostDelays = {{"de-naive", Ok(66, 4)}, {"de-vless", Ok(51, 2)}, {"nl-naive", Ok(58, 3)}};
+  AutoPick onHost = JudgeAuto({.server = "de-naive"}, servers, hostDelays, hosts);
+  CHECK(onHost.server == "de-vless" && onHost.candidate.empty());
+  // Close protocols on one host don't swap.
+  hostDelays = {{"de-naive", Ok(55)}, {"de-vless", Ok(51)}, {"nl-naive", Ok(80)}};
+  CHECK(JudgeAuto({.server = "de-naive"}, servers, hostDelays, hosts).server == "de-naive");
+  // The other host wins clearly: a candidate first, the host's own protocol on the second.
+  hostDelays = {{"de-naive", Ok(120)}, {"de-vless", Ok(110)}, {"nl-naive", Ok(60)}};
+  onHost = JudgeAuto({.server = "de-naive"}, servers, hostDelays, hosts);
+  CHECK(onHost.server == "de-vless" && onHost.candidate == "nl-naive" && onHost.wins == 1);
+  onHost = JudgeAuto(onHost, servers, hostDelays, hosts);
+  CHECK(onHost.server == "nl-naive");
+
   // The best by score is what the page compares auto's server with; none answered: empty.
   CHECK(BestServer(members, delays) == "fi");
   CHECK(BestServer({"x"}, delays).empty());

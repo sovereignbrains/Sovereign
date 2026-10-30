@@ -65,8 +65,15 @@ struct AutoPick {
 // the measurements of two servers a few milliseconds apart swap places from
 // test to test, and switching between them would only drop connections.
 // Servers not measured in this test keep the pick as it is.
+// A server is a host with protocols on it (`hosts`: tag -> where it connects;
+// a tag without one is a host of its own): the host is judged as above by its
+// best protocol, and on the host in use the protocol is the best of the
+// host's once it's ten milliseconds better - several protocols of one machine
+// differ by their handshakes, not by the machine, and aren't a reason to
+// leave it.
 AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,
-                   const std::map<std::string, Delay>& delays);
+                   const std::map<std::string, Delay>& delays,
+                   const std::map<std::string, std::string>& hosts = {});
 
 // The user's own network, judged by the way around the proxy - the config's
 // direct outbound, measured with the servers to the same site: slow or lossy

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <format>
+#include <iterator>
 #include <optional>
 #include <utility>
 
@@ -98,34 +99,56 @@ std::string BestServer(const std::vector<std::string>& members, const std::map<s
 }
 
 AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,
-                   const std::map<std::string, Delay>& delays) {
+                   const std::map<std::string, Delay>& delays, const std::map<std::string, std::string>& hosts) {
   const auto measured = [&](const std::string& tag) -> const Delay* {
     const auto it = delays.find(tag);
     return it != delays.end() && it->second.state == Delay::State::Ok ? &it->second : nullptr;
   };
-  const std::string bestTag = BestServer(members, delays);
-  const std::string* best = bestTag.empty() ? nullptr : &bestTag;
-  const int bestScore = best != nullptr ? DelayScore(*measured(bestTag)) : 0;
-  if (best == nullptr) {
+  const auto hostOf = [&](const std::string& tag) {
+    const auto it = hosts.find(tag);
+    return it != hosts.end() && !it->second.empty() ? it->second : tag;
+  };
+  const std::string best = BestServer(members, delays);
+  if (best.empty()) {
     return pick;  // nothing answered: no better idea than the one there is
   }
   const bool member = std::find(members.begin(), members.end(), pick.server) != members.end();
   const auto current = delays.find(pick.server);
   const bool failed = current != delays.end() && current->second.state == Delay::State::Failed;
   if (pick.server.empty() || !member || failed) {
-    return {.server = *best};
+    return {.server = best};
   }
   const Delay* now = measured(pick.server);
-  if (now == nullptr || *best == pick.server) {
-    return {.server = pick.server};  // not measured this time, or still the best
+  if (now == nullptr) {
+    return {.server = pick.server};  // not measured this time
   }
+  // The server in use is a host and the protocol on it: the host is worth its
+  // best protocol, and that one is what the protocol is picked from.
+  const std::string host = hostOf(pick.server);
+  std::vector<std::string> onHost;
+  std::copy_if(members.begin(), members.end(), std::back_inserter(onHost),
+               [&](const std::string& tag) { return hostOf(tag) == host; });
+  const std::string hostBest = BestServer(onHost, delays);
   const int nowScore = DelayScore(*now);
-  if (bestScore * 5 > nowScore * 4 || nowScore - bestScore < 20) {
-    return {.server = pick.server};
+  const int hostScore = DelayScore(*measured(hostBest));
+
+  // Another host: only for a clear win, twice in a row.
+  AutoPick next{.server = pick.server};
+  if (hostOf(best) != host) {
+    const int bestScore = DelayScore(*measured(best));
+    if (bestScore * 5 <= hostScore * 4 && hostScore - bestScore >= 20) {
+      next.wins = !pick.candidate.empty() && hostOf(best) == hostOf(pick.candidate) ? pick.wins + 1 : 1;
+      next.candidate = best;
+      if (next.wins >= 2) {
+        return {.server = best};
+      }
+    }
   }
-  pick.wins = *best == pick.candidate ? pick.wins + 1 : 1;
-  pick.candidate = *best;
-  return pick.wins >= 2 ? AutoPick{.server = *best} : pick;
+  // The protocol on this host: the best one, once it's ten milliseconds better.
+  if (hostBest != pick.server && nowScore - hostScore >= 10) {
+    next.server = hostBest;
+  }
+  return next;
 }
 
 LocalNetwork JudgeLocalNetwork(const Delay& direct, int failedInRow, std::optional<int> bestMs, bool serversDown) {

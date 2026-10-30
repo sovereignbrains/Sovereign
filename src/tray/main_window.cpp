@@ -1957,7 +1957,7 @@ class Painter {
         choice.detail = c.autoServer.empty() ? std::wstring(L"выберет лучший после первого замера")
                                              : c.autoIsBest
                                                    ? L"сейчас " + server + L" — лучший по замерам"
-                                                   : L"сейчас " + server + L" — другой чуть быстрее, но разница мала";
+                                                   : L"сейчас " + server + L" — другой сервер чуть быстрее, но разница мала";
       } else if (i < c.delays.size()) {
         choice.detail = DelayDetail(c.delays[i], c.delaysDetailed);
       }

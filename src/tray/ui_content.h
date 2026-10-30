@@ -265,7 +265,7 @@ struct UiContent {
   std::wstring delayError;              // why the last test didn't start
   int autoOption = -1;                  // the protocol that is auto (a URL test), if any
   std::wstring autoServer;              // the server auto runs on; empty until measured
-  bool autoIsBest = true;               // it is the best of the last test (else auto holds on to it)
+  bool autoIsBest = true;               // the best of the last test is on this server (else auto holds on)
   std::wstring selectError;             // why the box couldn't be switched to the pick
   // The exit through the server in use (while on): address, country.
   std::wstring exitIp;                  // empty until known
