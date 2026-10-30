@@ -569,9 +569,10 @@ int EditTest(HINSTANCE instance) {
   // and its menu waited for a click (CI failed from dc9e160 on, a desktop run
   // hung). The configurations' list has "+", "hide" and the cross there, a
   // configuration's page "hide" and the cross (MainWindow's Caption); both
-  // the new version's key before them, the sample having one found.
-  constexpr int kListCaption = 4;
-  constexpr int kProfileCaption = 3;
+  // "report a problem" and the new version's key before them (0.5.52 on), the
+  // sample having one found.
+  constexpr int kListCaption = 5;
+  constexpr int kProfileCaption = 4;
   const auto tabs = [&](int n) {
     for (int i = 0; i < n; ++i) {
       key(VK_TAB);
