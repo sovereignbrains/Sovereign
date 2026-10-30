@@ -59,6 +59,7 @@ constexpr float kPad = 16;         // the page's margins
 constexpr float kCaption = 36;     // our own title bar (Painter::Caption): the system's is gone
 constexpr float kMaxPage = 560;    // wider windows keep the page at this, centered
 constexpr float kRow = 44;         // a list row
+constexpr float kSettingsRow = 34;  // a row of the settings: at 44 they did not fit a screen (30.10.2026, his: "не помещаются")
 constexpr float kLatencyRow = 56;  // a server to pick: its name and latency, what the measurement is made of
 constexpr float kProfileRow = 54;  // a configuration's row: its name and its state
 constexpr float kPillPad = 8;      // a Pill's text from its edge, each side
@@ -73,6 +74,7 @@ constexpr float kSpeedGraph = 150;  // the speed test's graph under the checks
 constexpr float kServerRow = 60;   // a server on a configuration's page: its name, protocol and switch
 constexpr float kButton = 34;
 constexpr float kGap = 12;         // between cards
+constexpr float kSettingsGap = 8;   // between the settings' cards
 constexpr float kRadius = 8;
 constexpr float kWheelStep = 64;
 constexpr float kAppIcon = 20;     // a program's icon in the per-app list
@@ -2946,13 +2948,14 @@ class Painter {
   // heading and a card. Returns under them.
   float FineSettings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
     const UiRouting& r = c.routing;
-    // QUIC, IPv4: one card, a row each. (Hysteria 2's speed is its servers'
-    // menu's since 17.10.2026.)
+    // QUIC, IPv4 and DNS: one card, a row each - the DNS had a heading and a
+    // card of its own till 30.10.2026 (his: the settings didn't fit a screen).
+    // (Hysteria 2's speed is its servers' menu's since 17.10.2026.)
     {
-      const float h = kRow + kSwitchRow;
+      const float h = 4 * kSettingsRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
       float top = y;
-      Item quic = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kRow - 2}, L"QUIC", nullptr,
+      Item quic = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"QUIC", nullptr,
                               UiCommand::ChooseQuic);
       quic.detail = r.quic == 1     ? L"выкл."
                     : r.quic == 2   ? L"вкл."
@@ -2960,48 +2963,48 @@ class Painter {
                                     : L"авто (сейчас вкл.)";
       quic.hinted = true;
       l.items.push_back(std::move(quic));
-      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 8, top + kRow / 2,
+      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
                 L"QUIC — HTTP/3 по UDP. Через серверы на TCP (VLESS, Trojan, AnyTLS) он идёт хуже обычного TCP, "
                 L"поэтому выключенный QUIC не мешает: браузеры сразу берут TCP.\n\n«Авто» включает QUIC, только "
                 L"если все твои серверы — Hysteria2 или TUIC. Есть хоть один на TCP — выключен.");
-      top += kRow;
+      top += kSettingsRow;
       l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
-      Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSwitchRow - 2}, L"Только IPv4", nullptr,
+      Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"Только IPv4", nullptr,
                             UiCommand::ToggleIpv4Only);
       v4.checked = r.ipv4Only;
       l.items.push_back(std::move(v4));
-      HintAfter(l, L"Только IPv4", body_.get(), x0 + 20, x1 - 80, top + kSwitchRow / 2,
+      HintAfter(l, L"Только IPv4", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Сайты получают только IPv4-адреса. У многих серверов VPN нет IPv6: без этого браузер сначала "
                 L"пробует IPv6, ждёт и лишь потом идёт по IPv4 — сайт открывается с задержкой или не открывается.");
-      y += h + kGap + 4;
-    }
+      top += kSettingsRow;
 
-    // DNS: who answers for the names of each kind - auto, a pick, or a
-    // server of the user's own (typed over its row).
-    {
-      y = Heading(l, L"DNS", x0, x1, y,
-                  L"«Через VPN» — имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его "
-                  L"не видит. «Напрямую» — российские сайты, твои прямые и адреса самих серверов.\n\n«Авто» "
-                  L"подходит почти всем: это Cloudflare. Если DNS для прямых сайтов перестанет отвечать, Sovereign "
-                  L"возьмёт следующий: Cloudflare, Google, Quad9, Яндекс, в конце DNS Windows. Яндекс — только "
-                  L"«Напрямую»: в России его не блокируют. Свой адрес пишется так: "
-                  L"1.2.3.4, tls://dns.example, https://dns.example/dns-query, quic://dns.example.");
-      const float h = 2 * kRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Через VPN",
+      // DNS: who answers for the names of each kind - auto, a pick, or a
+      // server of the user's own (typed over its row).
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"DNS через VPN",
                                 nullptr, UiCommand::ChooseRemoteDns);
       remote.detail = r.remoteDns;
       remote.detailLogo = r.remoteDnsLogo;
+      remote.hinted = true;
       l.items.push_back(std::move(remote));
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
-      Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Напрямую",
+      HintAfter(l, L"DNS через VPN", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
+                L"Имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его не видит.\n\n«Авто» "
+                L"подходит почти всем: это Cloudflare. Свой адрес пишется так: 1.2.3.4, tls://dns.example, "
+                L"https://dns.example/dns-query, quic://dns.example.");
+      top += kSettingsRow;
+      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      Item local = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"DNS напрямую",
                                nullptr, UiCommand::ChooseLocalDns);
       local.detail = r.localDns;
       local.detailLogo = r.localDnsLogo;
+      local.hinted = true;
       l.items.push_back(std::move(local));
-      y += h + kGap + 4;
-    }
-    return y;
+      HintAfter(l, L"DNS напрямую", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
+                L"Российские сайты, твои прямые и адреса самих серверов.\n\nЕсли этот DNS перестанет отвечать, "
+                L"Sovereign возьмёт следующий: Cloudflare, Google, Quad9, Яндекс, в конце DNS Windows. Яндекс — "
+                L"только здесь: в России его не блокируют.");
+      y += h + kSettingsGap;
+    }    return y;
   }
 
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
@@ -3024,10 +3027,10 @@ class Painter {
     };
     const auto close = [&](std::size_t card, float bottom) {
       l.items[card].rect.bottom = bottom;
-      return bottom + kGap;
+      return bottom + kSettingsGap;
     };
     const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1})); };
-    const auto row = [&](float top) { return D2D1_RECT_F{x0 + 4, top + 2, x1 - 4, top + kRow - 2}; };
+    const auto row = [&](float top) { return D2D1_RECT_F{x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}; };
 
     {
       const std::size_t card = open(y);
@@ -3035,7 +3038,7 @@ class Painter {
       Item checks = CommandItem(Kind::ValueRow, row(y), L"Проверка подключения", nullptr, UiCommand::OpenChecks);
       checks.detail = L"утечки, скорость";
       l.items.push_back(std::move(checks));
-      y = close(card, y + kRow);
+      y = close(card, y + kSettingsRow);
     }
 
     y = Heading(l, L"Подключение", x0, x1, y);
@@ -3045,19 +3048,19 @@ class Painter {
       Item kill = CommandItem(Kind::Switch, row(top), L"Kill switch", nullptr, UiCommand::ToggleKillSwitch);
       kill.checked = c.killSwitch;
       l.items.push_back(std::move(kill));
-      HintAfter(l, L"Kill switch", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+      HintAfter(l, L"Kill switch", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Если подключение оборвётся, трафик не пойдёт мимо VPN: интернет закрыт, пока оно не "
                 L"восстановится. Выключишь VPN сам — интернет работает как обычно.");
-      top += kRow;
+      top += kSettingsRow;
       line(top);
       Item startup = CommandItem(Kind::ValueRow, row(top), L"Автозапуск", nullptr, UiCommand::ChooseStartup);
       startup.detail = !c.autostart ? L"выключен" : c.connectAtStartup ? L"с подключением" : L"без подключения";
       startup.hinted = true;
       l.items.push_back(std::move(startup));
-      HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 8, top + kRow / 2,
+      HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
                 L"При входе в Windows клиент запускается в области уведомлений, без окна. «С подключением» — "
                 L"подключается сам, если был включён; «без подключения» — ждёт, пока включишь.");
-      top += kRow;
+      top += kSettingsRow;
       // The local network: open, or closed both ways but for what the user
       // lets in - the router, a device around, an address typed in. Closed, a
       // row per device let in (a click: shut again, LanChipMenu) and one to
@@ -3067,7 +3070,7 @@ class Painter {
       Item lan = CommandItem(Kind::Switch, row(top), L"Закрыть от локальной сети", nullptr, UiCommand::ToggleLanClosed);
       lan.checked = c.lanClosed;
       l.items.push_back(std::move(lan));
-      HintAfter(l, L"Закрыть от локальной сети", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+      HintAfter(l, L"Закрыть от локальной сети", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Фильтр только на этом компьютере. Роутер, телефоны и другие устройства работают как обычно и "
                 L"пользуются интернетом — они просто не могут связаться с этим компьютером, а он с ними: общие "
                 L"папки, принтер, трансляция на телевизор, передача файлов с телефона.\n\nИнтернет этого "
@@ -3076,7 +3079,7 @@ class Painter {
                 L"Закрытый роутер — это только его настройки и его DNS.\n\nСовсем спрятаться нельзя: роутер "
                 L"видит, что компьютер подключён, а сканер сети на телефоне — что по его адресу есть устройство. "
                 L"Связаться с ним никто не сможет.\n\nДействует, пока подключение включено.");
-      top += kRow;
+      top += kSettingsRow;
       if (c.lanClosed) {
         for (std::size_t i = 0; i < c.lanHosts.size(); ++i) {
           const UiLanHost& h = c.lanHosts[i];
@@ -3090,16 +3093,16 @@ class Painter {
           host.detail = !h.seen ? L"не в сети" : title != h.address ? h.address : L"";
           host.logo = "lan";
           l.items.push_back(std::move(host));
-          top += kRow;
+          top += kSettingsRow;
         }
         line(top);
         l.items.push_back(CommandItem(Kind::ValueRow, row(top), L"Разрешить устройство", kGlyphAdd, UiCommand::LanAdd));
-        top += kRow;
+        top += kSettingsRow;
       }
       y = close(card, top);
     }
     if (!c.killSwitchError.empty()) {
-      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
+      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kSettingsGap;
     }
 
     // What's cut on the way: the ads and the cookie windows. Switches, not a
@@ -3113,25 +3116,25 @@ class Painter {
       Item ads = CommandItem(Kind::Switch, row(top), L"Блокировать рекламу", nullptr, UiCommand::ToggleBlockAds);
       ads.checked = c.routing.blockAds;
       l.items.push_back(std::move(ads));
-      HintAfter(l, L"Блокировать рекламу", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+      HintAfter(l, L"Блокировать рекламу", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Запросы к рекламным и трекерным серверам по спискам никуда не уходят: страницы грузятся без "
                 L"рекламы. Сломалось что-то нужное — «Недавно заблокировано» ниже: нажми имя, и оно пойдёт дальше.");
-      top += kRow;
+      top += kSettingsRow;
       line(top);
       Item cookies =
           CommandItem(Kind::Switch, row(top), L"Убирать баннеры cookie", nullptr, UiCommand::ToggleCookieWindows);
       cookies.checked = c.routing.cookieWindows;
       l.items.push_back(std::move(cookies));
-      HintAfter(l, L"Убирать баннеры cookie", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+      HintAfter(l, L"Убирать баннеры cookie", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Убирает окна «принять cookie» OneTrust, Cookiebot и подобные. Своё окно сайта (TikTok, "
                 L"DeepSeek) — нет: это не скрипт со стороны.");
-      top += kRow;
+      top += kSettingsRow;
       if (c.routing.blockAds || c.routing.cookieWindows) {
         line(top);
         Item recent = CommandItem(Kind::ValueRow, row(top), L"Недавно заблокировано", nullptr, UiCommand::BlockedMenu);
         recent.detail = L"пропустить нужное";
         l.items.push_back(std::move(recent));
-        top += kRow;
+        top += kSettingsRow;
       }
       y = close(card, top);
     }
@@ -3155,12 +3158,12 @@ class Painter {
         }
         more.detail = set.empty() ? L"QUIC, IPv4, DNS" : set;
       }
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kRow}));
+      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kSettingsRow}));
       l.items.push_back(std::move(more));
-      y += kRow + kGap;
+      y += kSettingsRow + kSettingsGap;
     }
     if (c.routingMore) {
-      y = FineSettings(l, c, x0, x1, y) - 4;
+      y = FineSettings(l, c, x0, x1, y);
     }
 
     // The foot, no card - it's about the app, nothing to set: the version and
@@ -3185,7 +3188,7 @@ class Painter {
         self.detail += L" · вышла " + c.updateVersion;
       }
       l.items.push_back(std::move(self));
-      top += kRow;
+      top += kSettingsRow;
       line(top);
 
       Item box = Make(Kind::ValueRow, row(top), L"sing-box");
@@ -3193,7 +3196,7 @@ class Painter {
                                    : *c.boxIsLatest ? std::wstring(L" · последняя")
                                                     : L" · вышла " + c.boxLatest);
       l.items.push_back(std::move(box));
-      top += kRow;
+      top += kSettingsRow;
       line(top);
 
       Item updates = CommandItem(Kind::ValueRow, row(top), L"Обновления", nullptr, UiCommand::ChooseUpdates);
@@ -3202,13 +3205,13 @@ class Painter {
                                                              : L"только проверять";
       updates.hinted = true;
       l.items.push_back(std::move(updates));
-      HintAfter(l, L"Обновления", body_.get(), x0 + 20, x1 - 8, top + kRow / 2,
+      HintAfter(l, L"Обновления", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
                 L"«Только проверять» — раз в 12 часов; новая версия появится значком в заголовке окна, "
                 L"обновляешь нажатием на него. «Ставить сами» — новая версия скачивается сама и "
                 L"ставится без вопросов, когда компьютер свободен: 10 минут никто не трогал мышь и клавиатуру, "
                 L"ничего не открыто на весь экран, ничего не качается. VPN пропадает примерно на полминуты. «Не "
                 L"проверять» — только строкой «Проверить сейчас» ниже.");
-      top += kRow;
+      top += kSettingsRow;
       line(top);
 
       // The check by hand; its answer in the row.
@@ -3223,17 +3226,17 @@ class Painter {
                          ? L"не вышло"
                          : L"";
       l.items.push_back(std::move(check));
-      top += kRow;
+      top += kSettingsRow;
       line(top);
 
       Item folder = CommandItem(Kind::ValueRow, row(top), L"Папка данных", kGlyphFolder, UiCommand::OpenFolder);
       folder.tip = L"Открыть папку данных: настройки, конфиги, их история";
       l.items.push_back(std::move(folder));
-      top += kRow;
+      top += kSettingsRow;
       y = close(card, top);
     }
     if (c.update == UiUpdate::Failed || (c.update == UiUpdate::Available && !c.updateError.empty())) {
-      y = Paragraph(l, Kind::ErrorText, UpdateStatus(c), x0, x1, y) + kGap;
+      y = Paragraph(l, Kind::ErrorText, UpdateStatus(c), x0, x1, y) + kSettingsGap;
     }
     if (c.update == UiUpdate::Available || c.update == UiUpdate::Waiting) {
       y += 10;
