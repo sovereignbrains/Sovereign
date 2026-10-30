@@ -485,7 +485,6 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
           {"rules", std::move(rules)},
           {"services", std::move(services)},
           {"warp", s.warp},
-          {"warpViaProxy", s.warpViaProxy},
               {"warpAccount", s.warpAccount ? WarpToJson(*s.warpAccount) : nlohmann::json()}};
 }
 
@@ -550,7 +549,6 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
     }
   }
   flag("warp", s.warp);
-  flag("warpViaProxy", s.warpViaProxy);
   if (const auto it = json.find("warpAccount"); it != json.end()) {
     s.warpAccount = WarpFromJson(*it);
   }

@@ -125,12 +125,13 @@ struct UiService {
   std::wstring way;   // "через WARP"
 };
 // A thing on the routing board: a service, a site or a program (a rule), one
-// of the lists - Russian sites, ads, cookie windows (the local network is the
-// settings', since 17.10.2026). Its bucket is where it goes, a
+// of the lists - the Russian sites (the local network is the settings', since
+// 17.10.2026, and so are the ads and the cookie windows, since 30.10.2026: a
+// switch each, not a way anywhere). Its bucket is where it goes, a
 // RouteRule::Action's number: 0 directly, 1 through the proxy, 2 blocked,
 // 3 through WARP.
 struct UiChip {
-  enum class Kind : std::uint8_t { Service, Rule, Russia, Ads, Cookies };
+  enum class Kind : std::uint8_t { Service, Rule, Russia };
   Kind kind = Kind::Rule;
   int index = 0;        // Service: into the routing's services; Rule: into its rules
   int bucket = 1;
@@ -157,6 +158,7 @@ inline constexpr int kBucketWarp = 3;
 struct UiRouting {
   int russia = kBucketDirect;  // the Russian sites' way, a bucket; -1: none of their own
   bool blockAds = true;
+  bool cookieWindows = false;  // the "accept cookies?" windows of sites, taken off
   int quic = 0;             // RoutingSettings::Quic's number: 0 auto, 1 blocked, 2 let through
   bool quicBlocked = true;  // what it comes to - auto: by the servers
   int hysteriaMbps = 0;     // RoutingSettings::hysteriaMbps
@@ -172,9 +174,8 @@ struct UiRouting {
   // Cloudflare WARP (warp.h).
   bool warp = false;          // on (registered, or being registered)
   bool warpRegistered = false;
-  bool warpViaProxy = true;
-  // How its tunnel is (main.cpp WatchWarp): "работает через «NL»", "не отвечает",
-  // "сейчас напрямую: через VPN не прошёл"; empty: not checked yet.
+  // How its tunnel is (main.cpp WatchWarp): "через «NL»", "поверх VPN · не отвечает",
+  // "напрямую: через VPN не прошёл"; empty: not checked yet.
   std::wstring warpState;
   std::vector<UiService> services;  // sent their own way, in order
   std::vector<UiChip> board;        // everything sent somewhere, as the board shows it
@@ -352,8 +353,10 @@ enum class UiCommand : std::uint8_t {
   SetRouteMode,        // index: 0 everything through the VPN but what's sent elsewhere, 1 only what's sent through it
   ToggleRoutingMore,   // the fine settings and DNS, unfolded or not
   ToggleIpv4Only,
+  ToggleBlockAds,     // the ads lists, on or off (the settings')
+  ToggleCookieWindows,  // the cookie windows' list, on or off
+  BlockedMenu,        // anchor: what was blocked lately - a click lets one through
   ToggleWarp,         // on: registers a WARP device first if there's none
-  ChooseWarpVia,      // anchor: over the proxy or directly
   AddWarpSite,        // starts typing over WARP's button
   AddWarpSiteText,    // text: sites (or subnets, programs) to send through WARP
   ChooseRemoteDns,    // anchor: where to open the menu

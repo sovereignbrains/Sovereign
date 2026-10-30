@@ -926,9 +926,9 @@ void TestWarp() {
   const json d = json::parse(ApplyRouting(on.config.value_or("{}"), s, Files()));
   CHECK(!d["endpoints"][0].contains("detour"));
 
-  // tray.json keeps it all.
+  // tray.json keeps it all - but not the way: over the proxy again on the next start.
   const RoutingSettings back = RoutingFromJson(json::parse(RoutingToJson(s).dump()));
-  CHECK(back.warp && !back.warpViaProxy && back.warpAccount.has_value() &&
+  CHECK(back.warp && back.warpViaProxy && back.warpAccount.has_value() &&
         back.rules.size() == 1 && back.rules[0].action == RouteRule::Action::Warp);
 }
 

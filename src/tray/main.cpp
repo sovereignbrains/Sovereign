@@ -421,7 +421,6 @@ struct RoutingChange {
     AddService,     // text: the service's id; value: the board's bucket (WARP: turned on)
     RemoveService,  // index
     SetServiceWay,  // index; text: "warp" (WARP turned on), "direct", "proxy", "block" or a country code
-    WarpVia,        // on: over the proxy; off: directly
   };
   What what = What::Russia;
   bool on = false;
@@ -1201,10 +1200,6 @@ class Worker {
         s.country.clear();
         break;
       }
-      case RoutingChange::What::WarpVia:
-        r.warpViaProxy = change.on;
-        warpDirect_ = false;  // picked by hand: that way, from now
-        break;
       case RoutingChange::What::RemoteDns: {
         const auto pick = static_cast<RoutingSettings::RemoteDns>(std::clamp(change.value, 0, 4));
         if (pick == RoutingSettings::RemoteDns::Custom) {
@@ -3992,7 +3987,7 @@ bool SameName(const std::string& a, const std::string& b) {
   return CompareStringOrdinal(Widen(a).c_str(), -1, Widen(b).c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
-// The routing board's things (ui_content.h UiChip): the two lists, the
+// The routing board's things (ui_content.h UiChip): the Russian sites, the
 // services, then the sites and programs, last everything else - each in the
 // bucket it goes to.
 std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
@@ -4003,14 +3998,6 @@ std::vector<sovereign::tray::UiChip> BoardOf(const View& v) {
   if (r.russia) {
     board.push_back({.kind = UiChip::Kind::Russia, .index = 0, .bucket = static_cast<int>(*r.russia),
                      .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"});
-  }
-  if (r.blockAds) {
-    board.push_back({.kind = UiChip::Kind::Ads, .index = 0, .bucket = sovereign::tray::kBucketBlock,
-                     .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads"});
-  }
-  if (r.cookieWindows) {
-    board.push_back({.kind = UiChip::Kind::Cookies, .index = 0, .bucket = sovereign::tray::kBucketBlock,
-                     .text = L"Баннеры cookie", .detail = {}, .icon = {}, .logo = "cookies"});
   }
   for (std::size_t n = 0; n < r.services.size(); ++n) {
     const ServiceRoute& s = r.services[n];
@@ -4683,6 +4670,7 @@ UiContent ContentFrom(const View& v) {
   const RoutingSettings& r = v.routing;
   c.routing.russia = r.russia ? static_cast<int>(*r.russia) : -1;
   c.routing.blockAds = r.blockAds;
+  c.routing.cookieWindows = r.cookieWindows;
   c.routing.quic = static_cast<int>(r.quic);
   c.routing.quicBlocked = v.quicBlocked;
   c.routing.hysteriaMbps = r.hysteriaMbps;
@@ -4690,14 +4678,14 @@ UiContent ContentFrom(const View& v) {
   c.routing.ipv4Only = r.ipv4Only;
   c.routing.warp = r.warp;
   c.routing.warpRegistered = r.warpAccount.has_value();
-  c.routing.warpViaProxy = r.warpViaProxy;
-  // The WARP bucket's note, a click on it picks the way: the way, and how it goes.
+  // The WARP bucket's note: how it goes. Over the VPN, and where that gets
+  // nothing through - directly, by itself (WatchWarp); there's no pick of the
+  // way (30.10.2026, his: "хз у кого прямо он работать будет").
   if (r.warp) {
-    const std::wstring way = r.warpViaProxy ? L"поверх VPN" : L"напрямую";
-    c.routing.warpState = v.warpDirect                                         ? L"напрямую: через VPN не прошёл"
-                          : v.warpAnswers && !*v.warpAnswers                   ? way + L" · не отвечает"
-                          : r.warpViaProxy && !v.warpServer.empty()            ? L"через «" + Widen(v.serverTitles.contains(v.warpServer) ? v.serverTitles.at(v.warpServer).title : v.warpServer) + L"»"
-                                                                               : way;
+    c.routing.warpState = v.warpDirect                         ? L"напрямую: через VPN не прошёл"
+                          : v.warpAnswers && !*v.warpAnswers   ? L"поверх VPN · не отвечает"
+                          : !v.warpServer.empty()              ? L"через «" + Widen(v.serverTitles.contains(v.warpServer) ? v.serverTitles.at(v.warpServer).title : v.warpServer) + L"»"
+                                                               : L"поверх VPN";
   }
   // The DNS rows: auto says what it is on now; a typed one its server's name
   // (the rest - scheme, port, path - is seen when it's edited; the row is narrow).
@@ -5229,11 +5217,30 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         send(What::AddRule, false, static_cast<int>(sovereign::tray::RouteRule::Action::Warp), 0, Narrow(args.text));
       }
       break;
-    case UiCommand::ChooseWarpVia:
-      if (const auto picked = PickFromMenu(owner, args.anchor, {L"Поверх VPN", L"Напрямую"}, r.warpViaProxy ? 0 : 1)) {
-        send(What::WarpVia, *picked == 0);
+    case UiCommand::ToggleBlockAds: send(What::BlockAds, !r.blockAds); break;
+    case UiCommand::ToggleCookieWindows: send(What::CookieWindows, !r.cookieWindows); break;
+    case UiCommand::BlockedMenu: {
+      // What the lists blocked lately (the ads' and the cookie windows'
+      // alike): a click lets one through - a rule of its own where
+      // everything else goes (the user's sites come first).
+      std::vector<std::wstring> items;
+      items.reserve(view.blockedAds.size() + 2);
+      for (const std::string& name : view.blockedAds) {
+        items.push_back(Widen(name));
+      }
+      if (items.empty()) {
+        items.emplace_back(L"Пока ничего не заблокировано");
+      } else {
+        items.insert(items.begin(), {L"Заблокировано недавно — нажми, чтобы пропускать:", L""});
+      }
+      const std::size_t skip = view.blockedAds.empty() ? 0 : 2;  // the caption and a line under it
+      const auto picked = PickFromMenu(owner, args.anchor, items, -1, {}, {0});
+      if (picked && *picked >= skip && *picked - skip < view.blockedAds.size()) {
+        send(What::AddRule, false, r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy, 0,
+             view.blockedAds[*picked - skip]);
       }
       break;
+    }
     case UiCommand::ChooseRemoteDns: {
       using RemoteDns = sovereign::tray::RoutingSettings::RemoteDns;
       static constexpr std::array kChoices = {RemoteDns::Auto, RemoteDns::Cloudflare, RemoteDns::Google, RemoteDns::Quad9,
@@ -5343,8 +5350,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       break;
     }
     case UiCommand::BoardAdd: {
-      // What can go to this bucket: a list that's off, a service, a program, a site.
-      enum class Add : std::uint8_t { Russia, Ads, Cookies, Service, Program, Site, Import };
+      // What can go to this bucket: the Russian sites, a service, a program, a site.
+      enum class Add : std::uint8_t { Russia, Service, Program, Site, Import };
       const int bucket = args.index;
       std::vector<std::wstring> items;
       std::vector<Add> adds;
@@ -5357,14 +5364,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       if (russia == board.end() || (russia->idle && russia->bucket != bucket)) {
         items.emplace_back(L"Российские сайты");
         adds.push_back(Add::Russia);
-      }
-      if (bucket == sovereign::tray::kBucketBlock && !r.blockAds) {
-        items.emplace_back(L"Реклама");
-        adds.push_back(Add::Ads);
-      }
-      if (bucket == sovereign::tray::kBucketBlock && !r.cookieWindows) {
-        items.emplace_back(L"Баннеры cookie на сайтах");
-        adds.push_back(Add::Cookies);
       }
       items.emplace_back(L"Сервис…");
       adds.push_back(Add::Service);
@@ -5390,8 +5389,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       switch (adds[*picked]) {
         case Add::Russia: send(What::Russia, false, bucket); break;
-        case Add::Ads: send(What::BlockAds, true); break;
-        case Add::Cookies: send(What::CookieWindows, true); break;
         case Add::Service: {
           std::vector<std::wstring> names;
           std::vector<std::string> ids;
@@ -5500,45 +5497,6 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         }
         break;
       }
-      if (chip.kind == UiChip::Kind::Ads || chip.kind == UiChip::Kind::Cookies) {
-        // What the lists blocked lately (the ads' and the cookie windows'
-        // alike): a click lets one through - a rule of its own where
-        // everything else goes (the user's sites come first).
-        const bool cookies = chip.kind == UiChip::Kind::Cookies;
-        std::vector<std::wstring> items;
-        std::vector<std::size_t> labels;
-        // What the cookie list can't do, said first: a site's own window isn't
-        // a script from elsewhere - TikTok's, DeepSeek's stay (15.10.2026).
-        if (cookies) {
-          labels.push_back(items.size());
-          items.emplace_back(L"Убирает окна OneTrust, Cookiebot и т. п. Своё окно сайта (TikTok) — нет");
-          items.emplace_back();
-        }
-        const std::size_t first = items.size();  // where the blocked names' part starts
-        labels.push_back(first);
-        if (view.blockedAds.empty()) {
-          items.emplace_back(L"Пока ничего не заблокировано");
-        } else {
-          items.emplace_back(L"Заблокировано недавно — нажми, чтобы пропускать:");
-          for (const std::string& name : view.blockedAds) {
-            items.push_back(Widen(name));
-          }
-        }
-        items.emplace_back();
-        items.emplace_back(cookies ? L"Не убирать баннеры cookie" : L"Не блокировать рекламу");
-        const auto picked = PickFromMenu(owner, cursor, items, -1, {}, labels);
-        if (!picked) {
-          break;
-        }
-        if (*picked == items.size() - 1) {
-          send(cookies ? What::CookieWindows : What::BlockAds, false);
-        } else if (*picked > first && *picked - first - 1 < view.blockedAds.size()) {
-          send(What::AddRule, false, r.finalDirect ? sovereign::tray::kBucketDirect : sovereign::tray::kBucketProxy,
-               0, view.blockedAds[*picked - first - 1]);
-        }
-        break;
-      }
-
       if (chip.kind == UiChip::Kind::Rule) {
         // Its way; then what's in it typed anew, a program added - its sites
         // and its app, a service of the user's own - a name; or away. Named,
@@ -5795,7 +5753,9 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::SetRouteMode:
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:
-    case UiCommand::ChooseWarpVia:
+    case UiCommand::ToggleBlockAds:
+    case UiCommand::ToggleCookieWindows:
+    case UiCommand::BlockedMenu:
     case UiCommand::AddWarpSite:
     case UiCommand::AddWarpSiteText:
     case UiCommand::ChooseRemoteDns:

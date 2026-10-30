@@ -46,7 +46,6 @@ std::vector<sovereign::tray::UiChip> SampleBoard() {
   using sovereign::tray::UiChip;
   return {
       {.kind = UiChip::Kind::Russia, .index = 0, .bucket = 0, .text = L"Российские сайты", .detail = {}, .icon = {}, .logo = "russia"},
-      {.kind = UiChip::Kind::Ads, .index = 0, .bucket = 2, .text = L"Реклама", .detail = {}, .icon = {}, .logo = "ads"},
       {.kind = UiChip::Kind::Service, .index = 0, .bucket = 3, .text = L"Netflix", .detail = {}, .icon = {}, .logo = "netflix"},
       {.kind = UiChip::Kind::Service, .index = 1, .bucket = 3, .text = L"ChatGPT", .detail = {}, .icon = {}, .logo = "chatgpt"},
       {.kind = UiChip::Kind::Service, .index = 2, .bucket = 1, .text = L"YouTube", .detail = L"США", .icon = {}, .logo = "youtube"},
@@ -231,6 +230,12 @@ int Snapshots(const std::wstring& dir) {
     routed.routing.listsFailed = true;
     sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 1100, 96,
                                               dir + L"\\routing-lists-failed.png");
+    // Nothing blocked by hand: the block is a quiet line, not a card.
+    routed.routing.lists.clear();
+    routed.routing.board = SampleBoard();
+    std::erase_if(routed.routing.board, [](const sovereign::tray::UiChip& chip) { return chip.bucket == 2; });
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 900, 96,
+                                              dir + L"\\routing-block-empty.png");
   });
   // The checks: run, one warning, one failing, one running, speed and an address.
   variant([&](UiContent& checked) {

@@ -1647,29 +1647,30 @@ class Painter {
   }
 
   // The board: a bucket a way - through the proxy, directly, through WARP,
-  // blocked - with what goes there in it: services, sites, programs, the
-  // Russian sites and the ads lists, wrapped in rows. The bucket everything
+  // blocked - with what goes there in it: services, sites, programs and the
+  // Russian sites, wrapped in rows. The bucket everything
   // else goes to (the mode, Routing's switch) doesn't show what changes
   // nothing there (UiChip::idle) and isn't there at all with nothing else in
   // it - the others are the mode's exceptions; an empty one is its head alone. A click
   // on one: where it goes instead, or away (ChipMenu); the "+" in a bucket's
   // corner: what can go there, a site typed across the bucket (BoardAdd).
-  // WARP's bucket says how WARP goes, a click on that picks over the proxy or
-  // directly (ChooseWarpVia); its "?" says what WARP is.
+  // WARP's bucket says how WARP goes (over the VPN, or directly where that got
+  // nothing through - its own call, no pick); its "?" says what WARP is. The
+  // block is a situational one: with nothing in it, a quiet line of its own
+  // under the board, not a card (30.10.2026, his: "оставил тут просто чтоб он
+  // не мешался"); the ads and the cookie windows are the settings' switches.
   float Board(Layout& l, const UiRouting& r, float x0, float x1, float y) const {
     struct Bucket {
       int id;
       const wchar_t* name;
       std::wstring note;
       std::wstring hint;
-      UiCommand noteCommand = UiCommand::Toggle;  // Toggle: the note is just said
     };
     const std::wstring warpHint =
         L"WARP — бесплатный выход через Cloudflare. Выручает там, где сайт не пускает с адресов VPN-серверов "
         L"или режет контент (ChatGPT, Netflix): сайт видит адрес Cloudflare. Google его адреса не любит — "
         L"Gemini и поиск через WARP упрутся в капчу.\n\nWARP идёт поверх "
-        L"твоего VPN — провайдер его не видит. Не проходит так — Sovereign сам пустит WARP напрямую. "
-        L"Выбрать вручную — нажми «через …» справа от названия.";
+        L"твоего VPN — провайдер его не видит. Не проходит так — Sovereign сам пустит WARP напрямую.";
     // Where everything else goes: said on that bucket, with how many it doesn't show.
     const int restBucket = r.finalDirect ? kBucketDirect : kBucketProxy;
     const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
@@ -1683,7 +1684,7 @@ class Painter {
          restBucket == kBucketProxy ? restHint : std::wstring()},
         {kBucketDirect, L"Напрямую", restBucket == kBucketDirect ? rest : std::wstring(),
          restBucket == kBucketDirect ? restHint : std::wstring()},
-        {kBucketWarp, L"Через WARP", r.warpState, warpHint, r.warp ? UiCommand::ChooseWarpVia : UiCommand::Toggle},
+        {kBucketWarp, L"Через WARP", r.warpState, warpHint},
         {kBucketBlock, L"Блок", std::wstring(), std::wstring()},
     }};
     constexpr float kHead = 42;
@@ -1715,6 +1716,22 @@ class Painter {
       if (b.id == restBucket && placed.empty()) {
         continue;  // where everything else goes, and nothing else: not an exception, not shown
       }
+      if (b.id == kBucketBlock && placed.empty()) {
+        // Nothing blocked by hand: a muted line and its "+", no card - it's
+        // there to be found, not to be looked at.
+        constexpr float kQuiet = 32;
+        const float nameWidth = TextWidth(b.name, caption_.get());
+        l.items.push_back(Make(Kind::Muted, {left + 2, y, left + 2 + nameWidth + 4, y + kQuiet}, b.name));
+        HintAfter(l, b.name, caption_.get(), left + 2, right - 40, y + kQuiet / 2,
+                  L"Что сюда попадёт, не откроется: ни сайт, ни программа. Пока там пусто — блокировать нечего. "
+                  L"Рекламу и баннеры cookie убирают настройки.");
+        Item add = CommandItem(Kind::IconButton, {right - 32, y, right, y + kQuiet}, L"Добавить", kGlyphAdd,
+                               UiCommand::BoardAdd, b.id);
+        add.tip = std::format(L"Добавить в «{}»: сервис, программу или сайт", b.name);
+        l.items.push_back(std::move(add));
+        y += kQuiet + 8;
+        continue;
+      }
       const float h = placed.empty() ? kHead + 2 : kHead + cy + kTag + 12;  // empty: its head alone
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
       const float nameWidth = TextWidth(b.name, heading_.get());
@@ -1725,17 +1742,7 @@ class Painter {
         noteLeft += kHint + 6;
       }
       if (!b.note.empty()) {
-        const D2D1_RECT_F at = {noteLeft, y + 6, right - 40, y + kHead - 4};
-        if (b.noteCommand == UiCommand::Toggle) {
-          l.items.push_back(Make(Kind::Muted, at, b.note));
-        } else {
-          // A click picks another: a chevron after it, like a value row's.
-          const float w = std::min(TextWidth(b.note + L" ›", caption_.get()) + 4, at.right - at.left);
-          Item note = CommandItem(Kind::Muted, {at.left, at.top, at.left + w, at.bottom}, b.note + L" ›", nullptr,
-                                  b.noteCommand);
-          note.tip = L"Как идёт WARP: поверх VPN или напрямую";
-          l.items.push_back(std::move(note));
-        }
+        l.items.push_back(Make(Kind::Muted, {noteLeft, y + 6, right - 40, y + kHead - 4}, b.note));
       }
       Item add = CommandItem(Kind::IconButton, {right - 32, y + 7, right, y + 39}, L"Добавить", kGlyphAdd,
                              UiCommand::BoardAdd, b.id);
@@ -3093,6 +3100,40 @@ class Painter {
     }
     if (!c.killSwitchError.empty()) {
       y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
+    }
+
+    // What's cut on the way: the ads and the cookie windows. Switches, not a
+    // way to somewhere - they were the routing board's block's chips till
+    // 30.10.2026 (his: "не особо клеятся в блоке"). What was blocked lately
+    // is a row under them: a click lets one through.
+    y = Heading(l, L"Реклама", x0, x1, y);
+    {
+      const std::size_t card = open(y);
+      float top = y;
+      Item ads = CommandItem(Kind::Switch, row(top), L"Блокировать рекламу", nullptr, UiCommand::ToggleBlockAds);
+      ads.checked = c.routing.blockAds;
+      l.items.push_back(std::move(ads));
+      HintAfter(l, L"Блокировать рекламу", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+                L"Запросы к рекламным и трекерным серверам по спискам никуда не уходят: страницы грузятся без "
+                L"рекламы. Сломалось что-то нужное — «Недавно заблокировано» ниже: нажми имя, и оно пойдёт дальше.");
+      top += kRow;
+      line(top);
+      Item cookies =
+          CommandItem(Kind::Switch, row(top), L"Убирать баннеры cookie", nullptr, UiCommand::ToggleCookieWindows);
+      cookies.checked = c.routing.cookieWindows;
+      l.items.push_back(std::move(cookies));
+      HintAfter(l, L"Убирать баннеры cookie", body_.get(), x0 + 20, x1 - 80, top + kRow / 2,
+                L"Убирает окна «принять cookie» OneTrust, Cookiebot и подобные. Своё окно сайта (TikTok, "
+                L"DeepSeek) — нет: это не скрипт со стороны.");
+      top += kRow;
+      if (c.routing.blockAds || c.routing.cookieWindows) {
+        line(top);
+        Item recent = CommandItem(Kind::ValueRow, row(top), L"Недавно заблокировано", nullptr, UiCommand::BlockedMenu);
+        recent.detail = L"пропустить нужное";
+        l.items.push_back(std::move(recent));
+        top += kRow;
+      }
+      y = close(card, top);
     }
 
     // The fine settings, folded: QUIC, IPv4, DNS - auto by default, seldom

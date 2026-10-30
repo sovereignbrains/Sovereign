@@ -154,7 +154,10 @@ struct RoutingSettings {
   // there's an account; only rules with Action::Warp go to it (IPv6 of
   // everything through it made WARP the way out for most sites - dropped).
   bool warp = false;
-  bool warpViaProxy = true;  // WireGuard to Cloudflare over the proxy (else directly)
+  // WireGuard to Cloudflare over the proxy (else directly). Not a setting and
+  // not kept: the tray turns it off for a while where no server gets WARP
+  // through (main.cpp WatchWarp); there is no pick of it (30.10.2026).
+  bool warpViaProxy = true;
   std::optional<WarpAccount> warpAccount;
 };
 
