@@ -245,6 +245,8 @@ struct Item {
   bool hinted = false;  // a ValueRow with a "?" after its title: the value starts after that
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
   bool chrome = false;  // an IconButton of the title bar (DrawChrome): its pill inset from the bar's edges
+  bool bank = false;    // a title bar key in the bank's housing (Layout::bank): its pill sits inside it
+  bool engraved = false;  // a Muted label set as engraved capitals (engraved_)
 };
 
 // What an item's tip says: a "?"'s text, its own tip, an icon button's name;
@@ -263,6 +265,8 @@ struct Layout {
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
   std::optional<D2D1_RECT_F> logBox;
+  std::optional<D2D1_RECT_F> bank;  // the title bar's keys' one housing, `bankKeys` cells in it (DrawBank); fixed
+  int bankKeys = 0;
   std::optional<D2D1_RECT_F> glow;  // the main screen's switch: a light behind it, under it all (DrawBackdrop)
 };
 
@@ -775,6 +779,7 @@ class Painter {
     trailing_ = MakeFormat(Text(), 12.5f);
     trailing_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     pill_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    engraved_ = MakeFormat(Text(), 10.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_ = MakeFormat(Text(), 11, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     tip_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
@@ -931,6 +936,10 @@ class Painter {
       if (live != nullptr) {
         DrawLive(k, *live, *l.glow);  // under everything else: behind the glass, under the cards
       }
+    }
+
+    if (l.bank) {
+      DrawBank(k, *l.bank, l.bankKeys);
     }
 
     bool clipped = false;
@@ -1178,6 +1187,27 @@ class Painter {
     }
     void Line(D2D1_POINT_2F a, D2D1_POINT_2F z, D2D1_COLOR_F c, float width = 1) const {
       t->DrawLine(a, z, Color(c), width);
+    }
+    // Metal under a light from above: a face of `r`, a bright 1 px edge along
+    // its top, a dark one along its bottom, a hairline round it. Pressed, the
+    // light is gone and the face sinks (a dark edge on top instead).
+    void Bevel(D2D1_RECT_F r, float radius, float face, bool pressed) const {
+      Round(r, radius, Rgb(255, 255, 255, pressed ? face * 0.5f : face));
+      Outline(r, radius, Rgb(255, 255, 255, 0.07f));
+      const float inset = radius * 0.8f;
+      if (pressed) {
+        Line({r.left + inset, r.top + 1.5f}, {r.right - inset, r.top + 1.5f}, Rgb(0, 0, 0, 0.40f));
+      } else {
+        Line({r.left + inset, r.top + 1.5f}, {r.right - inset, r.top + 1.5f}, Rgb(255, 255, 255, 0.11f));
+        Line({r.left + inset, r.bottom - 1.5f}, {r.right - inset, r.bottom - 1.5f}, Rgb(0, 0, 0, 0.32f));
+      }
+    }
+    // A pilot lamp: a point of `c` in a halo that thins out.
+    void Led(D2D1_POINT_2F at, float radius, D2D1_COLOR_F c) const {
+      for (const auto [grow, alpha] : {std::pair{3.0f, 0.07f}, std::pair{2.0f, 0.12f}, std::pair{1.0f, 0.22f}}) {
+        t->FillEllipse(D2D1::Ellipse(at, radius + grow, radius + grow), Color({c.r, c.g, c.b, c.a * alpha}));
+      }
+      t->FillEllipse(D2D1::Ellipse(at, radius, radius), Color(c));
     }
     void Text(std::wstring_view s, IDWriteTextFormat* f, D2D1_RECT_F r, D2D1_COLOR_F c) const {
       if (s.empty()) {
@@ -1639,7 +1669,7 @@ class Painter {
     // installs it now.
     std::optional<Item> update;
     if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading || c.update == UiUpdate::Waiting) {
-      const float wide = 8 + 16 + 6 + TextWidth(c.updateVersion, pill_.get()) + 12;
+      const float wide = 4 + 22 + TextWidth(c.updateVersion, pill_.get()) + 12;
       const float w = left + wide <= right - 4 ? wide : kKey;
       update = chrome(CommandItem(Kind::IconButton, {left, 0, left + w, kCaption}, L"Обновить до " + c.updateVersion,
                                   kGlyphDownload, UiCommand::InstallUpdate));
@@ -1666,6 +1696,14 @@ class Painter {
     l.items.push_back(std::move(report));
     if (update) {
       l.items.push_back(std::move(*update));
+    }
+    if (page == UiPage::Overview && keys.size() > 1) {
+      // The page keys share one housing, a cell each.
+      for (Item& key : keys) {
+        key.bank = true;
+      }
+      l.bank = D2D1_RECT_F{keys.back().rect.left, kCaption / 2 - 15, keys.front().rect.right, kCaption / 2 + 15};
+      l.bankKeys = static_cast<int>(keys.size());
     }
     for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
       l.items.push_back(std::move(*it));
@@ -1814,8 +1852,10 @@ class Painter {
                            UiCommand::AddMenu);
     add.tip = L"Добавить: ссылка из буфера, QR-код с экрана, файл";
     l.items.push_back(std::move(add));
-    l.items.push_back(Make(Kind::Muted, {left, y + 9, right - addWidth - 8, y + kHeader - 9},
-                           std::format(L"КОНФИГУРАЦИИ ({})", shown.size())));
+    Item label = Make(Kind::Muted, {left, y + 9, right - addWidth - 8, y + kHeader - 9},
+                      std::format(L"КОНФИГУРАЦИИ · {}", shown.size()));
+    label.engraved = true;
+    l.items.push_back(std::move(label));
     l.items.push_back(Make(Kind::Divider, {x0 + 1, y + kHeader, x1 - 1, y + kHeader + 1}));
 
     float top = y + kHeader + 1;
@@ -3018,12 +3058,15 @@ class Painter {
         }
         k.Outline(r, kRadius, Rgb(255, 255, 255, it.glass ? 0.10f : 0.06f));
         break;
-      case Kind::Divider: k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(255, 255, 255, 0.06f)); break;
+      case Kind::Divider:  // a groove cut in the panel: dark, and the lit lip under it
+        k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(0, 0, 0, 0.35f));
+        k.Line({r.left, r.top + 1.5f}, {r.right, r.top + 1.5f}, Rgb(255, 255, 255, 0.055f));
+        break;
       case Kind::Title: k.Text(it.text, title_.get(), r, primary); break;
       case Kind::Heading: k.Text(it.text, heading_.get(), r, primary); break;
       case Kind::Text: k.Text(it.text, body_.get(), r, it.warn ? FromColorRef(ui::kDanger) : primary); break;
       case Kind::Muted:  // one that picks something (a Command): brighter under the mouse
-        k.Text(it.text, caption_.get(), r,
+        k.Text(it.engraved ? Spaced(it.text) : it.text, it.engraved ? engraved_.get() : caption_.get(), r,
                it.warn ? FromColorRef(ui::kDanger)
                        : (hovered && it.action == ItemAction::Command ? primary : secondary));
         break;
@@ -3252,9 +3295,14 @@ class Painter {
         k.Text(it.text, chip_.get(), r, it.checked ? accent : secondary);
         break;
       case Kind::Pill: {
+        // A window cut into the panel: dark, a hairline, a shadow along its top edge.
         const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kWarning) : secondary;
-        k.Round(r, 6, it.warn ? FromColorRef(ui::kWarning, 0.12f) : Rgb(255, 255, 255, 0.05f));
-        k.Outline(r, 6, it.warn ? FromColorRef(ui::kWarning, 0.35f) : Rgb(255, 255, 255, 0.10f));
+        k.Round(r, 5, Rgb(0, 0, 0, 0.30f));
+        if (it.warn) {
+          k.Round(r, 5, FromColorRef(ui::kWarning, 0.10f));
+        }
+        k.Outline(r, 5, it.warn ? FromColorRef(ui::kWarning, 0.40f) : Rgb(255, 255, 255, 0.08f));
+        k.Line({r.left + 4, r.top + 1.5f}, {r.right - 4, r.top + 1.5f}, Rgb(0, 0, 0, 0.35f));
         k.Text(it.text, caption_.get(), {r.left + kPillPad, r.top, r.right, r.bottom}, ink);
         break;
       }
@@ -3496,6 +3544,14 @@ class Painter {
     k.Round(r, 6, fill);
     if (it.kind == Kind::Button) {
       k.Outline(r, 6, Rgb(255, 255, 255, 0.07f));
+      if (it.enabled) {  // a machined face: the light on its top edge, the shade under
+        if (pressed) {
+          k.Line({r.left + 5, r.top + 1.5f}, {r.right - 5, r.top + 1.5f}, Rgb(0, 0, 0, 0.40f));
+        } else {
+          k.Line({r.left + 5, r.top + 1.5f}, {r.right - 5, r.top + 1.5f}, Rgb(255, 255, 255, 0.12f));
+          k.Line({r.left + 5, r.bottom - 1.5f}, {r.right - 5, r.bottom - 1.5f}, Rgb(0, 0, 0, 0.30f));
+        }
+      }
     }
     // Glyph and text centered together.
     float textWidth = 0;
@@ -3733,7 +3789,34 @@ class Painter {
       const float cy = (it.rect.top + it.rect.bottom) / 2;
       return {it.rect.left + 2, cy - 14, it.rect.right - 2, cy + 14};
     }
+    if (it.bank) {  // the housing's cell, a step in from its edges
+      return {it.rect.left + 3, it.rect.top + 7, it.rect.right - 3, it.rect.bottom - 7};
+    }
     return ChromePill(it.rect);
+  }
+  // Capitals cut into a panel breathe: a hair space between the letters (a
+  // text format has no letter spacing; only a layout has).
+  static std::wstring Spaced(std::wstring_view s) {
+    std::wstring out;
+    for (const wchar_t ch : s) {
+      if (!out.empty() && ch != L' ' && out.back() != L' ') {
+        out += L'\x200A';
+      }
+      out += ch;
+    }
+    return out;
+  }
+  // The title bar's keys of the main screen in one housing, like a module on
+  // a rack: a face lit from above, a hairline round it, and a groove (dark,
+  // then light) between the keys.
+  void DrawBank(const Canvas& k, D2D1_RECT_F r, int keys) const {
+    k.Bevel(r, 9, 0.035f, false);
+    const float cell = (r.right - r.left) / static_cast<float>(keys);
+    for (int i = 1; i < keys; ++i) {
+      const float x = std::floor(r.left + cell * static_cast<float>(i)) + 0.5f;
+      k.Line({x, r.top + 8}, {x, r.bottom - 8}, Rgb(0, 0, 0, 0.45f));
+      k.Line({x + 1, r.top + 8}, {x + 1, r.bottom - 8}, Rgb(255, 255, 255, 0.06f));
+    }
   }
   static D2D1_RECT_F ChromePill(D2D1_RECT_F r) {
     const float cx = (r.left + r.right) / 2;
@@ -3747,26 +3830,46 @@ class Painter {
   void DrawChrome(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
     const D2D1_RECT_F r = it.rect;
     const bool cross = it.glyph == kGlyphClose;
-    if (hovered || pressed) {
+    if (it.bank) {
+      // A key in the housing: under the pointer it rises (a lit face), pressed it sinks.
+      const D2D1_RECT_F cap = KeyPill(it);
+      if (pressed) {
+        k.Bevel(cap, 6, 0.05f, true);
+      } else if (hovered) {
+        k.Bevel(cap, 6, 0.09f, false);
+      }
+      const float drop = pressed ? 1.0f : 0.0f;
+      k.Text(it.glyph, glyph_.get(), {r.left, r.top + drop, r.right, r.bottom + drop},
+             !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f)
+             : hovered   ? FromColorRef(ui::kPrimaryText)
+                         : FromColorRef(ui::kSecondaryText));
+      return;
+    }
+    if (!it.checked && (hovered || pressed)) {
       k.Round(ChromePill(r), 8,
-              cross        ? FromColorRef(ui::kDanger, pressed ? 0.14f : 0.22f)
-              : it.checked ? FromColorRef(ui::kAccent, pressed ? 0.12f : 0.20f)
-                           : Rgb(255, 255, 255, pressed ? 0.05f : 0.08f));
+              cross ? FromColorRef(ui::kDanger, pressed ? 0.14f : 0.22f)
+                    : Rgb(255, 255, 255, pressed ? 0.05f : 0.08f));
     }
     // Checked (a new version's key, Caption): a solid accent pill with a
     // halo, its number on it where it fits - the one thing on the bar that's
     // news (30.10.2026, his: "ахуенный значок"; it was the arrow in the
     // accent alone, lost among the keys).
     if (it.checked) {
+      // An indicator window: a dark recess with the accent's hairline and a
+      // pilot lamp lit in it, the version in white (30.10.2026: the solid
+      // blue pill was a button; this is a reading).
       const D2D1_RECT_F pill = KeyPill(it);
-      k.Round(Inflate(pill, 3), 11, FromColorRef(ui::kAccent, hovered ? 0.30f : 0.20f));
-      k.Round(pill, 8, FromColorRef(ui::kAccent, pressed ? 0.8f : (hovered ? 0.92f : 1.0f)));
-      const D2D1_COLOR_F dark = Rgb(12, 20, 36);
+      const D2D1_COLOR_F lamp = FromColorRef(ui::kAccent);
+      k.Round(pill, 7, Rgb(0, 0, 0, 0.38f));
+      k.Round(pill, 7, FromColorRef(ui::kAccent, pressed ? 0.04f : (hovered ? 0.16f : 0.08f)));
+      k.Outline(pill, 7, FromColorRef(ui::kAccent, hovered ? 0.85f : 0.50f));
+      k.Line({pill.left + 6, pill.top + 1.5f}, {pill.right - 6, pill.top + 1.5f}, Rgb(0, 0, 0, 0.45f));
       if (it.detail.empty()) {
-        k.Text(it.glyph, glyph_.get(), r, dark);
+        k.Text(it.glyph, glyph_.get(), r, FromColorRef(ui::kPrimaryText));
+        k.Led({pill.right - 5, pill.top + 5}, 2.0f, lamp);
       } else {
-        k.Text(it.glyph, glyph_.get(), {pill.left + 4, r.top, pill.left + 26, r.bottom}, dark);
-        k.Text(it.detail, pill_.get(), {pill.left + 28, r.top, pill.right, r.bottom}, dark);
+        k.Led({pill.left + 12, (pill.top + pill.bottom) / 2}, 2.5f, lamp);
+        k.Text(it.detail, pill_.get(), {pill.left + 22, r.top, pill.right, r.bottom}, FromColorRef(ui::kPrimaryText));
       }
       return;
     }
@@ -3816,6 +3919,7 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> trailing_;  // a result on a row's right, cut with "…"
   wil::com_ptr<IDWriteTextFormat> hint_;      // the "?" of a hint
   wil::com_ptr<IDWriteTextFormat> pill_;      // a new version's number on its pill in the title bar
+  wil::com_ptr<IDWriteTextFormat> engraved_;  // a panel's label: small capitals, spaced
   wil::com_ptr<IDWriteTextFormat> tip_;       // a tip's text, wrapped
   wil::com_ptr<IDWriteTextFormat> ask_;       // a question's title, wrapped
   wil::com_ptr<IDWriteTextFormat> glyph_;
