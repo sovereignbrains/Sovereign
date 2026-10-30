@@ -130,6 +130,9 @@ void TestParsesSites() {
       R"({"site":"chatgpt","state":"blocked"},{"site":"instagram","state":"fail","error":"i/o timeout"},)"
       R"({"site":"Bad Site!","state":"ok"},{"site":"telegram","state":"???"},{"state":"ok"},7]})");
   CHECK(got && got->pending && got->error.empty() && got->sites.size() == 4);
+  if (!got || got->sites.size() < 4) {
+    return;
+  }
   CHECK(got->sites[0].site == "youtube" && got->sites[0].state == State::Ok);
   CHECK(got->sites[1].site == "chatgpt" && got->sites[1].state == State::Blocked);
   CHECK(got->sites[2].site == "instagram" && got->sites[2].state == State::Fail);
