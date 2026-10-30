@@ -1737,8 +1737,10 @@ class Painter {
         if (chip.bucket != b.id || chip.idle) {
           continue;
         }
-        float w = 20 + TextWidth(chip.text, body_.get()) + (chip.icon.empty() && chip.logo.empty() ? 0.0f : 22.0f) +
-                  (chip.detail.empty() ? 0.0f : 6 + TextWidth(chip.detail, caption_.get()));
+        // Whole pixels up: a chip as wide as its text to the last float got its
+        // last letters trimmed to "…" (brave.exe -> "brave.e…", 30.10.2026).
+        float w = 20 + std::ceil(TextWidth(chip.text, body_.get())) + (chip.icon.empty() && chip.logo.empty() ? 0.0f : 22.0f) +
+                  (chip.detail.empty() ? 0.0f : 6 + std::ceil(TextWidth(chip.detail, caption_.get())));
         if (w > right - left) {
           w = right - left;
         }
@@ -3643,10 +3645,10 @@ class Painter {
           k.t->DrawBitmap(icon, {left, cy - 8, left + 16, cy + 8});
           left += 22;
         }
-        k.Text(it.text, body_.get(), {left, r.top, r.right - 10, r.bottom}, primary);
+        k.Text(it.text, body_.get(), {left, r.top, r.right - 8, r.bottom}, primary);  // 2 of slack: see Board
         if (!it.detail.empty()) {
-          const float after = left + TextWidth(it.text, body_.get()) + 6;
-          k.Text(it.detail, caption_.get(), {after, r.top, r.right - 10, r.bottom}, secondary);
+          const float after = left + std::ceil(TextWidth(it.text, body_.get())) + 6;
+          k.Text(it.detail, caption_.get(), {after, r.top, r.right - 8, r.bottom}, secondary);
         }
         break;
       }
