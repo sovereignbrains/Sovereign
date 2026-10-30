@@ -476,6 +476,7 @@ nlohmann::json RoutingToJson(const RoutingSettings& s) {
           {"localDns", s.localDns == RoutingSettings::LocalDns::Google   ? "google"
                        : s.localDns == RoutingSettings::LocalDns::System ? "system"
                        : s.localDns == RoutingSettings::LocalDns::Quad9  ? "quad9"
+                       : s.localDns == RoutingSettings::LocalDns::Yandex ? "yandex"
                        : s.localDns == RoutingSettings::LocalDns::Auto   ? "auto"
                        : s.localDns == RoutingSettings::LocalDns::Custom ? "custom"
                                                                           : "cloudflare"},
@@ -571,6 +572,7 @@ RoutingSettings RoutingFromJson(const nlohmann::json& json) {
   s.localDns = local == "google"       ? RoutingSettings::LocalDns::Google
                : local == "system"     ? RoutingSettings::LocalDns::System
                : local == "quad9"      ? RoutingSettings::LocalDns::Quad9
+               : local == "yandex"     ? RoutingSettings::LocalDns::Yandex
                : local == "cloudflare" ? RoutingSettings::LocalDns::Cloudflare
                : local == "custom" && !s.localDnsCustom.empty() ? RoutingSettings::LocalDns::Custom
                                                                  : RoutingSettings::LocalDns::Auto;
@@ -1561,7 +1563,7 @@ std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns p
     pick = LocalDns::Cloudflare;  // auto: the encrypted ones from Cloudflare, the system's last
   }
   std::vector<LocalDns> order{pick};
-  for (const LocalDns dns : {LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::System}) {
+  for (const LocalDns dns : {LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::Yandex, LocalDns::System}) {
     if (dns != pick && dns != LocalDns::System) {
       order.push_back(dns);
     }
@@ -1578,6 +1580,7 @@ std::string_view LocalDnsAddress(RoutingSettings::LocalDns dns) {
     case RoutingSettings::LocalDns::Cloudflare: return "1.1.1.1";
     case RoutingSettings::LocalDns::Google: return "8.8.8.8";
     case RoutingSettings::LocalDns::Quad9: return "9.9.9.9";
+    case RoutingSettings::LocalDns::Yandex: return "77.88.8.8";  // its certificate names the address; HTTP/2 only
     case RoutingSettings::LocalDns::System:
     case RoutingSettings::LocalDns::Custom: break;
   }
@@ -1589,6 +1592,7 @@ std::string_view LocalDnsName(RoutingSettings::LocalDns dns) {
     case RoutingSettings::LocalDns::Cloudflare: return "Cloudflare";
     case RoutingSettings::LocalDns::Google: return "Google";
     case RoutingSettings::LocalDns::Quad9: return "Quad9";
+    case RoutingSettings::LocalDns::Yandex: return "Яндекс";
     case RoutingSettings::LocalDns::Auto: return "авто";
     case RoutingSettings::LocalDns::Custom: return "свой";
     case RoutingSettings::LocalDns::System: break;

@@ -401,7 +401,7 @@ enum class UiCommand : std::uint8_t {
   OpenFolder,
   Exit,
   Reconnect,     // the connection stopped and started again with the config as it is (the checks' way out)
-  ToolsMenu,     // anchor: the main screen's tools - the checks, the log, the report
+  OpenChecks,    // the checks' page, the usual ones run on it
   ReportProblem, // a GitHub issue opened with the client's report filled in (problem_report.h)
 };
 

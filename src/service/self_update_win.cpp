@@ -98,8 +98,11 @@ std::string SelfUpdate::Install(const std::string& version, const std::string& i
   if (tray::IsDevelopmentBuild(current_)) {
     return "сборка для разработки не обновляется";
   }
-  if (*wanted <= current_) {
-    return "эта версия не новее установленной";
+  // The same version again is a repair: an update cut short (Windows
+  // restarting under it, 30.10.2026) leaves this service new and the tray
+  // old, and the tray asks for the version this service already is.
+  if (*wanted < current_) {
+    return "эта версия старее установленной";
   }
   // What the installer must be: the release's own word, from GitHub.
   const auto checksumText = tray::Download(Widen(tray::ChecksumUrl(*wanted)), userAgent_, kMaxChecksumBytes);

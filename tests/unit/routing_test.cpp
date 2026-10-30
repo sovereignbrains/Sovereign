@@ -1032,13 +1032,21 @@ void TestRussiaWays() {
 void TestLocalDnsFallback() {
   using LocalDns = RoutingSettings::LocalDns;
   CHECK(LocalDnsOrder(LocalDns::Google) ==
-        (std::vector{LocalDns::Google, LocalDns::Cloudflare, LocalDns::Quad9, LocalDns::System}));
+        (std::vector{LocalDns::Google, LocalDns::Cloudflare, LocalDns::Quad9, LocalDns::Yandex, LocalDns::System}));
   CHECK(LocalDnsOrder(LocalDns::Quad9).front() == LocalDns::Quad9 && LocalDnsOrder(LocalDns::Quad9).back() == LocalDns::System);
   // The system's picked: it first (a failing system resolver doesn't say an address, so it's never left).
   CHECK(LocalDnsOrder(LocalDns::System) ==
-        (std::vector{LocalDns::System, LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9}));
+        (std::vector{LocalDns::System, LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::Yandex}));
+  CHECK(LocalDnsOrder(LocalDns::Yandex) ==
+        (std::vector{LocalDns::Yandex, LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9, LocalDns::System}));
   CHECK(LocalDnsAddress(LocalDns::Google) == "8.8.8.8" && LocalDnsAddress(LocalDns::System).empty());
+  CHECK(LocalDnsAddress(LocalDns::Yandex) == "77.88.8.8");
   CHECK(LocalDnsName(LocalDns::Quad9) == "Quad9");
+  {
+    RoutingSettings s;
+    s.localDns = LocalDns::Yandex;
+    CHECK(RoutingFromJson(json::parse(RoutingToJson(s).dump())).localDns == LocalDns::Yandex);
+  }
 
   // The lines the box wrote that evening.
   CHECK(LocalDnsUnreachable("ERROR[0101] outbound/urltest[auto]: lookup main.spacevpn.com: dial tcp 8.8.8.8:443: "

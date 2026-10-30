@@ -1217,7 +1217,8 @@ class Worker {
         break;
       }
       case RoutingChange::What::LocalDns: {
-        const auto pick = static_cast<RoutingSettings::LocalDns>(std::clamp(change.value, 0, 5));
+        const auto pick = static_cast<RoutingSettings::LocalDns>(
+          std::clamp(change.value, 0, static_cast<int>(RoutingSettings::LocalDns::Yandex)));
         if (pick == RoutingSettings::LocalDns::Custom) {
           if (!sovereign::tray::ParseCustomDns(change.text)) {
             break;
@@ -4708,6 +4709,7 @@ UiContent ContentFrom(const View& v) {
   using LocalDnsPick = RoutingSettings::LocalDns;
   const auto dnsLogo = [](LocalDnsPick dns) {
     return dns == LocalDnsPick::Google ? "google" : dns == LocalDnsPick::Quad9 ? "quad9"
+           : dns == LocalDnsPick::Yandex ? "yandex"
            : dns == LocalDnsPick::System || dns == LocalDnsPick::Custom ? "" : "cloudflare";
   };
   const auto encrypted = [](LocalDnsPick dns) {
@@ -5235,15 +5237,15 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ChooseLocalDns: {
       // In the menu's order; the one that stops answering gives way to the next (routing.h LocalDnsOrder).
       using LocalDns = sovereign::tray::RoutingSettings::LocalDns;
-      static constexpr std::array kChoices = {LocalDns::Auto, LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9,
-                                              LocalDns::System, LocalDns::Custom};
+      static constexpr std::array kChoices = {LocalDns::Auto,   LocalDns::Cloudflare, LocalDns::Google, LocalDns::Quad9,
+                                              LocalDns::Yandex, LocalDns::System,     LocalDns::Custom};
       const auto current = std::find(kChoices.begin(), kChoices.end(), r.localDns) - kChoices.begin();
       if (const auto picked = PickFromMenu(owner, args.anchor,
                                            {L"Авто (Cloudflare, не отвечает — следующий)", L"Cloudflare (DoH, зашифрованный)",
                                             L"Google (DoH, зашифрованный)", L"Quad9 (DoH, зашифрованный)",
-                                            L"Системный (провайдера)", L"Свой адрес…"},
+                                            L"Яндекс (DoH, зашифрованный)", L"Системный (провайдера)", L"Свой адрес…"},
                                            static_cast<int>(current),
-                                           ServiceMenuIcons({"", "cloudflare", "google", "quad9", "", ""}))) {
+                                           ServiceMenuIcons({"", "cloudflare", "google", "quad9", "yandex", "", ""}))) {
         if (kChoices.at(*picked) == LocalDns::Custom) {
           if (g_mainWindow != nullptr) {
             g_mainWindow->EditInPlace(UiCommand::ChooseLocalDns, 0, UiCommand::LocalDnsText, Widen(r.localDnsCustom),
@@ -5743,30 +5745,10 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       }
       break;
     }
-    case UiCommand::ToolsMenu: {  // the title bar's tools: what's run now and then, not set (16.10.2026: out of the settings)
-      std::vector<wil::unique_hbitmap> icons;
-      // a shield, the log, a speech bubble (the report: out of the settings 17.10.2026)
-      for (const wchar_t* glyph : {L"\xEA18", L"\xE8A5", L"\xED15"}) {
-        icons.push_back(GlyphMenuIcon(glyph));
-      }
-      // One way to the checks page: the speed test has its button there,
-      // and where a site goes is the routing page's, in the settings - the
-      // menu's own items for them only doubled those (23.10.2026).
-      const auto picked =
-          PickFromMenu(owner, args.anchor, {L"Проверить подключение", L"Журнал", L"Сообщить о проблеме"}, -1, icons);
-      if (!picked) {
-        break;
-      }
+    case UiCommand::OpenChecks: {  // the settings' row (the title bar's wrench gone, 30.10.2026): the page, run at once
       using sovereign::tray::CheckId;
-      switch (*picked) {
-        case 0:
-          ShowMainWindow(UiPage::Checks);
-          StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6},
-                      {});
-          break;
-        case 1: ShowMainWindow(UiPage::Logs); break;
-        default: ReportProblem(owner); break;
-      }
+      ShowMainWindow(UiPage::Checks);
+      StartChecks({CheckId::Exit, CheckId::RussiaDirect, CheckId::DnsLeak, CheckId::WebRtc, CheckId::Ipv6}, {});
       break;
     }
     case UiCommand::RunChecks: {

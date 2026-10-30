@@ -262,6 +262,14 @@ int Snapshots(const std::wstring& dir) {
     updating.update = sovereign::tray::UiUpdate::Idle;
     sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Settings, logs, 400, 860, 96,
                                               dir + L"\\settings-updates-off.png");
+    // A new version on the main screen: its pill with the number, and at
+    // the narrowest window the arrow alone.
+    updating.update = sovereign::tray::UiUpdate::Available;
+    updating.updateVersion = L"0.5.52";
+    sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Overview, logs, 420, 620, 96,
+                                              dir + L"\\overview-update.png", L"Доступна версия");
+    sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Overview, logs, 360, 620, 96,
+                                              dir + L"\\overview-update-360.png");
   });
 
   // The states that look different: off with no subscription, and an error.
@@ -389,7 +397,7 @@ int Snapshots(const std::wstring& dir) {
   // The new version's key, leftmost in the bar.
   const std::array<std::pair<const wchar_t*, const wchar_t*>, 5> tips = {{
       {L"Доступна версия", L"tip-update"},
-      {L"Проверить подключение", L"tip-tools"},
+      {L"Сообщить о проблеме", L"tip-report"},
       {L"Добавить: ссылка", L"tip-add"},
       {L"Отключить VPN", L"tip-switch"},
       {L"Выбрать сервер", L"tip-server"},
@@ -398,8 +406,8 @@ int Snapshots(const std::wstring& dir) {
     sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 400, 620, 96,
                                               dir + L"\\" + name + L".png", tip);
   }
-  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\tip-tools-150.png",
-                                            L"Проверить подключение");
+  sovereign::tray::RenderMainWindowSnapshot(content, UiPage::Overview, logs, 600, 930, 144, dir + L"\\tip-report-150.png",
+                                            L"Сообщить о проблеме");
   variant([&](UiContent& routed) {
     routed.routing.warp = true;
     routed.routing.warpRegistered = true;
@@ -816,12 +824,22 @@ int LayoutTest(const std::wstring& dir) {
   idle.updateMode = sovereign::tray::UpdateMode::Off;
   idle.update = sovereign::tray::UiUpdate::Idle;
   idle.boxIsLatest = true;
+  // A new version in the bar with the longest number, and things wrong: the
+  // main screen's one line, the log's red paragraphs.
+  UiContent troubled = installing;
+  troubled.update = sovereign::tray::UiUpdate::Available;
+  troubled.display = sovereign::tray::Display::ServiceDown;
+  troubled.killSwitch = true;
+  troubled.killSwitchError = L"не удалось добавить фильтр WFP";
+  troubled.localNetwork = L"Тормозит твоя сеть, а не VPN: напрямую до интернета 900 мс.";
   struct Page {
     UiPage page;
     const wchar_t* name;
     const UiContent* content;
   };
-  const std::array<Page, 12> pages = {{{UiPage::Overview, L"overview", &content},
+  const std::array<Page, 14> pages = {{{UiPage::Overview, L"overview", &content},
+                                      {UiPage::Overview, L"overview-troubled", &troubled},
+                                      {UiPage::Logs, L"logs-troubled", &troubled},
                                       {UiPage::Servers, L"servers", &content},
                                       {UiPage::Subscription, L"subscription", &content},
                                       {UiPage::Logs, L"logs", &content},
@@ -882,7 +900,8 @@ int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - se
              : arg == L"--layout-test" ? LayoutTest(argc > 2 ? argv[2] : L"ui-layout")
                                      : Snapshots(arg);
   } catch (const wil::ResultException& e) {
-    std::fprintf(stderr, "ui-snapshot: 0x%08lx\n", static_cast<unsigned long>(e.GetErrorCode()));
+    // what(): where it was thrown, the file and line.
+    std::fprintf(stderr, "ui-snapshot: 0x%08lx %s\n", static_cast<unsigned long>(e.GetErrorCode()), e.what());
   } catch (const std::exception& e) {
     std::fprintf(stderr, "ui-snapshot: %s\n", e.what());
   }

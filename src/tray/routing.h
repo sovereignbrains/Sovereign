@@ -115,7 +115,8 @@ struct RoutingSettings {
   // LocalDnsOrder, the system's resolver last - the pick stays as it is.
   // Auto: that order from Cloudflare - the default. Custom: localDnsCustom,
   // first (ParseCustomDns); given way from only when dialled by its address.
-  enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9, Auto, Custom };
+  // Yandex: in Russia never blocked - the last of the encrypted ones before the system's.
+  enum class LocalDns : std::uint8_t { Cloudflare, Google, System, Quad9, Auto, Custom, Yandex };
   // Where the Russian sites go - Russia's domain zones, its names' lists and
   // its addresses: directly (the default, their names resolved here too),
   // through the proxy, blocked (no addresses for their names either) or
@@ -272,15 +273,15 @@ std::string DirectOutboundTag(std::string_view config);
 bool QuicBlocked(const RoutingSettings& settings, std::string_view config);
 
 // The local DNS servers in the order a failing one gives way: the user's
-// pick, then the other encrypted ones (Cloudflare, Google, Quad9), the
-// system's resolver last.
+// pick, then the other encrypted ones (Cloudflare, Google, Quad9, Yandex),
+// the system's resolver last.
 std::vector<RoutingSettings::LocalDns> LocalDnsOrder(RoutingSettings::LocalDns pick);
 
 // The address an encrypted local server is dialled at ("1.1.1.1"; Auto:
 // Cloudflare's); empty for the system's resolver and a custom one.
 std::string_view LocalDnsAddress(RoutingSettings::LocalDns dns);
 
-// "Cloudflare", "Google", "Quad9", "системный", "авто", "свой".
+// "Cloudflare", "Google", "Quad9", "Яндекс", "системный", "авто", "свой".
 std::string_view LocalDnsName(RoutingSettings::LocalDns dns);
 
 // Whether a core log line says the local server at `address`:`port` couldn't

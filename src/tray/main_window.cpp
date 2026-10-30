@@ -166,7 +166,7 @@ constexpr const wchar_t* kGlyphClock = L"\xE917";
 constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
 constexpr const wchar_t* kGlyphShield = L"\xEA18";
 constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
-constexpr const wchar_t* kGlyphTools = L"\xE90F";  // Repair: a wrench
+constexpr const wchar_t* kGlyphReport = L"\xEBE8";  // Bug: "something's wrong", plainer than the feedback bubble
 
 enum class Kind : std::uint8_t {
   Card,          // a rounded panel behind other items
@@ -560,17 +560,50 @@ std::wstring StateDetailBase(const UiContent& c) {
   return {};
 }
 
+// What's wrong, each in a few words for the main screen's one line and in
+// full, in red, at the top of the log (30.10.2026, his: "эту хуйню красную
+// уберем ... ошибки красные в журнале писать"). The subscription's trouble
+// last: its report button goes under it.
+struct Issue {
+  std::wstring brief;
+  std::wstring full;
+};
+
+std::vector<Issue> Issues(const UiContent& c) {
+  std::vector<Issue> issues;
+  if (c.display == Display::ServiceDown) {
+    issues.push_back({L"Служба Sovereign не отвечает", StateDetail(c)});
+  } else if (c.display == Display::Error) {
+    issues.push_back({L"Не удалось подключиться", StateDetail(c)});
+  }
+  if (c.lockedOut) {
+    issues.push_back({L"Интернет закрыт Kill switch'ем",
+                      L"Интернет закрыт Kill switch'ем: подключиться не удаётся — " + c.lockoutReason +
+                          L". Так настоящий IP не утечёт, но и интернета нет."});
+  }
+  if (!c.killSwitchError.empty()) {
+    issues.push_back({L"Kill switch не включился", L"Kill switch: " + c.killSwitchError});
+  }
+  if (!c.localNetwork.empty()) {
+    issues.push_back({L"Сбоит твоя сеть, а не VPN", c.localNetwork});
+  }
+  if (!c.trouble.empty() && c.troubleProfile >= 0) {
+    issues.push_back({L"Проблема с подпиской", c.trouble});
+  }
+  return issues;
+}
+
 bool AnyWaiting(const UiContent& c) {
   return std::any_of(c.profiles.begin(), c.profiles.end(), [](const UiProfile& p) { return p.waiting; });
 }
 
 // Where a page's "back" (and Esc) leads: a configuration to the list, the
-// pages the settings open back there, the rest to the overview.
+// checks to the settings, the rest to the overview.
 UiPage BackOf(UiPage page) {
   switch (page) {
     case UiPage::Profile: return UiPage::Subscription;
-    case UiPage::Routing: return UiPage::Settings;
-    default: return UiPage::Overview;  // the checks and the log too: the main screen's tools open them
+    case UiPage::Checks: return UiPage::Settings;  // its row is there
+    default: return UiPage::Overview;  // the routing and the log too: the title bar's keys open them
   }
 }
 
@@ -739,6 +772,7 @@ class Painter {
     mono_ = MakeFormat(L"Consolas", 12.5f);
     trailing_ = MakeFormat(Text(), 12.5f);
     trailing_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    pill_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_ = MakeFormat(Text(), 11, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     tip_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
@@ -935,7 +969,7 @@ class Painter {
       if (n == in.focus && in.focusVisible) {
         // A title bar key's ring goes round its pill: the cell runs to the window's edges.
         const float radius = it.chrome ? 10 : kRadius;
-        t->DrawRoundedRectangle(D2D1::RoundedRect(Inflate(it.chrome ? ChromePill(it.rect) : it.rect, 2), radius, radius),
+        t->DrawRoundedRectangle(D2D1::RoundedRect(Inflate(it.chrome ? KeyPill(it) : it.rect, 2), radius, radius),
                                 SetColor(brush.get(), Rgb(255, 255, 255, 0.9f)), 2);
       }
       if (layer) {
@@ -1531,10 +1565,9 @@ class Painter {
   }
 
   // Our own title bar (the system's is gone - Impl's WM_NCCALCSIZE): the
-  // name on the left; on the right the cross, hiding the window to the tray,
-  // and where they belong: on the main screen the tools (the checks, the
-  // log, the report - run now and then, so a click away, not in the
-  // settings) and the settings; on the configurations' list adding one (the
+  // name on the left, the report and a new version by it; on the right the
+  // cross, hiding the window to the tray, and where they belong: on the main
+  // screen the routing, the log and the settings; on the configurations' list adding one (the
   // clipboard, a QR code, a file) - the main screen has it on its
   // subscription card. Inside the settings they were in the way (he asked
   // them gone, 16.10.2026). A new version found, its key on every page (it
@@ -1560,55 +1593,78 @@ class Painter {
     hide.action = ItemAction::Hide;
     hide.tip = L"Убрать окно в трей. VPN работает дальше";
     right -= 40;
+    // The keys between them a step closer (36): on the main screen five of
+    // them, the name, the report and a new version's pill fit into 360.
+    constexpr float kKey = 36;
     std::vector<Item> keys;
+    const auto page_key = [&](const wchar_t* text, const wchar_t* glyph, UiPage to, const wchar_t* tip) {
+      Item key = chrome(Make(Kind::IconButton, {right - kKey, 0, right, kCaption}, text, glyph));
+      key.action = ItemAction::Page;
+      key.index = static_cast<int>(to);
+      key.tip = tip;
+      keys.push_back(std::move(key));
+      right -= kKey;
+    };
+    // On the main screen what is opened now and then a click away (the
+    // wrench's menu of 17.10 gone, 30.10.2026, his: "журнал и маршруты рядом
+    // с шестиренкой"); the checks are a row of the settings.
     if (page == UiPage::Overview) {
-      Item settings = chrome(Make(Kind::IconButton, {right - 40, 0, right, kCaption}, L"Настройки", kGlyphSettings));
-      settings.action = ItemAction::Page;
-      settings.index = static_cast<int>(UiPage::Settings);
-      settings.tip = L"Настройки: маршруты, Kill switch, DNS, автозапуск";
-      keys.push_back(std::move(settings));
-      right -= 40;
-      Item tools = chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
-                                      L"Инструменты: проверка, журнал", kGlyphTools, UiCommand::ToolsMenu));
-      tools.tip = L"Проверить подключение, журнал, сообщить о проблеме";
-      keys.push_back(std::move(tools));
-      right -= 40;
+      page_key(L"Настройки", kGlyphSettings, UiPage::Settings, L"Настройки: Kill switch, DNS, автозапуск, проверка");
+      page_key(L"Журнал", kGlyphLog, UiPage::Logs, L"Журнал: что делает ядро, ошибки");
+      page_key(L"Маршруты", kGlyphRoute, UiPage::Routing, L"Маршруты: что идёт через VPN, а что напрямую");
     }
     if (page == UiPage::Subscription) {
-      Item add = chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
+      Item add = chrome(CommandItem(Kind::IconButton, {right - kKey, 0, right, kCaption},
                                     L"Добавить: из буфера, QR-код, файл", kGlyphAdd, UiCommand::AddMenu));
       add.tip = L"Добавить: ссылка из буфера, QR-код с экрана, файл";
       keys.push_back(std::move(add));
-      right -= 40;
+      right -= kKey;
     }
-    // Leftmost, so the keys the hand knows stay where they were; in the
-    // accent (checked, DrawChrome). Downloading, a click opens the settings,
-    // where the update's state is told in full. Waiting for a quiet moment, a
-    // click installs it now.
-    if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading || c.update == UiUpdate::Waiting) {
-      Item update = chrome(CommandItem(Kind::IconButton, {right - 40, 0, right, kCaption},
-                                       L"Обновить до " + c.updateVersion, kGlyphDownload, UiCommand::InstallUpdate));
-      update.checked = true;
-      if (c.update == UiUpdate::Downloading) {
-        update.action = ItemAction::Page;
-        update.index = static_cast<int>(UiPage::Settings);
-        update.tip = L"Скачиваю версию " + c.updateVersion + L"…";
-      } else if (c.update == UiUpdate::Waiting) {
-        update.tip = L"Версия " + c.updateVersion +
-                     L" скачана и поставится, когда компьютер будет свободен. Нажми, чтобы поставить сейчас";
-      } else if (!c.updateError.empty()) {
-        update.tip = L"Обновление не удалось: " + c.updateError + L". Нажми, чтобы повторить";
-      } else {
-        update.tip = L"Доступна версия " + c.updateVersion + L". Нажми, чтобы обновить";
-      }
-      keys.push_back(std::move(update));
-      right -= 40;
-    }
+    // By the name: the app's own icon, its name, and the report beside them
+    // (his: "сообщить о проблеме около иконки приложения").
     Item name = Make(Kind::AppTitle, {12, 0, right - 14, kCaption}, L"Sovereign");
     name.text2 = SelfPath();
     name.scrolls = false;
+    float left = 12 + 24 + TextWidth(name.text, caption_.get()) + 6;
+    Item report = chrome(CommandItem(Kind::IconButton, {left, 0, left + kKey, kCaption}, L"Сообщить о проблеме",
+                                     kGlyphReport, UiCommand::ReportProblem));
+    report.tip = L"Сообщить о проблеме: отчёт без ключей и адресов, его можно прочитать перед отправкой";
+    left += kKey;
+    // A new version: the pill after the report, solid accent with its
+    // version on it where there's room, the arrow alone where there isn't
+    // (DrawChrome). Downloading, a click opens the settings, where the
+    // update's state is told in full. Waiting for a quiet moment, a click
+    // installs it now.
+    std::optional<Item> update;
+    if (c.update == UiUpdate::Available || c.update == UiUpdate::Downloading || c.update == UiUpdate::Waiting) {
+      const float wide = 8 + 16 + 6 + TextWidth(c.updateVersion, pill_.get()) + 12;
+      const float w = left + wide <= right - 4 ? wide : kKey;
+      update = chrome(CommandItem(Kind::IconButton, {left, 0, left + w, kCaption}, L"Обновить до " + c.updateVersion,
+                                  kGlyphDownload, UiCommand::InstallUpdate));
+      update->checked = true;
+      if (w > kKey) {
+        update->detail = c.updateVersion;
+      }
+      if (c.update == UiUpdate::Downloading) {
+        update->action = ItemAction::Page;
+        update->index = static_cast<int>(UiPage::Settings);
+        update->tip = L"Скачиваю версию " + c.updateVersion + L"…";
+      } else if (c.update == UiUpdate::Waiting) {
+        update->tip = L"Версия " + c.updateVersion +
+                      L" скачана и поставится, когда компьютер будет свободен. Нажми, чтобы поставить сейчас";
+      } else if (!c.updateError.empty()) {
+        update->tip = L"Обновление не удалось: " + c.updateError + L". Нажми, чтобы повторить";
+      } else {
+        update->tip = L"Доступна версия " + c.updateVersion + L". Нажми, чтобы обновить";
+      }
+    }
+    name.rect.right = report.rect.left;
     l.items.push_back(std::move(name));
-    // Left to right, as Tab goes: the update, the tools or "+", the settings, the cross.
+    // Left to right, as Tab goes: the report, the update, the page keys or "+", the cross.
+    l.items.push_back(std::move(report));
+    if (update) {
+      l.items.push_back(std::move(*update));
+    }
     for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
       l.items.push_back(std::move(*it));
     }
@@ -1621,21 +1677,24 @@ class Painter {
   // where it comes out. The rest of the window - routing, the checks, the
   // log, the kill switch - is in the settings, a key in the title bar.
   float Overview(Layout& l, const UiContent& c, float x0, float x1, float y, float bottom) const {
-    // The state is the cube's: words only when there's something to say -
-    // an error with the log a click away.
-    if (const std::wstring detail = StateDetail(c); !detail.empty()) {
-      const bool error = c.display == Display::Error || c.display == Display::ServiceDown;
-      const float h = error ? TextHeight(detail, wrap_.get(), x1 - x0 - 28) : TextHeight(detail, captionWrap_.get(), x1 - x0);
-      l.items.push_back(Make(error ? Kind::ErrorText : Kind::Caption, {x0, y, x1, y + h}, detail,
-                             error ? kGlyphWarning : nullptr));
-      y += h + kGap;
-      if (c.display == Display::Error) {
-        Item log = Make(Kind::Button, {x0, y, x0 + 160, y + kButton}, L"Журнал", kGlyphLog);
-        log.action = ItemAction::Page;
-        log.index = static_cast<int>(UiPage::Logs);
-        l.items.push_back(std::move(log));
-        y += kButton + kGap;
+    // The state is the cube's: words only when there's something to say.
+    // What's wrong is one quiet line, the whole of it in the log (Issues).
+    if (const std::vector<Issue> issues = Issues(c); !issues.empty()) {
+      std::wstring brief = issues.front().brief;
+      if (issues.size() > 1) {
+        brief += std::format(L" и ещё {}", issues.size() - 1);
       }
+      Item line = Make(Kind::Banner, {x0, y, x1, y + 40}, brief, kGlyphWarning);
+      line.checked = true;
+      line.action = ItemAction::Page;
+      line.index = static_cast<int>(UiPage::Logs);
+      line.tip = L"Подробности — в журнале";
+      l.items.push_back(std::move(line));
+      y += 40 + 8;
+    } else if (const std::wstring detail = StateDetail(c); !detail.empty()) {
+      const float h = TextHeight(detail, captionWrap_.get(), x1 - x0);
+      l.items.push_back(Make(Kind::Caption, {x0, y, x1, y + h}, detail));
+      y += h + kGap;
     }
 
     // What waits for a click: one line each (a new version: a key in the title bar).
@@ -1650,19 +1709,9 @@ class Painter {
     // Locked out: on, the kill switch holding the internet shut, nothing
     // getting through (main.cpp UpdateLockout) - why, and the way out.
     if (c.lockedOut) {
-      y = Paragraph(l, Kind::ErrorText,
-                    L"Интернет закрыт Kill switch'ем: подключиться не удаётся — " + c.lockoutReason +
-                        L". Так настоящий IP не утечёт, но и интернета нет.",
-                    x0, x1, y) +
-          8;
       l.items.push_back(CommandItem(Kind::Banner, {x0, y, x1, y + 40}, L"Открыть интернет без VPN", kGlyphWarning,
                                     UiCommand::OpenWithoutVpn));
       y += 40 + 8;
-    }
-
-    // The user's own network bad around the proxy too: the fault isn't the VPN's.
-    if (!c.localNetwork.empty()) {
-      y = Paragraph(l, Kind::ErrorText, c.localNetwork, x0, x1, y) + kGap;
     }
 
     y = SubscriptionCard(l, c, x0, x1, y);
@@ -1692,17 +1741,6 @@ class Painter {
       l.items.push_back(
           CommandItem(Kind::Button, {mid + 4, top, x1 - 16, top + kButton}, L"Из файла…", kGlyphFile, UiCommand::ImportFile));
       y += h + kGap;
-    }
-
-    // A subscription in trouble: said here, its report for support a click
-    // away - not three pages deep. Nothing while all is fine.
-    if (!c.trouble.empty() && c.troubleProfile >= 0) {
-      y = Paragraph(l, Kind::ErrorText, c.trouble, x0, x1, y) + 8;
-      l.items.push_back(ReportButton(c, c.troubleSupport, {x0, y, x1, y + kButton}, c.troubleProfile));
-      y += kButton + kGap;
-    }
-    if (!c.killSwitchError.empty()) {
-      y = Paragraph(l, Kind::ErrorText, L"Kill switch: " + c.killSwitchError, x0, x1, y) + kGap;
     }
 
     // The server at the foot; the switch in the middle of what's between,
@@ -2615,6 +2653,16 @@ class Painter {
     writes.tip = L"Насколько подробно ядро пишет журнал";
     l.items.push_back(std::move(writes));
 
+    // What's wrong right now, in full and in red, over the lines (the main
+    // screen has one line of it); the subscription's report under its trouble.
+    for (const Issue& issue : Issues(c)) {
+      y = Paragraph(l, Kind::ErrorText, issue.full, x0, x1, y) + 8;
+    }
+    if (!c.trouble.empty() && c.troubleProfile >= 0) {
+      l.items.push_back(ReportButton(c, c.troubleSupport, {x0, y, x1, y + kButton}, c.troubleProfile));
+      y += kButton + kGap;
+    }
+
     // Which levels are shown, with how many lines each.
     const float chip = (x1 - x0 - 3 * 6) / kLevelGroups;
     for (int i = 0; i < kLevelGroups; ++i) {
@@ -2686,8 +2734,9 @@ class Painter {
                   L"«Через VPN» — имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его "
                   L"не видит. «Напрямую» — российские сайты, твои прямые и адреса самих серверов.\n\n«Авто» "
                   L"подходит почти всем: это Cloudflare. Если DNS для прямых сайтов перестанет отвечать, Sovereign "
-                  L"возьмёт следующий: Cloudflare, Google, Quad9, в конце DNS Windows. Свой адрес пишется так: "
-                  L"77.88.8.8, tls://dns.example, https://dns.example/dns-query, quic://dns.example.");
+                  L"возьмёт следующий: Cloudflare, Google, Quad9, Яндекс, в конце DNS Windows. Яндекс — только "
+                  L"«Напрямую»: в России его не блокируют. Свой адрес пишется так: "
+                  L"1.2.3.4, tls://dns.example, https://dns.example/dns-query, quic://dns.example.");
       const float h = 2 * kRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
       Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Через VPN",
@@ -2717,7 +2766,7 @@ class Painter {
     // the local network shut), the fine settings folded. Rows in a card a line apart: the
     // card goes in first (drawn under its rows), its foot set once they're
     // in. The rest went where it belongs (17.10.2026, he: "не стакаются"):
-    // the problem report to the tools, the subscription relay to the
+    // the problem report to the title bar, the subscription relay to the
     // configurations, quitting to the tray's menu; the version and the data
     // folder are the page's foot.
     const auto open = [&](float top) {
@@ -2738,7 +2787,11 @@ class Painter {
       routing.action = ItemAction::Page;
       routing.index = static_cast<int>(UiPage::Routing);
       l.items.push_back(std::move(routing));
-      y = close(card, y + kRow);
+      line(y + kRow);
+      Item checks = CommandItem(Kind::ValueRow, row(y + kRow), L"Проверка подключения", nullptr, UiCommand::OpenChecks);
+      checks.detail = L"утечки, скорость";
+      l.items.push_back(std::move(checks));
+      y = close(card, y + 2 * kRow);
     }
 
     y = Heading(l, L"Подключение", x0, x1, y);
@@ -3012,8 +3065,11 @@ class Painter {
         break;
       }
       case Kind::Banner: {
-        k.Round(r, kRadius, FromColorRef(ui::kAccent, pressed ? 0.10f : (hovered ? 0.18f : 0.13f)));
-        const D2D1_COLOR_F ink = it.enabled ? accent : secondary;
+        // Checked: what's wrong (Overview's Issues) - in the warning's amber, not the red.
+        const COLORREF tone = it.checked ? ui::kWarning : ui::kAccent;
+        k.Round(r, kRadius, it.checked ? FromColorRef(tone, pressed ? 0.08f : (hovered ? 0.15f : 0.10f))
+                                       : FromColorRef(tone, pressed ? 0.10f : (hovered ? 0.18f : 0.13f)));
+        const D2D1_COLOR_F ink = !it.enabled ? secondary : it.checked ? FromColorRef(ui::kWarning) : accent;
         k.Text(it.glyph, glyph_.get(), {r.left + 10, r.top, r.left + 38, r.bottom}, ink);
         k.Text(it.text, body_.get(), {r.left + 44, r.top, r.right - 36, r.bottom}, ink);
         if (it.enabled) {
@@ -3230,7 +3286,7 @@ class Painter {
     const float h = std::ceil(m->height) + 2 * padY;
 
     // What it points at: a key's pill, a title's words - not the cell, the row.
-    D2D1_RECT_F at = it.chrome ? ChromePill(it.rect) : it.rect;
+    D2D1_RECT_F at = it.chrome ? KeyPill(it) : it.rect;
     if (it.kind == Kind::Title) {
       at.right = std::min(at.right, at.left + TextWidth(it.text, title_.get()));
     }
@@ -3631,6 +3687,14 @@ class Painter {
   }
   // A title bar key's pill: inset from the bar's top and the window's edge,
   // not the whole cell up to them.
+  // A key's pill; a new version's with its number on it, as wide as its cell.
+  static D2D1_RECT_F KeyPill(const Item& it) {
+    if (it.checked && !it.detail.empty()) {
+      const float cy = (it.rect.top + it.rect.bottom) / 2;
+      return {it.rect.left + 2, cy - 14, it.rect.right - 2, cy + 14};
+    }
+    return ChromePill(it.rect);
+  }
   static D2D1_RECT_F ChromePill(D2D1_RECT_F r) {
     const float cx = (r.left + r.right) / 2;
     const float cy = (r.top + r.bottom) / 2;
@@ -3649,8 +3713,23 @@ class Painter {
               : it.checked ? FromColorRef(ui::kAccent, pressed ? 0.12f : 0.20f)
                            : Rgb(255, 255, 255, pressed ? 0.05f : 0.08f));
     }
-    // Checked (a new version's key, Caption): the accent's even at rest -
-    // the one thing on the bar that's news.
+    // Checked (a new version's key, Caption): a solid accent pill with a
+    // halo, its number on it where it fits - the one thing on the bar that's
+    // news (30.10.2026, his: "ахуенный значок"; it was the arrow in the
+    // accent alone, lost among the keys).
+    if (it.checked) {
+      const D2D1_RECT_F pill = KeyPill(it);
+      k.Round(Inflate(pill, 3), 11, FromColorRef(ui::kAccent, hovered ? 0.30f : 0.20f));
+      k.Round(pill, 8, FromColorRef(ui::kAccent, pressed ? 0.8f : (hovered ? 0.92f : 1.0f)));
+      const D2D1_COLOR_F dark = Rgb(12, 20, 36);
+      if (it.detail.empty()) {
+        k.Text(it.glyph, glyph_.get(), r, dark);
+      } else {
+        k.Text(it.glyph, glyph_.get(), {pill.left + 4, r.top, pill.left + 26, r.bottom}, dark);
+        k.Text(it.detail, pill_.get(), {pill.left + 28, r.top, pill.right, r.bottom}, dark);
+      }
+      return;
+    }
     const D2D1_COLOR_F ink = !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f)
                              : it.checked ? FromColorRef(ui::kAccent)
                              : !hovered   ? FromColorRef(ui::kSecondaryText)
@@ -3696,6 +3775,7 @@ class Painter {
   wil::com_ptr<IDWriteTextFormat> mono_;
   wil::com_ptr<IDWriteTextFormat> trailing_;  // a result on a row's right, cut with "…"
   wil::com_ptr<IDWriteTextFormat> hint_;      // the "?" of a hint
+  wil::com_ptr<IDWriteTextFormat> pill_;      // a new version's number on its pill in the title bar
   wil::com_ptr<IDWriteTextFormat> tip_;       // a tip's text, wrapped
   wil::com_ptr<IDWriteTextFormat> ask_;       // a question's title, wrapped
   wil::com_ptr<IDWriteTextFormat> glyph_;
