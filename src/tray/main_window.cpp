@@ -61,6 +61,7 @@ constexpr float kMaxPage = 560;    // wider windows keep the page at this, cente
 constexpr float kRow = 44;         // a list row
 constexpr float kLatencyRow = 56;  // a server to pick: its name and latency, what the measurement is made of
 constexpr float kProfileRow = 54;  // a configuration's row: its name and its state
+constexpr float kPillPad = 8;      // a Pill's text from its edge, each side
 constexpr float kCheckRow = 42;    // a check: its title and "?", its result on the right
 constexpr float kSwitchRow = 48;   // a switch whose explanation is in its "?"
 constexpr float kHint = 18;        // a "?" that shows a tip when pointed at
@@ -202,6 +203,7 @@ enum class Kind : std::uint8_t {
   AppTitle,      // our title bar's name, after the app's icon (text2: the exe it's taken from)
   SpeedGraph,    // the speed test's throughput over time, down and up (index: its check's, UiCheck speedDown/Up)
   Question,      // MainWindow::Ask's card, the window dimmed round it (index: its UiQuestion::Tone)
+  Pill,          // a small label in a rounded outline, not a button (`warn`: amber)
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
@@ -1026,14 +1028,14 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 33> kNames = {
+    static constexpr std::array<const wchar_t*, 34> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Server",   L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
         L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter",  L"Tag",
-        L"AppTitle", L"Speed",    L"Question"};
+        L"AppTitle", L"Speed",    L"Question", L"Pill"};
     // One per Kind, in its order: a kind added or gone shifts every name after it.
-    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Question) + 1);
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Pill) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -1084,7 +1086,7 @@ class Painter {
           // A question's buttons lie over the page, which takes no click while it's open.
           const bool allowed = o.kind == Kind::Hint || o.action == ItemAction::Answer ||
                                (o.kind == Kind::IconButton && (it.kind == Kind::Title || it.kind == Kind::Card)) ||
-                               (o.kind == Kind::Muted && it.kind == Kind::Card);
+                               ((o.kind == Kind::Muted || o.kind == Kind::Button) && it.kind == Kind::Card);
           overlaps = overlaps || (over && !allowed);
         }
       }
@@ -1785,12 +1787,13 @@ class Painter {
       return y;
     }
     // A line's height: the name and the paid line, and a line more for each thing wrong.
+    constexpr float kHeader = 40;
     const auto rowHeight = [&](const UiProfile& p) {
-      return 26.0f + 22 + (p.failed ? 20.0f : 0.0f) + (p.trafficShare >= 0.8f ? 20.0f : 0.0f);
+      return 6.0f + 26 + 22 + (p.failed ? 20.0f : 0.0f) + (p.trafficShare >= 0.8f ? 20.0f : 0.0f) + 6;
     };
-    float h = 12 + 4;
+    float h = kHeader + 1;
     for (const std::size_t i : shown) {
-      h += rowHeight(c.profiles[i]) + 8;
+      h += rowHeight(c.profiles[i]);
     }
     const float left = x0 + 16;
     const float right = x1 - 16;
@@ -1802,21 +1805,52 @@ class Painter {
     card.tip = L"Конфигурации: обновить, выключить отдельные серверы";
     l.items.push_back(std::move(card));
 
-    // "+" on it: another configuration (the clipboard, a QR code, a file) -
-    // a list drops from it (he wanted it back here, 16.10.2026).
-    Item add = CommandItem(Kind::IconButton, {right - 32, y + 8, right, y + 40}, L"Добавить: из буфера, QR-код, файл",
-                           kGlyphAdd, UiCommand::AddMenu);
-    add.key = true;
+    // The head: how many, and "+ Добавить" - another configuration (the
+    // clipboard, a QR code, a file), a list drops from it (he wanted it back
+    // here 16.10.2026, and said a bare "+" had nowhere to sit, 30.10.2026).
+    const std::wstring addText = L"Добавить";
+    const float addWidth = TextWidth(addText, body_.get()) + 26 + 28;
+    Item add = CommandItem(Kind::Button, {right - addWidth, y + 5, right, y + kHeader - 5}, addText, kGlyphAdd,
+                           UiCommand::AddMenu);
     add.tip = L"Добавить: ссылка из буфера, QR-код с экрана, файл";
     l.items.push_back(std::move(add));
+    l.items.push_back(Make(Kind::Muted, {left, y + 9, right - addWidth - 8, y + kHeader - 9},
+                           std::format(L"КОНФИГУРАЦИИ ({})", shown.size())));
+    l.items.push_back(Make(Kind::Divider, {x0 + 1, y + kHeader, x1 - 1, y + kHeader + 1}));
 
-    float top = y + 12;
+    float top = y + kHeader + 1;
     for (const std::size_t i : shown) {
       const auto index = static_cast<int>(i);
       const UiProfile& p = c.profiles[i];
-      // The first name stops short of the "+".
-      l.items.push_back(Make(Kind::Heading, {left, top, top == y + 12 ? right - 44 : right, top + 26}, p.name));
-      float line = top + 28;
+      const float rowTop = top;
+      const float rowHeightNow = rowHeight(p);
+      if (i != shown.front()) {
+        l.items.push_back(Make(Kind::Divider, {x0 + 1, rowTop, x1 - 1, rowTop + 1}));
+      }
+      // Right to left: the arrow, the days left, and the name stops short of them.
+      const float arrow = right - 20;
+      l.items.push_back(Make(Kind::IconButton, {arrow, rowTop, right, rowTop + rowHeightNow}, {}, kGlyphChevron));
+      float nameRight = arrow - 8;
+      if (p.daysLeft >= 0) {
+        const std::wstring days = p.daysLeft == 0 ? std::wstring(L"закончилась")
+                                                  : std::format(L"{} {}", p.daysLeft, DaysWord(p.daysLeft));
+        const float w = TextWidth(days, caption_.get()) + 2 * kPillPad;
+        const float mid = rowTop + rowHeightNow / 2;
+        Item pill = Make(Kind::Pill, {arrow - 8 - w, mid - 11, arrow - 8, mid + 11}, days);
+        pill.warn = p.daysLeft <= 3;
+        nameRight = pill.rect.left - 8;
+        l.items.push_back(std::move(pill));
+      }
+      // The name, and what kind of configuration it is after it - if there's room.
+      const float nameWidth = std::min(TextWidth(p.name, heading_.get()) + 2, nameRight - left);
+      l.items.push_back(Make(Kind::Heading, {left, rowTop + 6, left + nameWidth, rowTop + 32}, p.name));
+      const std::wstring badge = p.subscription ? L"подписка" : L"свой конфиг";
+      const float badgeWidth = TextWidth(badge, caption_.get()) + 2 * kPillPad;
+      if (left + nameWidth + 8 + badgeWidth <= nameRight) {
+        l.items.push_back(Make(Kind::Pill, {left + nameWidth + 8, rowTop + 8, left + nameWidth + 8 + badgeWidth, rowTop + 30},
+                               badge));
+      }
+      float line = rowTop + 34;
       if (p.paidTill.empty()) {
         // Not said by its panel, not by the user yet: a click to say it.
         const std::wstring ask = L"Указать, до какого числа оплачено ›";
@@ -1824,8 +1858,7 @@ class Painter {
         l.items.push_back(
             CommandItem(Kind::Muted, {left, line, left + w, line + 20}, ask, nullptr, UiCommand::PaidMenu, index));
       } else {
-        std::wstring paid = (p.paidByHand ? L"Сервер оплачен до " : L"Оплачено до ") + p.paidTill.substr(0, 5) +
-                            L" · " + (p.daysLeft == 0 ? std::wstring(L"оплата закончилась") : DaysLeftText(p.daysLeft));
+        std::wstring paid = (p.paidByHand ? L"Сервер оплачен до " : L"Оплачено до ") + p.paidTill.substr(0, 5);
         if (p.paidByHand) {
           paid += L" ›";
           const float w = std::min(TextWidth(paid, caption_.get()) + 4, right - left);
@@ -1852,7 +1885,7 @@ class Painter {
         traffic.warn = true;
         l.items.push_back(std::move(traffic));
       }
-      top += rowHeight(p) + 8;
+      top += rowHeightNow;
     }
     return y + h + kGap;
   }
@@ -3218,6 +3251,13 @@ class Painter {
         }
         k.Text(it.text, chip_.get(), r, it.checked ? accent : secondary);
         break;
+      case Kind::Pill: {
+        const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kWarning) : secondary;
+        k.Round(r, 6, it.warn ? FromColorRef(ui::kWarning, 0.12f) : Rgb(255, 255, 255, 0.05f));
+        k.Outline(r, 6, it.warn ? FromColorRef(ui::kWarning, 0.35f) : Rgb(255, 255, 255, 0.10f));
+        k.Text(it.text, caption_.get(), {r.left + kPillPad, r.top, r.right, r.bottom}, ink);
+        break;
+      }
       case Kind::AppTitle: {
         const float cy = (r.top + r.bottom) / 2;
         float left = r.left;
