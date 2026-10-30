@@ -240,6 +240,7 @@ struct Item {
   bool warn = false;    // something's wrong with it (a ProfileRow's refresh failed)
   bool glass = false;   // a Card on the main screen: see-through - the light and the streams behind it show
   bool scrolls = true;  // lives in the page (scrolls, clipped), not in the rail
+  bool hinted = false;  // a ValueRow with a "?" after its title: the value starts after that
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
   bool chrome = false;  // an IconButton of the title bar (DrawChrome): its pill inset from the bar's edges
 };
@@ -587,7 +588,7 @@ std::wstring RoutingLine(const UiContent& c) {
     parts.push_back(std::format(L"правил: {}", c.routing.rules.size()));
   }
   if (!c.apps.empty()) {
-    parts.push_back(std::format(L"программы: {} {}", c.appsInclude ? L"только" : L"кроме", c.apps.size()));
+    parts.push_back(std::format(L"{} {} прог.", c.appsInclude ? L"только" : L"кроме", c.apps.size()));
   }
   std::wstring line;
   for (const std::wstring& part : parts) {
@@ -1023,7 +1024,8 @@ class Painter {
         case Kind::ValueRow:
           room = w - 16 - 30;
           need = TextWidth(it.text, body_.get()) + 12 + TextWidth(it.detail, trailing_.get()) +
-                 (it.logo.empty() ? 0.0f : 22.0f) + (it.detailLogo.empty() ? 0.0f : 22.0f);
+                 (it.logo.empty() ? 0.0f : 22.0f) + (it.detailLogo.empty() ? 0.0f : 22.0f) +
+                 (it.hinted ? kHint + 6 : 0.0f);
           break;
         case Kind::Segment: room = w - 8; need = TextWidth(it.text, button_.get()); break;
         case Kind::CheckRow:
@@ -2659,8 +2661,9 @@ class Painter {
                     : r.quic == 2   ? L"вкл."
                     : r.quicBlocked ? L"авто (сейчас выкл.)"
                                     : L"авто (сейчас вкл.)";
+      quic.hinted = true;
       l.items.push_back(std::move(quic));
-      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
+      HintAfter(l, L"QUIC", body_.get(), x0 + 20, x1 - 8, top + kRow / 2,
                 L"QUIC — HTTP/3 по UDP. Через серверы на TCP (VLESS, Trojan, AnyTLS) он идёт хуже обычного TCP: "
                 L"тогда Sovereign его выключает, и браузеры сразу переходят на TCP. Через Hysteria2 и TUIC он "
                 L"идёт хорошо — тогда включён.\n\n«Авто» решает по твоим серверам сам.");
@@ -2679,19 +2682,19 @@ class Painter {
     // server of the user's own (typed over its row).
     {
       y = Heading(l, L"DNS", x0, x1, y,
-                  L"Для сайтов через VPN — имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его "
-                  L"не видит. Для прямых сайтов — российские, твои прямые и адреса самих серверов.\n\n«Авто» "
+                  L"«Через VPN» — имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его "
+                  L"не видит. «Напрямую» — российские сайты, твои прямые и адреса самих серверов.\n\n«Авто» "
                   L"подходит почти всем: не ответит один — возьмётся следующий. Свой адрес понимается так: "
                   L"77.88.8.8, tls://dns.example, https://dns.example/dns-query, quic://dns.example.");
       const float h = 2 * kRow;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Для сайтов через VPN",
+      Item remote = CommandItem(Kind::ValueRow, {x0 + 4, y + 2, x1 - 4, y + kRow - 2}, L"Через VPN",
                                 nullptr, UiCommand::ChooseRemoteDns);
       remote.detail = r.remoteDns;
       remote.detailLogo = r.remoteDnsLogo;
       l.items.push_back(std::move(remote));
       l.items.push_back(Make(Kind::Divider, {x0 + 16, y + kRow, x1 - 16, y + kRow + 1}));
-      Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Для прямых сайтов",
+      Item local = CommandItem(Kind::ValueRow, {x0 + 4, y + kRow + 2, x1 - 4, y + 2 * kRow - 2}, L"Напрямую",
                                nullptr, UiCommand::ChooseLocalDns);
       local.detail = r.localDns;
       local.detailLogo = r.localDnsLogo;
@@ -2735,6 +2738,7 @@ class Painter {
       y = close(card, y + kRow);
     }
 
+    y = Heading(l, L"Подключение", x0, x1, y);
     {
       const std::size_t card = open(y);
       float top = y;
@@ -2748,23 +2752,11 @@ class Painter {
       line(top);
       Item startup = CommandItem(Kind::ValueRow, row(top), L"Автозапуск", nullptr, UiCommand::ChooseStartup);
       startup.detail = !c.autostart ? L"выключен" : c.connectAtStartup ? L"с подключением" : L"без подключения";
+      startup.hinted = true;
       l.items.push_back(std::move(startup));
-      HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 160, top + kRow / 2,
+      HintAfter(l, L"Автозапуск", body_.get(), x0 + 20, x1 - 8, top + kRow / 2,
                 L"При входе в Windows клиент запускается в области уведомлений, без окна. «С подключением» — "
                 L"подключается сам, если был включён; «без подключения» — ждёт, пока включишь.");
-      top += kRow;
-      line(top);
-      Item updates = CommandItem(Kind::ValueRow, row(top), L"Обновления", nullptr, UiCommand::ChooseUpdates);
-      updates.detail = c.updateMode == UpdateMode::Off       ? L"не проверять"
-                       : c.updateMode == UpdateMode::Install ? L"ставить автоматически"
-                                                             : L"проверять автоматически";
-      l.items.push_back(std::move(updates));
-      HintAfter(l, L"Обновления", body_.get(), x0 + 20, x1 - 220, top + kRow / 2,
-                L"«Проверять автоматически» — раз в 12 часов; новая версия появится значком в заголовке окна, "
-                L"обновляешь нажатием на него. «Ставить автоматически» — новая версия скачивается сама и "
-                L"ставится без вопросов, когда компьютер свободен: 10 минут никто не трогал мышь и клавиатуру, "
-                L"ничего не открыто на весь экран, нет загрузок. VPN пропадает примерно на полминуты. «Не "
-                L"проверять» — только кнопкой внизу этой страницы.");
       top += kRow;
       // The local network: open, or closed both ways but for what the user
       // lets in - the router, a device around, an address typed in. Closed, a
@@ -2815,7 +2807,18 @@ class Painter {
       Item more = CommandItem(Kind::ValueRow, row(y), L"Тонкая настройка",
                               c.routingMore ? kGlyphChevronUp : kGlyphChevronDown, UiCommand::ToggleRoutingMore);
       if (!c.routingMore) {
-        more.detail = L"QUIC, IPv4, DNS";
+        // What's set, not what's inside: QUIC as it stands, IPv4 only when on,
+        // a DNS of the user's own when there is one.
+        const UiRouting& r = c.routing;
+        std::wstring set = r.quic == 1 ? L"QUIC выкл." : r.quic == 2 ? L"QUIC вкл." : L"";
+        const auto add = [&](const wchar_t* part) { set += (set.empty() ? L"" : L" · ") + std::wstring(part); };
+        if (r.ipv4Only) {
+          add(L"IPv4");
+        }
+        if (!r.remoteDns.starts_with(L"авто") || !r.localDns.starts_with(L"авто")) {
+          add(L"свой DNS");
+        }
+        more.detail = set.empty() ? L"QUIC, IPv4, DNS" : set;
       }
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kRow}));
       l.items.push_back(std::move(more));
@@ -2829,21 +2832,74 @@ class Painter {
     // whether it's the last, the data folder and the update check beside it;
     // an update waiting, its button under them. The sing-box inside a line of
     // its own, with whether it's sing-box's newest.
-    y += 8;
-    const std::wstring box = !c.boxIsLatest ? std::wstring() : *c.boxIsLatest ? L" · последняя" : L" · вышла " + c.boxLatest;
-    l.items.push_back(Make(Kind::Muted, {x0 + 4, y, x1 - 88, y + 20}, L"Sovereign " + c.version));
-    l.items.push_back(Make(Kind::Muted, {x0 + 4, y + 20, x1 - 88, y + 40}, L"sing-box " + c.boxVersion + box));
-    l.items.push_back(Make(Kind::Muted, {x0 + 4, y + 40, x1 - 88, y + 60},
-                           c.update == UiUpdate::Downloading ? std::wstring(L"скачиваю обновление…") : UpdateStatus(c)));
-    Item folder =
-        CommandItem(Kind::IconButton, {x1 - 80, y + 2, x1 - 44, y + 38}, L"Папка данных", kGlyphFolder, UiCommand::OpenFolder);
-    folder.tip = L"Открыть папку данных: настройки, конфиги, их история";
-    l.items.push_back(std::move(folder));
-    Item check = CommandItem(Kind::IconButton, {x1 - 40, y + 2, x1 - 4, y + 38}, L"Проверить обновления",
-                             kGlyphRefresh, UiCommand::CheckUpdate);
-    check.enabled = c.update != UiUpdate::Checking && c.update != UiUpdate::Downloading && c.update != UiUpdate::Off;
-    l.items.push_back(std::move(check));
-    y += 60;
+    // (The foot was loose lines and two icon buttons; since 30.10.2026, his:
+    // "улучшить визуально и функциональнее", it's a card of rows with names:
+    // updates and their check beside the versions they're about.)
+    y = Heading(l, L"О Sovereign", x0, x1, y);
+    {
+      const std::size_t card = open(y);
+      float top = y;
+      const bool checking = c.update == UiUpdate::Checking || c.update == UiUpdate::Downloading;
+
+      // The client's version and where it stands against the newest.
+      Item self = Make(Kind::ValueRow, row(top), L"Sovereign");
+      self.detail = c.version;
+      if (c.update == UiUpdate::UpToDate) {
+        self.detail += L" · последняя";
+      } else if (c.update == UiUpdate::Available || c.update == UiUpdate::Waiting) {
+        self.detail += L" · вышла " + c.updateVersion;
+      }
+      l.items.push_back(std::move(self));
+      top += kRow;
+      line(top);
+
+      Item box = Make(Kind::ValueRow, row(top), L"sing-box");
+      box.detail = c.boxVersion + (!c.boxIsLatest ? std::wstring()
+                                   : *c.boxIsLatest ? std::wstring(L" · последняя")
+                                                    : L" · вышла " + c.boxLatest);
+      l.items.push_back(std::move(box));
+      top += kRow;
+      line(top);
+
+      Item updates = CommandItem(Kind::ValueRow, row(top), L"Обновления", nullptr, UiCommand::ChooseUpdates);
+      updates.detail = c.updateMode == UpdateMode::Off       ? L"не проверять"
+                       : c.updateMode == UpdateMode::Install ? L"ставить сами"
+                                                             : L"только проверять";
+      updates.hinted = true;
+      l.items.push_back(std::move(updates));
+      HintAfter(l, L"Обновления", body_.get(), x0 + 20, x1 - 8, top + kRow / 2,
+                L"«Только проверять» — раз в 12 часов; новая версия появится значком в заголовке окна, "
+                L"обновляешь нажатием на него. «Ставить сами» — новая версия скачивается сама и "
+                L"ставится без вопросов, когда компьютер свободен: 10 минут никто не трогал мышь и клавиатуру, "
+                L"ничего не открыто на весь экран, нет загрузок. VPN пропадает примерно на полминуты. «Не "
+                L"проверять» — только строкой «Проверить сейчас» ниже.");
+      top += kRow;
+      line(top);
+
+      // The check by hand; its answer in the row.
+      Item check = CommandItem(Kind::ValueRow, row(top), L"Проверить сейчас", kGlyphRefresh, UiCommand::CheckUpdate);
+      check.enabled = !checking && c.update != UiUpdate::Off;
+      check.detail = c.update == UiUpdate::Checking      ? L"проверяю…"
+                     : c.update == UiUpdate::Downloading ? L"скачиваю " + c.updateVersion + L"…"
+                     : c.update == UiUpdate::UpToDate    ? L"это последняя версия"
+                     : c.update == UiUpdate::Waiting     ? L"скачана, ждёт паузы"
+                     : c.update == UiUpdate::Off         ? L"не в этой сборке"
+                     : c.update == UiUpdate::Failed || (c.update == UiUpdate::Available && !c.updateError.empty())
+                         ? L"не вышло"
+                         : L"";
+      l.items.push_back(std::move(check));
+      top += kRow;
+      line(top);
+
+      Item folder = CommandItem(Kind::ValueRow, row(top), L"Папка данных", kGlyphFolder, UiCommand::OpenFolder);
+      folder.tip = L"Открыть папку данных: настройки, конфиги, их история";
+      l.items.push_back(std::move(folder));
+      top += kRow;
+      y = close(card, top);
+    }
+    if (c.update == UiUpdate::Failed || (c.update == UiUpdate::Available && !c.updateError.empty())) {
+      y = Paragraph(l, Kind::ErrorText, UpdateStatus(c), x0, x1, y) + kGap;
+    }
     if (c.update == UiUpdate::Available || c.update == UiUpdate::Waiting) {
       y += 10;
       l.items.push_back(CommandItem(Kind::AccentButton, {x0, y, x1, y + kButton},
@@ -2929,19 +2985,26 @@ class Painter {
           k.t->DrawBitmap(logo, {textLeft, cy - 8, textLeft + 16, cy + 8});
           textLeft += 22;
         }
-        const float valueLeft = textLeft + TextWidth(it.text, body_.get()) + 12;
+        // The value starts after the title, the "?" that follows it and the value's own logo.
+        const float valueLeft = textLeft + TextWidth(it.text, body_.get()) + 12 + (it.hinted ? kHint + 6 : 0.0f);
+        const bool hasLogo = !it.detailLogo.empty();
         // `warn`: a row that ends something (quit) - in red, its glyph too.
-        const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kDanger) : primary;
+        const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kDanger) : it.enabled ? primary : secondary;
+        // A row that only tells (a version): its value runs to the edge, no arrow.
+        const bool tells = it.action == ItemAction::None && it.glyph.empty();
         k.Text(it.text, body_.get(), {textLeft, r.top, valueLeft, r.bottom}, ink);
-        k.Text(it.detail, trailing_.get(), {valueLeft, r.top, r.right - 30, r.bottom}, secondary);
+        k.Text(it.detail, trailing_.get(),
+               {valueLeft + (hasLogo ? 22.0f : 0.0f), r.top, r.right - (tells ? 16.0f : 30.0f), r.bottom}, secondary);
         // The value's logo right before it (the value is set against the right edge).
-        if (ID2D1Bitmap* logo = it.detailLogo.empty() ? nullptr : Logo(k.t, it.detailLogo); logo != nullptr) {
+        if (ID2D1Bitmap* logo = hasLogo ? Logo(k.t, it.detailLogo) : nullptr; logo != nullptr) {
           const float valueStart = std::max(valueLeft + 22, r.right - 30 - TextWidth(it.detail, trailing_.get()));
           k.t->DrawBitmap(logo, {valueStart - 22, cy - 8, valueStart - 6, cy + 8});
         }
         // Its own glyph if it has one (a fold's), else "goes on to a choice".
-        k.Text(it.glyph.empty() ? std::wstring(kGlyphChevron) : it.glyph, glyph_.get(), {r.right - 28, r.top, r.right - 8, r.bottom},
-               it.warn ? ink : secondary);
+        if (!tells) {
+          k.Text(it.glyph.empty() ? std::wstring(kGlyphChevron) : it.glyph, glyph_.get(),
+                 {r.right - 28, r.top, r.right - 8, r.bottom}, it.warn ? ink : secondary);
+        }
         break;
       }
       case Kind::Banner: {

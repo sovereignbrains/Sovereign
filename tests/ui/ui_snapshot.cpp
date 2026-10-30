@@ -257,7 +257,7 @@ int Snapshots(const std::wstring& dir) {
     updating.updateMode = sovereign::tray::UpdateMode::Install;
     updating.update = sovereign::tray::UiUpdate::Waiting;
     sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Settings, logs, 400, 860, 96,
-                                              dir + L"\\settings-updates-install.png", L"«Проверять автоматически»");
+                                              dir + L"\\settings-updates-install.png", L"«Только проверять»");
     updating.updateMode = sovereign::tray::UpdateMode::Off;
     updating.update = sovereign::tray::UiUpdate::Idle;
     sovereign::tray::RenderMainWindowSnapshot(updating, UiPage::Settings, logs, 400, 860, 96,

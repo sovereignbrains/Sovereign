@@ -6073,7 +6073,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ChooseUpdates: {
       using sovereign::tray::UpdateMode;
       const auto picked =
-          PickFromMenu(owner, args.anchor, {L"Не проверять", L"Проверять автоматически", L"Ставить автоматически"},
+          PickFromMenu(owner, args.anchor, {L"Не проверять", L"Только проверять", L"Ставить сами"},
                        static_cast<int>(g_updateMode));
       if (!picked || *picked < 0 || *picked > static_cast<int>(UpdateMode::Install)) {
         break;
