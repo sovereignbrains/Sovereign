@@ -4695,11 +4695,6 @@ UiContent ContentFrom(const View& v) {
   };
   using RemoteDnsPick = RoutingSettings::RemoteDns;
   using LocalDnsPick = RoutingSettings::LocalDns;
-  const auto dnsLogo = [](LocalDnsPick dns) {
-    return dns == LocalDnsPick::Google ? "google" : dns == LocalDnsPick::Quad9 ? "quad9"
-           : dns == LocalDnsPick::Yandex ? "yandex"
-           : dns == LocalDnsPick::System || dns == LocalDnsPick::Custom ? "" : "cloudflare";
-  };
   const auto encrypted = [](LocalDnsPick dns) {
     return dns == LocalDnsPick::System ? std::wstring(L"системный")
                                        : Widen(std::string(sovereign::tray::LocalDnsName(dns))) + L" (DoH)";
@@ -4711,13 +4706,8 @@ UiContent ContentFrom(const View& v) {
     case RemoteDnsPick::Quad9: c.routing.remoteDns = L"Quad9 (DoH)"; break;
     case RemoteDnsPick::Cloudflare: c.routing.remoteDns = L"Cloudflare (DoH)"; break;
   }
-  c.routing.remoteDnsLogo = r.remoteDns == RemoteDnsPick::Google   ? "google"
-                            : r.remoteDns == RemoteDnsPick::Quad9  ? "quad9"
-                            : r.remoteDns == RemoteDnsPick::Custom ? ""
-                                                                   : "cloudflare";
   // What runs now: the pick, or what took over when it stopped answering.
   const LocalDnsPick now = v.dnsInstead ? *v.dnsInstead : sovereign::tray::LocalDnsOrder(r.localDns).front();
-  c.routing.localDnsLogo = dnsLogo(now);
   if (r.localDns == LocalDnsPick::Auto) {
     // Auto moving on is auto at work: what it's on, no "instead".
     c.routing.localDns = L"авто · " + (now == LocalDnsPick::System ? std::wstring(L"системный")

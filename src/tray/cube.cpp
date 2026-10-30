@@ -150,7 +150,7 @@ CubePose CubePoseFor(Display display) {
       p.glow = 1;
       p.press = 1;
       p.rim = Color(0.96f, 0.97f, 1.0f, 1.0f);
-      p.signal = Mix(FromRef(ui::kAccent), Color(1, 1, 1), 0.15f);
+      p.signal = Mix(FromRef(ui::kVpn), Color(1, 1, 1), 0.15f);
       break;
     case Display::Starting:
       p.pitch = 29;

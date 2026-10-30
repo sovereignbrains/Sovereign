@@ -70,6 +70,7 @@ constexpr float kHint = 18;        // a "?" that shows a tip when pointed at
 // The checks with a button of their own, by their place in UiContent::checks (main.cpp ContentFrom).
 constexpr std::size_t kCheckSpeed = 2;
 constexpr std::size_t kCheckRoute = 3;
+constexpr float kRouteButton = 100;  // the route's "Проверить", a word, not an arrow
 constexpr float kSpeedGraph = 150;  // the speed test's graph under the checks
 constexpr float kServerRow = 60;   // a server on a configuration's page: its name, protocol and switch
 constexpr float kButton = 34;
@@ -201,7 +202,7 @@ enum class Kind : std::uint8_t {
   Field,         // a label on the left, a value on the right
   Power,         // the overview's on/off button
   ServerCard,    // the server in use: flag and name, its network and latency; opens the servers
-  Banner,        // a one-line call to action in the accent color
+  Banner,        // a one-line call to action, lit (`checked`: what's wrong, amber)
   Button,        // a normal button
   AccentButton,  // the page's main action
   DangerButton,  // quit
@@ -252,7 +253,6 @@ struct Item {
   std::wstring text2;  // a third line where a kind has one (CheckRow: what the result means)
   std::wstring tip;    // what's in it and what a click does, where its label doesn't say: shown pointed at a while
   std::string logo;    // a Tag's service logo (icons.h ServiceLogo): the service's id; a ValueRow's, before its title
-  std::string detailLogo;  // a ValueRow's, before its value: a DNS provider's
   ItemAction action = ItemAction::None;
   UiCommand command = UiCommand::Toggle;
   int index = 0;
@@ -271,17 +271,23 @@ struct Item {
 };
 
 // A way's colour on the routing board: a rail down its card's left edge and
-// a dot on its labels, the one place colour tells the ways apart. Dull on
-// purpose (30.10.2026, his: "менее цвета неоновые"): the board is read, not
-// glowed at. By bucket: 0 directly, 1 through the VPN, 2 blocked, 3 WARP.
+// a dot on its labels - the traffic's own (ui_style.h), the cube's blue and
+// the dots flying out of it, not a palette of the board's. Dull where it's
+// drawn (30.10.2026, his: "менее цвета неоновые"): kRailAlpha. By bucket: 0
+// directly, 1 through the VPN, 2 blocked, 3 WARP.
 constexpr COLORREF BucketColor(int bucket) {
   switch (bucket) {
-    case kBucketDirect: return RGB(163, 166, 173);
-    case kBucketBlock: return RGB(201, 116, 116);
-    case kBucketWarp: return RGB(201, 152, 92);
-    default: return RGB(110, 155, 214);
+    case kBucketDirect: return ui::kDirect;
+    case kBucketBlock: return ui::kDanger;
+    case kBucketWarp: return ui::kWarp;
+    default: return ui::kVpn;
   }
 }
+constexpr float kRailAlpha = 0.7f;
+// One line for every drawn icon - the title bar's, a row's chevron and "+",
+// the "?"'s ring, a switch's groove: a family of one weight (30.10.2026, a
+// review's "иконки смешаны по стилю").
+constexpr float kIconStroke = 1.3f;
 
 // What an item's tip says: a "?"'s text, its own tip, an icon button's name;
 // empty: it has none.
@@ -607,6 +613,16 @@ Item Make(Kind kind, D2D1_RECT_F rect, std::wstring text = {}, const wchar_t* gl
   return i;
 }
 
+// What a check's result keeps clear on the right of its row: its button's room
+// (Item::checked), or just the edge.
+float CheckButtonRoom(const Item& it) {
+  if (!it.checked) {
+    return 12;
+  }
+  const bool word = std::cmp_equal(it.sub, kCheckRoute) && it.index == static_cast<int>(UiCheck::Status::NotRun);
+  return word ? kRouteButton + 8 : 44;
+}
+
 Item CommandItem(Kind kind, D2D1_RECT_F rect, std::wstring text, const wchar_t* glyph, UiCommand command, int index = 0) {
   Item i = Make(kind, rect, std::move(text), glyph);
   i.action = ItemAction::Command;
@@ -877,7 +893,7 @@ class Painter {
     state_ = MakeFormat(Display(), 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     delay_ = MakeFormat(Text(), 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     delay_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    heading_ = MakeFormat(Text(), 15, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    heading_ = MakeFormat(Text(), 15.75f, DWRITE_FONT_WEIGHT_SEMI_BOLD);  // 14 x 1.125: the scale caption 12.5 / body 14 / heading 15.75 / title 20
     body_ = MakeFormat(Text(), 14);
     caption_ = MakeFormat(Text(), 12.5f);
     button_ = MakeFormat(Text(), 14);
@@ -1254,12 +1270,12 @@ class Painter {
         case Kind::ValueRow:
           room = w - 16 - 30;
           need = TextWidth(it.text, body_.get()) + 12 + TextWidth(it.detail, trailing_.get()) +
-                 (it.logo.empty() ? 0.0f : 22.0f) + (it.detailLogo.empty() ? 0.0f : 22.0f) +
+                 (it.logo.empty() ? 0.0f : 22.0f) +
                  (it.hinted ? kHint + 6 : 0.0f);
           break;
         case Kind::Segment: room = w - 8; need = TextWidth(it.text, button_.get()); break;
         case Kind::CheckRow:
-          room = w - 30 - (it.checked ? 44.0f : 12.0f);
+          room = w - 30 - CheckButtonRoom(it);
           need = TextWidth(it.text, body_.get()) + 6 + kHint + 8 + TextWidth(it.detail, trailing_.get());
           break;
         case Kind::Muted:  // a line of its own; a taller one wraps
@@ -1709,7 +1725,7 @@ class Painter {
     constexpr float kHead = 34;
     constexpr float kChipGap = 5;
     constexpr float kAddKey = 28;
-    const float left = x0 + 17;  // past the rail
+    const float left = x0 + 16;  // the settings' rows' inset, past the rail
     const float right = x1 - 10;
     for (const Bucket& b : buckets) {
       // Its things in rows from the card's left, wrapped at its right.
@@ -1753,9 +1769,9 @@ class Painter {
         rail.quiet = true;
         l.items.push_back(std::move(rail));
         const float nameWidth = TextWidth(b.name, caption_.get());
-        l.items.push_back(Make(Kind::Muted, {left + 2, y, left + 2 + nameWidth + 4, y + kQuiet}, b.name));
+        l.items.push_back(Make(Kind::Muted, {left, y, left + nameWidth + 4, y + kQuiet}, b.name));
         if (!b.hint.empty()) {
-          HintAfter(l, b.name, caption_.get(), left + 2, right - kAddKey - 8, y + kQuiet / 2, b.hint);
+          HintAfter(l, b.name, caption_.get(), left, right - kAddKey - 8, y + kQuiet / 2, b.hint);
         }
         l.items.push_back(addKey(y + 1, kQuiet - 2));
         y += kQuiet + 6;
@@ -1765,11 +1781,12 @@ class Painter {
       Item card = Make(Kind::Card, {x0, y, x1, y + h});
       card.rail = b.id;
       l.items.push_back(std::move(card));
-      const float nameWidth = TextWidth(b.name, heading_.get());
-      l.items.push_back(Make(Kind::Heading, {left + 2, y + 3, left + 2 + nameWidth + 4, y + kHead - 3}, b.name));
-      float noteLeft = left + nameWidth + 16;
+      // Its name a row's title, as a setting's: the section heading is over the board.
+      const float nameWidth = TextWidth(b.name, body_.get());
+      l.items.push_back(Make(Kind::Text, {left, y + 3, left + nameWidth + 4, y + kHead - 3}, b.name));
+      float noteLeft = left + nameWidth + 14;
       if (!b.hint.empty()) {
-        HintAfter(l, b.name, heading_.get(), left + 2, right - kAddKey - 8, y + kHead / 2 + 1, b.hint);
+        HintAfter(l, b.name, body_.get(), left, right - kAddKey - 8, y + kHead / 2, b.hint);
         noteLeft += kHint + 6;
       }
       // How many are on it, engraved in a pill by the "+".
@@ -2658,8 +2675,9 @@ class Painter {
       // it captioned as the exceptions to that ("Всё через VPN" over a list
       // of what doesn't, uncaptioned, was a lie; "всё, кроме исключений" on
       // the segment said both at once and outweighed the board).
-      l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 20}, L"Через VPN идёт"));
-      y += 20 + 4;
+      // Section headings as the settings' (30.10.2026, a review's "типографическая
+      // шкала не системна": a label here, a heading there, for one role).
+      y = Heading(l, L"Через VPN идёт", x0, x1, y);
       // One card holds the mode and what it comes to: "всё остальное → VPN"
       // (or "напрямую"), the way everything the board doesn't name goes. The
       // board under it is what goes otherwise ("Идёт иначе": WARP is no
@@ -2700,9 +2718,9 @@ class Painter {
         l.items.push_back(std::move(note));
       }
       y += kModePad + kSegment + 8 + kRestLine + kModePad + kGap;
-      l.items.push_back(Make(Kind::Muted, {x0 + 2, y, x1, y + 18}, L"Идёт иначе"));
-      y += 18 + 4;
-    }    // Where everything goes: the board. (The fine settings - QUIC, IPv4, DNS -
+      y = Heading(l, L"Идёт иначе", x0, x1, y);
+    }
+    // Where everything goes: the board. (The fine settings - QUIC, IPv4, DNS -
     // are the settings' since 17.10.2026: nothing of where a site goes.)
     y = Board(l, r, x0, x1, y);
     if (!r.lists.empty()) {  // only while the lists are downloading, or failed
@@ -2818,7 +2836,11 @@ class Painter {
     const UiCheck& check = c.checks[i];
     const bool hasButton = i == kCheckSpeed || i == kCheckRoute;
     Item row = Make(Kind::CheckRow, {x0 + 4, top + 1, x1 - 4, top + kCheckRow - 1}, check.title);
-    row.detail = check.status == UiCheck::Status::NotRun ? std::wstring(L"—") : check.summary;
+    // Not run, a dash - unless the row's own button says what to do (the route's
+    // "—" read as a "minus" to fold, 30.10.2026).
+    row.detail = check.status != UiCheck::Status::NotRun ? check.summary
+                 : i == kCheckRoute                      ? std::wstring()
+                                                         : std::wstring(L"—");
     row.index = static_cast<int>(check.status);
     row.sub = static_cast<int>(i);
     row.text2 = check.detail;
@@ -2835,10 +2857,15 @@ class Painter {
     HintAfter(l, check.title, body_.get(), x0 + 4 + 30, x1 - 120, top + kCheckRow / 2, std::move(hint));
 
     if (hasButton) {
-      Item run = CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
-                             i == kCheckSpeed ? L"Замерить скорость" : L"Проверить сайт…",
-                             i == kCheckSpeed ? kGlyphSpeed : kGlyphRoute,
-                             i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute);
+      // The route's a word, not an arrow: an arrow there read as "unfold" (30.10.2026);
+      // with a result in the room, "again" - the icons' refresh.
+      const bool word = i == kCheckRoute && check.status == UiCheck::Status::NotRun;
+      Item run = word ? CommandItem(Kind::Button, {x1 - 4 - kRouteButton, top + 4, x1 - 4, top + kCheckRow - 4},
+                                    L"Проверить", nullptr, UiCommand::CheckRoute)
+                      : CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
+                                    i == kCheckSpeed ? L"Замерить скорость" : L"Проверить другой сайт…",
+                                    i == kCheckSpeed ? kGlyphSpeed : kGlyphRefresh,
+                                    i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute);
       run.enabled = !c.checksRunning;
       run.tip = i == kCheckSpeed ? L"Замерить скорость приёма и отдачи через VPN"
                                  : L"Ввести сайт и узнать, каким путём он пойдёт";
@@ -3049,7 +3076,6 @@ class Painter {
       Item remote = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"DNS через VPN",
                                 nullptr, UiCommand::ChooseRemoteDns);
       remote.detail = r.remoteDns;
-      remote.detailLogo = r.remoteDnsLogo;
       remote.hinted = true;
       l.items.push_back(std::move(remote));
       HintAfter(l, L"DNS через VPN", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
@@ -3061,7 +3087,6 @@ class Painter {
       Item local = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"DNS напрямую",
                                nullptr, UiCommand::ChooseLocalDns);
       local.detail = r.localDns;
-      local.detailLogo = r.localDnsLogo;
       local.hinted = true;
       l.items.push_back(std::move(local));
       HintAfter(l, L"DNS напрямую", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
@@ -3320,7 +3345,7 @@ class Painter {
     const D2D1_RECT_F r = it.rect;
     const D2D1_COLOR_F primary = FromColorRef(ui::kPrimaryText);
     const D2D1_COLOR_F secondary = FromColorRef(ui::kSecondaryText);
-    const D2D1_COLOR_F accent = FromColorRef(ui::kAccent);
+    const D2D1_COLOR_F lit = FromColorRef(ui::kLit);
     const float hoverAlpha = pressed ? 0.04f : (hovered ? 0.08f : 0.0f);
     switch (it.kind) {
       case Kind::Card:
@@ -3332,12 +3357,9 @@ class Painter {
           }
           k.Outline(r, kRadius, Rgb(255, 255, 255, it.glass ? 0.10f : 0.06f));
         }
-        if (it.rail >= 0) {  // a way's card: a faint tint and the rail down its edge
-          const COLORREF tone = BucketColor(it.rail);
-          if (!it.quiet) {
-            k.Round(r, kRadius, FromColorRef(tone, 0.035f));
-          }
-          k.Round({r.left, r.top + 8, r.left + 3, r.bottom - 8}, 1.5f, FromColorRef(tone, it.quiet ? 0.35f : 0.85f));
+        if (it.rail >= 0) {  // a way's card: the settings' card, and the rail down its edge - no tint, no other geometry
+          k.Round({r.left, r.top + 8, r.left + 3, r.bottom - 8}, 1.5f,
+                  FromColorRef(BucketColor(it.rail), it.quiet ? kRailAlpha / 2 : kRailAlpha));
         }
         break;
       case Kind::Divider:  // a groove cut in the panel: dark, and the lit lip under it
@@ -3401,34 +3423,28 @@ class Painter {
           k.t->DrawBitmap(logo, {textLeft, cy - 8, textLeft + 16, cy + 8});
           textLeft += 22;
         }
-        // The value starts after the title, the "?" that follows it and the value's own logo.
+        // The value starts after the title and the "?" that follows it.
         const float valueLeft = textLeft + TextWidth(it.text, body_.get()) + 12 + (it.hinted ? kHint + 6 : 0.0f);
-        const bool hasLogo = !it.detailLogo.empty();
         // `warn`: a row that ends something (quit) - in red, its glyph too.
         const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kDanger) : it.enabled ? primary : secondary;
         // A row that only tells (a version): its value runs to the edge, no arrow.
         const bool tells = it.action == ItemAction::None && it.glyph.empty();
         k.Text(it.text, body_.get(), {textLeft, r.top, valueLeft, r.bottom}, ink);
         k.Text(it.detail, trailing_.get(),
-               {valueLeft + (hasLogo ? 22.0f : 0.0f), r.top, r.right - (tells ? 16.0f : 30.0f), r.bottom}, secondary);
-        // The value's logo right before it (the value is set against the right edge).
-        if (ID2D1Bitmap* logo = hasLogo ? Logo(k.t, it.detailLogo) : nullptr; logo != nullptr) {
-          const float valueStart = std::max(valueLeft + 22, r.right - 30 - TextWidth(it.detail, trailing_.get()));
-          k.t->DrawBitmap(logo, {valueStart - 22, cy - 8, valueStart - 6, cy + 8});
-        }
+               {valueLeft, r.top, r.right - (tells ? 16.0f : 30.0f), r.bottom}, secondary);
         // Its own glyph if it has one (a fold's), else "goes on to a choice".
         if (!tells) {
-          k.Text(it.glyph.empty() ? std::wstring(kGlyphChevron) : it.glyph, glyph_.get(),
-                 {r.right - 28, r.top, r.right - 8, r.bottom}, it.warn ? ink : secondary);
+          DrawIcon(k, it.glyph.empty() ? std::wstring_view(kGlyphChevron) : std::wstring_view(it.glyph),
+                   {r.right - 28, r.top, r.right - 8, r.bottom}, it.warn ? ink : secondary);
         }
         break;
       }
       case Kind::Banner: {
-        // Checked: what's wrong (Overview's Issues) - in the warning's amber, not the red.
-        const COLORREF tone = it.checked ? ui::kWarning : ui::kAccent;
-        k.Round(r, kRadius, it.checked ? FromColorRef(tone, pressed ? 0.08f : (hovered ? 0.15f : 0.10f))
-                                       : FromColorRef(tone, pressed ? 0.10f : (hovered ? 0.18f : 0.13f)));
-        const D2D1_COLOR_F ink = !it.enabled ? secondary : it.checked ? FromColorRef(ui::kWarning) : accent;
+        // Checked: what's wrong (Overview's Issues) - in the warning's amber, not the red;
+        // else a call to do something - lit, not a colour (ui_style.h).
+        k.Round(r, kRadius, it.checked ? FromColorRef(ui::kWarning, pressed ? 0.08f : (hovered ? 0.15f : 0.10f))
+                                       : FromColorRef(ui::kLit, pressed ? 0.05f : (hovered ? 0.12f : 0.08f)));
+        const D2D1_COLOR_F ink = !it.enabled ? secondary : it.checked ? FromColorRef(ui::kWarning) : primary;
         k.Text(it.glyph, glyph_.get(), {r.left + 10, r.top, r.left + 38, r.bottom}, ink);
         k.Text(it.text, body_.get(), {r.left + 44, r.top, r.right - 36, r.bottom}, ink);
         if (it.enabled) {
@@ -3451,10 +3467,9 @@ class Painter {
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
-        k.Text(it.glyph, glyph_.get(), r,
-               !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f) : (hovered ? primary : secondary));
+        DrawIcon(k, it.glyph, r, !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f) : (hovered ? primary : secondary));
         if (it.checked) {
-          k.t->FillEllipse(D2D1::Ellipse({r.right - 9, r.top + 9}, 4, 4), k.Color(accent));
+          k.t->FillEllipse(D2D1::Ellipse({r.right - 9, r.top + 9}, 4, 4), k.Color(lit));
         }
         break;
       case Kind::Switch: {
@@ -3478,10 +3493,10 @@ class Painter {
         }
         const D2D1_POINT_2F dot{r.left + 22, (r.top + r.bottom) / 2};
         if (it.checked) {
-          k.t->FillEllipse(D2D1::Ellipse(dot, 9, 9), k.Color(accent));
-          k.t->FillEllipse(D2D1::Ellipse(dot, 4, 4), k.Color(Rgb(12, 20, 36)));
+          k.t->FillEllipse(D2D1::Ellipse(dot, 9, 9), k.Color(lit));
+          k.t->FillEllipse(D2D1::Ellipse(dot, 4, 4), k.Color(FromColorRef(ui::kLitInk)));
         } else {
-          k.t->DrawEllipse(D2D1::Ellipse(dot, 8.5f, 8.5f), k.Color(secondary), 1.2f);
+          k.t->DrawEllipse(D2D1::Ellipse(dot, 8.5f, 8.5f), k.Color(secondary), kIconStroke);
         }
         // With a detail: the name and the latency on top, the detail under them.
         const float mid = (r.top + r.bottom) / 2;
@@ -3523,7 +3538,7 @@ class Painter {
         break;
       }
       case Kind::CheckRow: {
-        const std::array<D2D1_COLOR_F, 5> colors = {secondary, accent, FromColorRef(ui::kUpload),
+        const std::array<D2D1_COLOR_F, 5> colors = {secondary, lit, FromColorRef(ui::kUpload),
                                                     FromColorRef(ui::kWarning), FromColorRef(ui::kDanger)};
         const D2D1_COLOR_F status = colors[static_cast<std::size_t>(std::clamp(it.index, 0, 4))];
         const float cy = (r.top + r.bottom) / 2;
@@ -3533,7 +3548,7 @@ class Painter {
         const float titleRight = r.left + 30 + TextWidth(it.text, body_.get());
         k.Text(it.text, body_.get(), {r.left + 30, r.top, titleRight + 2, r.bottom}, primary);
         const float resultLeft = titleRight + 6 + kHint + 8;
-        const float resultRight = r.right - (it.checked ? 44.0f : 12.0f);
+        const float resultRight = r.right - CheckButtonRoom(it);
         const bool quiet = it.index <= 1;  // not run, running
         k.Text(it.detail, trailing_.get(), {resultLeft, r.top, resultRight, r.bottom},
                quiet ? secondary : (it.index >= 3 ? status : primary));
@@ -3541,8 +3556,8 @@ class Painter {
       }
       case Kind::Hint: {
         const D2D1_POINT_2F center{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
-        const D2D1_COLOR_F ink = hovered ? accent : FromColorRef(ui::kSecondaryText, 0.85f);
-        k.t->DrawEllipse(D2D1::Ellipse(center, 7.5f, 7.5f), k.Color(ink), 1.2f);
+        const D2D1_COLOR_F ink = hovered ? primary : FromColorRef(ui::kSecondaryText, 0.85f);
+        k.t->DrawEllipse(D2D1::Ellipse(center, 7.5f, 7.5f), k.Color(ink), kIconStroke);
         k.Text(L"?", hint_.get(), {center.x - 8, center.y - 8.5f, center.x + 8, center.y + 7.5f}, ink);
         break;
       }
@@ -3556,26 +3571,28 @@ class Painter {
         break;
       }
       case Kind::Segment: {
-        // Picked: tinted, as a picked chip - not the accent's full fill, which
-        // outshouted the board a mode switch sits over.
+        // Picked: a key pressed in and lit - the light's white, not the VPN's
+        // blue (ui_style.h); the other a groove, its word dimmer.
         if (it.checked) {
-          k.Round(r, 6, FromColorRef(ui::kAccent, pressed ? 0.12f : (hovered ? 0.24f : 0.18f)));
-          k.Outline(r, 6, FromColorRef(ui::kAccent, 0.35f));
+          k.Round(r, 6, FromColorRef(ui::kLit, pressed ? 0.08f : (hovered ? 0.16f : 0.12f)));
+          k.Outline(r, 6, FromColorRef(ui::kLit, 0.30f));
         } else {
-          k.Round(r, 6, Rgb(255, 255, 255, 0.04f + hoverAlpha));
-          k.Outline(r, 6, Rgb(255, 255, 255, 0.08f));
+          k.Round(r, 6, Rgb(0, 0, 0, 0.18f));
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
+          k.Outline(r, 6, Rgb(255, 255, 255, 0.07f));
         }
-        k.Text(it.text, button_.get(), r, it.checked ? accent : primary);
+        k.Text(it.text, button_.get(), r, it.checked ? primary : (hovered ? primary : secondary));
         break;
       }
       case Kind::Chip:
         if (it.checked) {
-          k.Round(r, 15, FromColorRef(ui::kAccent, pressed ? 0.12f : (hovered ? 0.24f : 0.18f)));
+          k.Round(r, 15, FromColorRef(ui::kLit, pressed ? 0.08f : (hovered ? 0.16f : 0.12f)));
+          k.Outline(r, 15, FromColorRef(ui::kLit, 0.30f));
         } else {
           k.Round(r, 15, Rgb(255, 255, 255, hoverAlpha * 0.6f));
           k.Outline(r, 15, Rgb(255, 255, 255, 0.10f));
         }
-        k.Text(it.text, chip_.get(), r, it.checked ? accent : secondary);
+        k.Text(it.text, chip_.get(), r, it.checked ? primary : secondary);
         break;
       case Kind::Pill: {
         // A window cut into the panel: dark, a hairline, a shadow along its top edge.
@@ -3703,7 +3720,7 @@ class Painter {
       case UiQuestion::Tone::Danger: return FromColorRef(ui::kDanger, alpha);
       case UiQuestion::Tone::Accent: break;
     }
-    return FromColorRef(ui::kAccent, alpha);
+    return FromColorRef(ui::kLit, alpha);
   }
 
   // MainWindow::Ask's card (AskBox): a soft shadow under it, lighter than
@@ -3774,15 +3791,14 @@ class Painter {
     }
     D2D1_COLOR_F ink = FromColorRef(ui::kPrimaryText);
     if (it.checked) {
-      k.Round(r, 6, FromColorRef(ui::kAccent, pressed ? 0.8f : 1.0f));
-      ink = Rgb(12, 20, 36);
+      k.Round(r, 6, FromColorRef(ui::kLit, pressed ? 0.8f : 1.0f));
+      ink = FromColorRef(ui::kLitInk);
     } else {
       if (hovered || pressed) {
         k.Round(r, 6, Rgb(255, 255, 255, pressed ? 0.05f : 0.10f));
       }
       if (it.sub == 1) {  // today
-        k.Outline(r, 6, FromColorRef(ui::kAccent, 0.55f));
-        ink = FromColorRef(ui::kAccent);
+        k.Outline(r, 6, FromColorRef(ui::kLit, 0.45f));
       }
     }
     k.Text(it.text, button_.get(), r, ink);
@@ -3807,7 +3823,7 @@ class Painter {
       }
       const D2D1_RECT_F row{box.left, top, box.right, top + kLogLine};
       if (log.Selected(i)) {
-        k.Fill(row, FromColorRef(ui::kAccent, 0.22f));
+        k.Fill(row, FromColorRef(ui::kLit, 0.12f));
       }
       // "05:07:30  ERROR  outbound/...": FormatLogLine's columns (main.cpp).
       const std::wstring_view line = log.Line(i);
@@ -3850,10 +3866,10 @@ class Painter {
   void DrawSwitch(const Canvas& k, D2D1_RECT_F track, bool on) const {
     const float mid = (track.top + track.bottom) / 2;
     if (on) {
-      k.Round(track, 10, FromColorRef(ui::kAccent));
-      k.t->FillEllipse(D2D1::Ellipse({track.right - 10, mid}, 6, 6), k.Color(Rgb(12, 20, 36)));
+      k.Round(track, 10, FromColorRef(ui::kLit));
+      k.t->FillEllipse(D2D1::Ellipse({track.right - 10, mid}, 6, 6), k.Color(FromColorRef(ui::kLitInk)));
     } else {
-      k.Outline(track, 10, FromColorRef(ui::kSecondaryText), 1.2f);
+      k.Outline(track, 10, FromColorRef(ui::kSecondaryText), kIconStroke);
       k.t->FillEllipse(D2D1::Ellipse({track.left + 10, mid}, 5, 5), k.Color(FromColorRef(ui::kSecondaryText)));
     }
   }
@@ -3863,8 +3879,8 @@ class Painter {
     D2D1_COLOR_F fill = Rgb(255, 255, 255, 0.06f);
     D2D1_COLOR_F ink = FromColorRef(ui::kPrimaryText);
     if (it.kind == Kind::AccentButton) {
-      fill = FromColorRef(ui::kAccent, pressed ? 0.8f : (hovered ? 0.9f : 1.0f));
-      ink = Rgb(12, 20, 36);
+      fill = FromColorRef(ui::kLit, pressed ? 0.8f : (hovered ? 0.9f : 1.0f));
+      ink = FromColorRef(ui::kLitInk);
     } else if (it.kind == Kind::DangerButton) {
       fill = FromColorRef(ui::kDanger, pressed ? 0.12f : (hovered ? 0.24f : 0.16f));
       ink = FromColorRef(ui::kDanger);
@@ -3902,7 +3918,7 @@ class Painter {
   // soft halo and a short trail behind it, fading in and out along its path;
   // sparks fade as they fly.
   // The speed test's graph: one timeline as the test runs - the download
-  // (kSpeedDownSeconds) in the accent colour, then the upload
+  // (kSpeedDownSeconds) in the VPN's blue, then the upload
   // (kSpeedUpSeconds) in green after it - each smoothed over three samples,
   // growing from the left; the scale rounded up, lines at its top and half;
   // the speeds on top: the mean past the first second, as the test's result.
@@ -3913,7 +3929,7 @@ class Painter {
     }
     const UiCheck& check = c.checks[static_cast<std::size_t>(it.index)];
     const D2D1_RECT_F r = it.rect;
-    const D2D1_COLOR_F down = FromColorRef(ui::kAccent);
+    const D2D1_COLOR_F down = FromColorRef(ui::kVpn);
     const D2D1_COLOR_F up = FromColorRef(ui::kUpload);
     const D2D1_COLOR_F secondary = FromColorRef(ui::kSecondaryText);
     const auto smooth = [](const std::vector<float>& s) {
@@ -4043,12 +4059,12 @@ class Painter {
 
   void DrawLive(const Canvas& k, const LiveTraffic& live, D2D1_RECT_F cube) const {
     for (const Particle& p : live.particles) {
-      D2D1_COLOR_F color = FromColorRef(ui::kAccent);
+      D2D1_COLOR_F color = FromColorRef(ui::kVpn);
       float alpha = std::sin(std::numbers::pi_v<float> * std::clamp(p.t, 0.0f, 1.0f));
       switch (p.stream) {
         case Stream::Vpn: break;
-        case Stream::Warp: color = Rgb(244, 129, 32); break;  // Cloudflare's orange
-        case Stream::Direct: color = Rgb(160, 168, 184); alpha *= 0.7f; break;
+        case Stream::Warp: color = FromColorRef(ui::kWarp); break;
+        case Stream::Direct: color = FromColorRef(ui::kDirect); alpha *= 0.7f; break;
         case Stream::Blocked:
           color = FromColorRef(ui::kDanger);
           alpha = std::min(1.0f, p.t * 4);
@@ -4082,12 +4098,12 @@ class Painter {
   }
 
   // The main screen's backdrop: the dark, and a light from behind the switch
-  // (`at`, its rect) - the accent's while connected, a faint grey otherwise.
+  // (`at`, its rect) - the VPN's blue while connected, a faint grey otherwise.
   // A stage for the live traffic to come.
   void DrawBackdrop(ID2D1RenderTarget* t, D2D1_SIZE_F size, D2D1_RECT_F at, bool on) const {
     const D2D1_POINT_2F center{(at.left + at.right) / 2, (at.top + at.bottom) / 2};
     const float radius = std::max(size.width, at.bottom - at.top) * 0.75f;
-    const D2D1_COLOR_F light = on ? FromColorRef(ui::kAccent, 0.22f) : Rgb(255, 255, 255, 0.05f);
+    const D2D1_COLOR_F light = on ? FromColorRef(ui::kVpn, 0.22f) : Rgb(255, 255, 255, 0.05f);
     const std::array<D2D1_GRADIENT_STOP, 3> stops{
         {{0, light}, {0.45f, D2D1_COLOR_F{light.r, light.g, light.b, light.a * 0.35f}}, {1, D2D1_COLOR_F{light.r, light.g, light.b, 0}}}};
     wil::com_ptr<ID2D1GradientStopCollection> collection;
@@ -4145,13 +4161,21 @@ class Painter {
   // Segoe's glyphs, which differ in weight and detail from each other
   // (30.10.2026, his: "слишком пестро ... я хотел что ты сам рисунок кнопок
   // переделал"). False: not one of ours, the font's glyph is drawn.
+  // A glyph in `box`: ours drawn in lines where there is one, else the font's.
+  void DrawIcon(const Canvas& k, std::wstring_view glyph, D2D1_RECT_F box, D2D1_COLOR_F ink) const {
+    // Through pixels' middles: at 100 % lines a pixel thick, not two halves.
+    const float cx = std::floor((box.left + box.right) / 2) + 0.5f;
+    const float cy = std::floor((box.top + box.bottom) / 2) + 0.5f;
+    if (!DrawLineIcon(k, glyph, cx, cy, ink)) {
+      k.Text(glyph, glyph_.get(), box, ink);
+    }
+  }
   bool DrawLineIcon(const Canvas& k, std::wstring_view glyph, float cx, float cy, D2D1_COLOR_F ink) const {
-    constexpr float kStroke = 1.3f;
     const auto line = [&](float x0, float y0, float x1, float y1) {
-      k.t->DrawLine({cx + x0, cy + y0}, {cx + x1, cy + y1}, k.Color(ink), kStroke, roundCaps_.get());
+      k.t->DrawLine({cx + x0, cy + y0}, {cx + x1, cy + y1}, k.Color(ink), kIconStroke, roundCaps_.get());
     };
     const auto ring = [&](float x, float y, float rx, float ry) {
-      k.t->DrawEllipse(D2D1::Ellipse({cx + x, cy + y}, rx, ry), k.Color(ink), kStroke);
+      k.t->DrawEllipse(D2D1::Ellipse({cx + x, cy + y}, rx, ry), k.Color(ink), kIconStroke);
     };
     if (glyph == kGlyphSettings) {
       // Three sliders: a line each, a ring on it where it's set.
@@ -4164,7 +4188,7 @@ class Painter {
     } else if (glyph == kGlyphLog) {
       // A sheet with its lines.
       k.t->DrawRoundedRectangle(D2D1::RoundedRect({cx - 5.5f, cy - 7, cx + 5.5f, cy + 7}, 2, 2), k.Color(ink),
-                                kStroke);
+                                kIconStroke);
       line(-2.5f, -2.5f, 2.5f, -2.5f);
       line(-2.5f, 0.5f, 2.5f, 0.5f);
       line(-2.5f, 3.5f, 0.5f, 3.5f);
@@ -4184,6 +4208,38 @@ class Painter {
       for (const float y : {-0.8f, 2.0f, 4.6f}) {
         line(-3.4f, y, -6.4f, y - 1.0f);
         line(3.4f, y, 6.4f, y - 1.0f);
+      }
+    } else if (glyph == kGlyphChevron) {  // goes on to a choice
+      line(-1.8f, -4, 2.2f, 0);
+      line(2.2f, 0, -1.8f, 4);
+    } else if (glyph == kGlyphChevronDown || glyph == kGlyphChevronUp) {  // a fold: opens, closes
+      const float d = glyph == kGlyphChevronDown ? 1.0f : -1.0f;
+      line(-4, -2 * d, 0, 2 * d);
+      line(0, 2 * d, 4, -2 * d);
+    } else if (glyph == kGlyphAdd) {
+      line(-5.5f, 0, 5.5f, 0);
+      line(0, -5.5f, 0, 5.5f);
+    } else if (glyph == kGlyphRefresh) {
+      // Three quarters of a ring and its arrowhead at the open end, up right.
+      wil::com_ptr<ID2D1PathGeometry> arc;
+      wil::com_ptr<ID2D1GeometrySink> sink;
+      constexpr float kR = 5.5f;
+      if (SUCCEEDED(d2d_->CreatePathGeometry(arc.put())) && SUCCEEDED(arc->Open(sink.put()))) {
+        sink->BeginFigure({cx + kR, cy}, D2D1_FIGURE_BEGIN_HOLLOW);
+        sink->AddArc(D2D1::ArcSegment({cx, cy - kR}, {kR, kR}, 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_LARGE));
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        if (SUCCEEDED(sink->Close())) {
+          k.t->DrawGeometry(arc.get(), k.Color(ink), kIconStroke, roundCaps_.get());
+        }
+      }
+      line(0, -kR, -2.6f, -kR - 2.4f);
+      line(0, -kR, -2.6f, -kR + 2.4f);
+    } else if (glyph == kGlyphFolder) {
+      // Its outline: the tab up left, the body.
+      const std::array<D2D1_POINT_2F, 7> outline{
+          {{-7, -4.5f}, {-2.2f, -4.5f}, {-0.6f, -2.8f}, {7, -2.8f}, {7, 5}, {-7, 5}, {-7, -4.5f}}};
+      for (std::size_t i = 1; i < outline.size(); ++i) {
+        line(outline[i - 1].x, outline[i - 1].y, outline[i].x, outline[i].y);
       }
     } else {
       return false;
@@ -4212,14 +4268,14 @@ class Painter {
     // news (30.10.2026, his: "ахуенный значок"; it was the arrow in the
     // accent alone, lost among the keys).
     if (it.checked) {
-      // An indicator window: a dark recess with the accent's hairline and a
-      // pilot lamp lit in it, the version in white (30.10.2026: the solid
-      // blue pill was a button; this is a reading).
+      // An indicator window: a dark recess with a lit hairline and a pilot
+      // lamp lit in it, the version in white (30.10.2026: the solid blue pill
+      // was a button; this is a reading). White since: blue is the VPN's.
       const D2D1_RECT_F pill = KeyPill(it);
-      const D2D1_COLOR_F lamp = FromColorRef(ui::kAccent);
+      const D2D1_COLOR_F lamp = FromColorRef(ui::kLit);
       k.Round(pill, 7, Rgb(0, 0, 0, 0.38f));
-      k.Round(pill, 7, FromColorRef(ui::kAccent, pressed ? 0.04f : (hovered ? 0.16f : 0.08f)));
-      k.Outline(pill, 7, FromColorRef(ui::kAccent, hovered ? 0.85f : 0.50f));
+      k.Round(pill, 7, FromColorRef(ui::kLit, pressed ? 0.03f : (hovered ? 0.10f : 0.05f)));
+      k.Outline(pill, 7, FromColorRef(ui::kLit, hovered ? 0.60f : 0.35f));
       if (it.detail.empty()) {
         k.Text(it.glyph, glyph_.get(), r, FromColorRef(ui::kPrimaryText));
         k.Led({pill.right - 5, pill.top + 5}, 2.0f, lamp);
@@ -4230,7 +4286,6 @@ class Painter {
       return;
     }
     const D2D1_COLOR_F ink = !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f)
-                             : it.checked ? FromColorRef(ui::kAccent)
                              : !hovered   ? FromColorRef(ui::kSecondaryText)
                              : cross      ? FromColorRef(ui::kDanger)
                                           : FromColorRef(ui::kPrimaryText);
@@ -4238,12 +4293,11 @@ class Painter {
     const float cx = std::floor((r.left + r.right) / 2) + 0.5f;
     const float cy = std::floor((r.top + r.bottom) / 2) + 0.5f;
     constexpr float kHalf = 4.5f;  // with the round ends 10 DIPs across
-    constexpr float kStroke = 1.25f;
     if (cross) {
-      k.t->DrawLine({cx - kHalf, cy - kHalf}, {cx + kHalf, cy + kHalf}, k.Color(ink), kStroke, roundCaps_.get());
-      k.t->DrawLine({cx - kHalf, cy + kHalf}, {cx + kHalf, cy - kHalf}, k.Color(ink), kStroke, roundCaps_.get());
+      k.t->DrawLine({cx - kHalf, cy - kHalf}, {cx + kHalf, cy + kHalf}, k.Color(ink), kIconStroke, roundCaps_.get());
+      k.t->DrawLine({cx - kHalf, cy + kHalf}, {cx + kHalf, cy - kHalf}, k.Color(ink), kIconStroke, roundCaps_.get());
     } else if (it.glyph == kGlyphMinimize) {
-      k.t->DrawLine({cx - kHalf, cy}, {cx + kHalf, cy}, k.Color(ink), kStroke, roundCaps_.get());
+      k.t->DrawLine({cx - kHalf, cy}, {cx + kHalf, cy}, k.Color(ink), kIconStroke, roundCaps_.get());
     } else if (!DrawLineIcon(k, it.glyph, cx, cy, ink)) {
       k.Text(it.glyph, glyph_.get(), r, ink);
     }

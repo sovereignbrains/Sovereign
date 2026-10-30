@@ -17,7 +17,15 @@
 
 namespace sovereign::tray::ui {
 
-// The tray's look: dark only, Windows 11 proportions, one blue accent.
+// The tray's look: dark only, Windows 11 proportions - an instrument: the
+// graphite is silent, only a state is lit (30.10.2026, a review's "цвет не
+// несёт одну семантику"). One colour, one meaning:
+//  - your hand: a switch on, a pick, the main action - kLit, the light's
+//    white, never a hue;
+//  - where traffic goes: VPN blue (the cube's light), WARP orange, direct
+//    grey, blocked red - the traffic's own dots, the routes' rails;
+//  - how a check fares: green good, amber attention, red failed.
+// A logo (a DNS provider's) is no colour of ours: not set among the values.
 
 inline D2D1_COLOR_F Rgb(float r, float g, float b, float a = 1.0f) { return D2D1::ColorF(r / 255, g / 255, b / 255, a); }
 
@@ -33,10 +41,16 @@ inline constexpr COLORREF kPanelColor = RGB(18, 18, 19);  // the window's captio
 inline constexpr COLORREF kCardColor = RGB(24, 24, 26);
 inline constexpr COLORREF kPrimaryText = RGB(242, 244, 248);
 inline constexpr COLORREF kSecondaryText = RGB(156, 158, 164);
-inline constexpr COLORREF kAccent = RGB(76, 146, 255);
+// Your hand: what's on, what's picked; kLitInk is text on its fill.
+inline constexpr COLORREF kLit = RGB(226, 229, 235);
+inline constexpr COLORREF kLitInk = RGB(16, 17, 20);
+// The traffic's ways.
+inline constexpr COLORREF kVpn = RGB(76, 146, 255);
+inline constexpr COLORREF kWarp = RGB(232, 134, 66);
+inline constexpr COLORREF kDirect = RGB(160, 165, 176);
+// A check's verdicts (and the blocked way's red).
 inline constexpr COLORREF kUpload = RGB(64, 196, 140);
 inline constexpr COLORREF kDanger = RGB(240, 96, 96);
-
 inline constexpr COLORREF kWarning = RGB(235, 180, 60);
 
 // A latency's color: fast green, slow amber, very slow or dead red.

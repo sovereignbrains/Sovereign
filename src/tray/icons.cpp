@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "resource.h"
+#include "ui_style.h"
 
 namespace sovereign::tray {
 
@@ -109,13 +110,14 @@ wil::unique_hicon IconFromPixels(const Pixels& pixels, int size) {
 
 }  // namespace
 
+// On is the VPN's blue, as the cube's light (ui_style.h: one colour, one meaning).
 COLORREF StateColor(Display display) {
   switch (display) {
     case Display::ServiceDown: return RGB(150, 150, 150);
     case Display::Off: return RGB(90, 90, 90);
-    case Display::Starting: return RGB(235, 165, 0);
-    case Display::On: return RGB(40, 175, 80);
-    case Display::Error: return RGB(215, 50, 50);
+    case Display::Starting: return ui::kWarning;
+    case Display::On: return ui::kVpn;
+    case Display::Error: return ui::kDanger;
   }
   return RGB(150, 150, 150);
 }
