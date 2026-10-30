@@ -54,7 +54,8 @@ constexpr std::string_view kTelegramIps = "https://raw.githubusercontent.com/Met
 constexpr std::string_view kSteamGames = R"((?i)\\steamapps\\common\\)";
 constexpr std::string_view kEpicGames = R"((?i)\\Epic Games\\)";
 
-constexpr std::array<ServiceInfo, 28> kServices = {{
+constexpr std::array<ServiceInfo, 29> kServices = {{
+    {"yandex", "Яндекс", "yandex", {}, {}, {}},  // 30.10.2026, his: the only one he uses
     {"netflix", "Netflix", "netflix", {}, {}, {}},
     {"youtube", "YouTube", "youtube", {}, {}, {}},
     {"chatgpt", "ChatGPT", "openai", "ChatGPT.exe", {}, {}},

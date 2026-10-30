@@ -15,7 +15,7 @@ menus are always dark): a black logo is white here.
   (`tiktok-dark`).
 - [gilbarbara/logos](https://github.com/gilbarbara/logos) (CC0), from Iconify's `logos`: google
   (`google-icon`).
-- Also Simple Icons: cloudflare, quad9 - the DNS providers (google's is the one above).
+- Also Simple Icons: cloudflare, quad9, yandex - the DNS providers (google's is the one above); yandex is the service's too.
 - [Hysteria](https://github.com/apernet/hysteria) (MIT): hysteria - the "H" of its logo.svg (the first
   letter's polygons and the yellow stroke; the rest is lettering), white for the dark background.
 - Drawn for this app: disney, primevideo - their logos are lettering, unreadable at 16 px; a badge
