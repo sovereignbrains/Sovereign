@@ -750,7 +750,48 @@ class FlagInline final : public IDWriteInlineObject {
     const D2D1_RECT_F source{column * kFlagWidth, row * kFlagHeight, (column + 1) * kFlagWidth,
                              (row + 1) * kFlagHeight};
     const D2D1_RECT_F place{originX + 1, originY, originX + 1 + Width(), originY + height_};
-    target_->DrawBitmap(sprite_, place, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+    // A small enamel badge, not a bare rectangle: rounded corners, the flag
+    // inset a pixel of the sprite (no neighbour's colour at the edge), a
+    // gloss down from the top, a dark hairline round it and a light one inside.
+    const D2D1_RECT_F inner{source.left + 1, source.top + 1, source.right - 1, source.bottom - 1};
+    const float scaleX = (place.right - place.left) / (inner.right - inner.left);
+    const float scaleY = (place.bottom - place.top) / (inner.bottom - inner.top);
+    wil::com_ptr<ID2D1BitmapBrush> brush;
+    if (FAILED(target_->CreateBitmapBrush(
+            sprite_, D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP,
+                                                 D2D1_BITMAP_INTERPOLATION_MODE_LINEAR),
+            D2D1::BrushProperties(1.0f, D2D1::Matrix3x2F::Scale(scaleX, scaleY) *
+                                            D2D1::Matrix3x2F::Translation(place.left - inner.left * scaleX,
+                                                                          place.top - inner.top * scaleY)),
+            brush.put()))) {
+      target_->DrawBitmap(sprite_, place, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+      return S_OK;
+    }
+    const float radius = std::max(1.5f, height_ * 0.17f);
+    const D2D1_ROUNDED_RECT shape{place, radius, radius};
+    target_->FillRoundedRectangle(shape, brush.get());
+    wil::com_ptr<ID2D1SolidColorBrush> ink;
+    if (SUCCEEDED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.16f), ink.put()))) {
+      const D2D1_ROUNDED_RECT light{
+          D2D1::RectF(place.left + 0.5f, place.top + 0.5f, place.right - 0.5f, place.bottom - 0.5f),
+          radius - 0.5f, radius - 0.5f};
+      target_->DrawRoundedRectangle(light, ink.get(), 1.0f);
+      ink->SetColor(D2D1::ColorF(0, 0, 0, 0.45f));
+      const D2D1_ROUNDED_RECT dark{
+          D2D1::RectF(place.left - 0.5f, place.top - 0.5f, place.right + 0.5f, place.bottom + 0.5f),
+          radius + 0.5f, radius + 0.5f};
+      target_->DrawRoundedRectangle(dark, ink.get(), 1.0f);
+    }
+    wil::com_ptr<ID2D1GradientStopCollection> stops;
+    wil::com_ptr<ID2D1LinearGradientBrush> gloss;
+    const std::array<D2D1_GRADIENT_STOP, 2> pair{{{0, D2D1::ColorF(1, 1, 1, 0.22f)}, {1, D2D1::ColorF(1, 1, 1, 0)}}};
+    if (SUCCEEDED(target_->CreateGradientStopCollection(pair.data(), 2, stops.put())) &&
+        SUCCEEDED(target_->CreateLinearGradientBrush(
+            D2D1::LinearGradientBrushProperties({place.left, place.top},
+                                                {place.left, place.top + (place.bottom - place.top) * 0.55f}),
+            stops.get(), gloss.put()))) {
+      target_->FillRoundedRectangle(shape, gloss.get());
+    }
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE GetMetrics(DWRITE_INLINE_OBJECT_METRICS* metrics) noexcept override {
