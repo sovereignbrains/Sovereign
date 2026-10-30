@@ -189,6 +189,25 @@ CubePose BlendPose(const CubePose& a, const CubePose& b, float t) {
           .signal = Mix(a.signal, b.signal, t)};
 }
 
+CubePose Idle(const CubePose& pose, Display display, double seconds) {
+  if (display == Display::ServiceDown) {
+    return pose;  // dead stays dead
+  }
+  constexpr double kTau = 6.283185307179586;
+  // Periods that don't share a beat, so it never visibly repeats as a loop.
+  const auto wave = [&](double period, double phase = 0) { return static_cast<float>(std::sin(kTau * seconds / period + phase)); };
+  CubePose p = pose;
+  p.lift += 1.4f * (0.5f + 0.5f * wave(4.6));  // afloat: rises a little and settles
+  p.pitch += 0.8f * wave(6.5, 1.0);
+  if (display != Display::Starting) {
+    p.yaw += 2.0f * wave(9.0);  // a slow sway; connecting, the spin is the motion
+  }
+  const float breath = 0.5f + 0.5f * wave(3.1, 2.0);
+  p.press = std::clamp(p.press + (p.press > 0.5f ? -0.08f : 0.10f) * breath, 0.0f, 1.0f);  // the light breathes
+  p.glow *= 1 - 0.12f * breath;
+  return p;
+}
+
 float EaseOut(float t) {
   t = std::clamp(t, 0.0f, 1.0f);
   const float rest = 1 - t;

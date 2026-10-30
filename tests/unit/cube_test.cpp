@@ -29,6 +29,26 @@ void TestRestYaw() {
   }
 }
 
+void TestIdle() {
+  for (const Display display : {Display::Off, Display::On, Display::Starting, Display::Error}) {
+    const CubePose rest = CubePoseFor(display);
+    float highest = 0;
+    for (double s = 0; s < 120; s += 0.37) {
+      const CubePose p = Idle(rest, display, s);
+      CHECK(p.lift >= rest.lift - 0.01f && p.lift <= rest.lift + 1.41f);  // floats up a little, never sinks
+      CHECK(std::abs(p.yaw - rest.yaw) <= 2.01f && std::abs(p.pitch - rest.pitch) <= 0.81f);  // the same faces show
+      CHECK(p.press >= 0 && p.press <= 1 && p.glow <= rest.glow + 0.001f && p.glow >= rest.glow * 0.87f);
+      highest = std::max(highest, p.lift - rest.lift);
+    }
+    CHECK(highest > 1.0f);  // and it does move
+  }
+  const CubePose down = CubePoseFor(Display::ServiceDown);
+  const CubePose still = Idle(down, Display::ServiceDown, 3.3);
+  CHECK(Close(still.lift, down.lift) && Close(still.yaw, down.yaw) && Close(still.press, down.press));  // dead stays dead
+  const CubePose connecting = Idle(CubePoseFor(Display::Starting), Display::Starting, 2.0);
+  CHECK(Close(connecting.yaw, CubePoseFor(Display::Starting).yaw));  // the spin is its motion: no sway on it
+}
+
 void TestBlend() {
   const CubePose off = CubePoseFor(Display::Off);
   const CubePose on = CubePoseFor(Display::On);
@@ -101,6 +121,7 @@ int main() {  // NOLINT(bugprone-exception-escape) - see the catch below
   try {
     TestRestYaw();
     TestBlend();
+  TestIdle();
     TestPoses();
     TestFaces();
   } catch (const std::exception& e) {

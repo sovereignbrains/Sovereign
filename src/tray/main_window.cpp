@@ -128,6 +128,7 @@ constexpr UINT kTipDelayMs = 500;
 // new state's pose, the turning while it connects (degrees per ms).
 constexpr UINT_PTR kCubeTimer = 2;
 constexpr UINT kCubeFrameMs = 15;
+constexpr UINT kCubeIdleFrameMs = 33;  // the idle life (Idle) is slow: 30 frames a second are plenty
 constexpr ULONGLONG kCubeTurnMs = 520;
 constexpr UINT kQuestionInMs = 170;  // MainWindow::Ask's card coming in
 constexpr float kCubeSpin = 0.12f;
@@ -4245,7 +4246,8 @@ struct MainWindow::Impl {
     return SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &on, 0) == FALSE || on != FALSE;
   }
 
-  CubePose CubeAt(ULONGLONG now) const {
+  // Where the turn has got to, without the idle life - what a new turn starts from.
+  CubePose CubeBase(ULONGLONG now) const {
     if (!Motion()) {
       return cubeTo;
     }
@@ -4257,9 +4259,22 @@ struct MainWindow::Impl {
     return pose;
   }
 
+  // What's drawn: the turn, and over it the small idle life (Idle).
+  CubePose CubeAt(ULONGLONG now) const {
+    const CubePose base = CubeBase(now);
+    return Motion() ? Idle(base, cubeDisplay, static_cast<double>(now) / 1000.0) : base;
+  }
+
   bool CubeMoving(ULONGLONG now) const {
     return Motion() && (cubeDisplay == Display::Starting || now - cubeStart < kCubeTurnMs);
   }
+
+  // Alive at rest too (Idle): while the overview shows the cube, on screen.
+  bool CubeIdling() const {
+    return Motion() && cubeKnown && cubeDisplay != Display::ServiceDown && page == UiPage::Overview &&
+           hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && IsIconic(hwnd) == FALSE && !Blocked();
+  }
+
 
   // A new state: a turn from wherever the cube is into its pose - forward,
   // to the next square-on yaw (askew by the pose's own offset).
@@ -4274,7 +4289,7 @@ struct MainWindow::Impl {
       cubeFrom = to;
       cubeStart = display == Display::Starting ? now : now - kCubeTurnMs;
     } else {
-      cubeFrom = CubeAt(now);
+      cubeFrom = CubeBase(now);
       cubeFrom.yaw = std::fmod(cubeFrom.yaw, 360.0f);
       to.yaw = NextRestYaw(cubeFrom.yaw) + (to.yaw - 45);
       cubeStart = now;
@@ -4285,8 +4300,8 @@ struct MainWindow::Impl {
   }
 
   void KickCube() {
-    if (hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && CubeMoving(GetTickCount64())) {
-      SetTimer(hwnd, kCubeTimer, kCubeFrameMs, nullptr);
+    if (hwnd != nullptr && IsWindowVisible(hwnd) != FALSE && (CubeMoving(GetTickCount64()) || CubeIdling())) {
+      SetTimer(hwnd, kCubeTimer, CubeMoving(GetTickCount64()) ? kCubeFrameMs : kCubeIdleFrameMs, nullptr);
     }
   }
 
@@ -4958,6 +4973,7 @@ struct MainWindow::Impl {
     }
     Relayout();
     KickLive();
+    KickCube();  // back on the overview, the cube's idle life starts again
   }
 
   void Activate(const Item& item) {
@@ -5374,6 +5390,9 @@ struct MainWindow::Impl {
           target->Resize(D2D1::SizeU(LOWORD(lParam), HIWORD(lParam)));
         }
         Relayout();
+        if (wParam != SIZE_MINIMIZED) {
+          KickCube();  // restored from the taskbar: the idle timer stopped while it was minimized
+        }
         return 0;
       case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);  // NOLINT(performance-no-int-to-ptr)
@@ -5433,8 +5452,12 @@ struct MainWindow::Impl {
       case WM_TIMER:
         if (wParam == kCubeTimer) {
           // One more frame after the last move: it lands on the pose exactly.
-          if (!CubeMoving(GetTickCount64()) || IsWindowVisible(w) == FALSE) {
+          // At rest the timer slows to the idle life's pace (and a turn
+          // begun meanwhile is KickCube's, back at the quick one).
+          if (IsWindowVisible(w) == FALSE || (!CubeMoving(GetTickCount64()) && !CubeIdling())) {
             KillTimer(w, kCubeTimer);
+          } else if (!CubeMoving(GetTickCount64())) {
+            SetTimer(w, kCubeTimer, kCubeIdleFrameMs, nullptr);
           }
           InvalidateRect(w, nullptr, FALSE);
           return 0;

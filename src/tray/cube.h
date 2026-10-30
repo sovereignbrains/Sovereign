@@ -40,6 +40,12 @@ CubePose CubePoseFor(Display display);
 // Between `a` (t = 0) and `b` (t = 1).
 CubePose BlendPose(const CubePose& a, const CubePose& b, float t);
 
+// The pose with its small idle life at `seconds`: floating up and down a
+// little, a slow sway, the light breathing - so a resting cube isn't a
+// picture. A pure function of time (no state to carry), small enough that
+// the faces shown never change; the service down it stays still.
+CubePose Idle(const CubePose& pose, Display display, double seconds);
+
 // Fast at first, settling at the end: t in 0..1.
 float EaseOut(float t);
 
