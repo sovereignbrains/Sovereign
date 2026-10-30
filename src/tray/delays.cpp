@@ -81,20 +81,31 @@ std::optional<SiteChecks> ParseSitesResponse(std::string_view response) {
 
 int DelayScore(const Delay& delay) { return delay.ms + 2 * delay.jitter + 10 * delay.loss; }
 
+std::string BestServer(const std::vector<std::string>& members, const std::map<std::string, Delay>& delays) {
+  const std::string* best = nullptr;
+  int bestScore = 0;
+  for (const std::string& tag : members) {
+    const auto it = delays.find(tag);
+    if (it == delays.end() || it->second.state != Delay::State::Ok) {
+      continue;
+    }
+    if (best == nullptr || DelayScore(it->second) < bestScore) {
+      best = &tag;
+      bestScore = DelayScore(it->second);
+    }
+  }
+  return best != nullptr ? *best : std::string();
+}
+
 AutoPick JudgeAuto(AutoPick pick, const std::vector<std::string>& members,
                    const std::map<std::string, Delay>& delays) {
   const auto measured = [&](const std::string& tag) -> const Delay* {
     const auto it = delays.find(tag);
     return it != delays.end() && it->second.state == Delay::State::Ok ? &it->second : nullptr;
   };
-  const std::string* best = nullptr;
-  int bestScore = 0;
-  for (const std::string& tag : members) {
-    if (const Delay* delay = measured(tag); delay != nullptr && (best == nullptr || DelayScore(*delay) < bestScore)) {
-      best = &tag;
-      bestScore = DelayScore(*delay);
-    }
-  }
+  const std::string bestTag = BestServer(members, delays);
+  const std::string* best = bestTag.empty() ? nullptr : &bestTag;
+  const int bestScore = best != nullptr ? DelayScore(*measured(bestTag)) : 0;
   if (best == nullptr) {
     return pick;  // nothing answered: no better idea than the one there is
   }

@@ -74,6 +74,10 @@ void TestJudgeAuto() {
   delays = {{"nl", Ok(50, 0, 5)}, {"fi", Ok(90)}, {"de", Ok(95)}};
   CHECK(JudgeAuto({}, members, delays).server == "fi");
 
+  // The best by score is what the page compares auto's server with; none answered: empty.
+  CHECK(BestServer(members, delays) == "fi");
+  CHECK(BestServer({"x"}, delays).empty());
+
   // The one in use failed: the best at once.
   delays = {{"nl", {.state = Delay::State::Failed, .error = "timeout"}}, {"fi", Ok(90)}, {"de", Ok(95)}};
   CHECK(JudgeAuto({.server = "nl"}, members, delays).server == "fi");

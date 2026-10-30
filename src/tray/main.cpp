@@ -342,6 +342,7 @@ struct View {
   std::string delayError;
   int autoOption = -1;      // the protocol that is auto (a URL test), if any
   std::string autoServer;   // with an auto pick, the server it runs on; "" until measured
+  bool autoIsBest = true;   // the server auto runs on is the best of the last test (else it holds on, see JudgeAuto)
   std::string selectError;  // why the box couldn't be switched to the pick
   sovereign::tray::ExitIp exitIp;  // through the server in use; empty while off
   std::vector<sovereign::tray::ExitIp> locations;  // per protocol: where it is, once known
@@ -810,9 +811,10 @@ class Worker {
       if (protocol) {
         settings_.protocol = *protocol;
         Save();  // the running box switches to it (ApplySelection), no restart
-        if (autoPick_.server.empty()) {
-          PickAutoServer();  // auto now: from the last test, not sing-box's until the next one
-        }
+        // A pick of auto is a request for the best now: the last test's, not
+        // the server it held on to before the user went to a pick of their own.
+        autoPick_ = {};
+        PickAutoServer();
       }
       const auto config = EffectiveConfig();
       // Nothing left to run - every configuration off, every server off: the
@@ -2740,10 +2742,15 @@ class Worker {
     }
     auto [choices, current] = Choices();
     std::string autoServer;  // "" until measured
+    bool autoIsBest = true;
     if (IsAuto(choices, current)) {
       autoServer = Wanted(choices, current);
       if (autoServer == choices.options[static_cast<std::size_t>(current)]) {
         autoServer.clear();
+      } else {
+        const std::string best = sovereign::tray::BestServer(
+            choices.groups.at(choices.options[static_cast<std::size_t>(current)]), delays_);
+        autoIsBest = best.empty() || best == autoServer;
       }
     }
     const auto autoOption = std::find_if(choices.options.begin(), choices.options.end(),
@@ -2835,6 +2842,7 @@ class Worker {
       v.protocol = current;
       v.autoOption = autoOption == choices.options.end() ? -1 : static_cast<int>(autoOption - choices.options.begin());
       v.autoServer = autoServer;
+      v.autoIsBest = autoIsBest;
       v.selectError = selectError_;
       v.serviceVia = serviceVia_;
       v.delays.clear();
@@ -4812,6 +4820,7 @@ UiContent ContentFrom(const View& v) {
   c.delayError = Widen(v.delayError);
   c.autoOption = v.autoOption;
   c.autoServer = Widen(v.autoServer);
+  c.autoIsBest = v.autoIsBest;
   c.selectError = Widen(v.selectError);
   for (const auto& location : v.locations) {
     c.locations.push_back({.country = Widen(location.country),

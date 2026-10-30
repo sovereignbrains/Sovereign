@@ -1955,7 +1955,9 @@ class Painter {
         const std::wstring server =
             at == c.protocols.end() ? c.autoServer : OptionTitle(c, static_cast<std::size_t>(at - c.protocols.begin()));
         choice.detail = c.autoServer.empty() ? std::wstring(L"выберет лучший после первого замера")
-                                             : L"сейчас " + server + L" — лучший по замерам";
+                                             : c.autoIsBest
+                                                   ? L"сейчас " + server + L" — лучший по замерам"
+                                                   : L"сейчас " + server + L" — другой чуть быстрее, но разница мала";
       } else if (i < c.delays.size()) {
         choice.detail = DelayDetail(c.delays[i], c.delaysDetailed);
       }

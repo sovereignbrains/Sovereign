@@ -48,6 +48,10 @@ std::optional<SiteChecks> ParseSitesResponse(std::string_view response);
 // Only for State::Ok.
 int DelayScore(const Delay& delay);
 
+// The measured server of `members` with the lowest DelayScore; empty when none
+// answered.
+std::string BestServer(const std::vector<std::string>& members, const std::map<std::string, Delay>& delays);
+
 // The server auto runs on, and the one about to take over from it.
 struct AutoPick {
   std::string server{};     // empty: none picked yet
