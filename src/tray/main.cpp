@@ -5015,32 +5015,54 @@ void OnProfileCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       RequestRefresh(profile.id);
       break;
     case UiCommand::PaidMenu: {
-      // What the user paid their server till: typed; once said, a month more
-      // in a click (paid again), another date, or none.
-      const auto type = [&] {
-        if (g_mainWindow != nullptr) {
-          g_mainWindow->EditInPlace(UiCommand::PaidMenu, args.index, UiCommand::PaidDateText, L"", false);
+      // What the user paid their server till, on a calendar: it opens on a
+      // month past the date said before (paid again), or past today, and
+      // takes the day in a click; "don't follow" clears it.
+      if (g_mainWindow == nullptr) {
+        break;
+      }
+      const int offset = UtcOffsetMinutes();
+      const std::int64_t now = std::time(nullptr);
+      const auto civil = [&](std::int64_t unix) {
+        sovereign::tray::UiCalendar day;
+        int d = 0;
+        int m = 0;
+        int y = 0;
+        if (sscanf_s(sovereign::tray::DateText(unix, offset).c_str(), "%d.%d.%d", &d, &m, &y) == 3) {
+          day.day = d;
+          day.month = std::clamp(m, 1, 12);
+          day.year = y;
         }
+        return day;
       };
-      if (profile.paidTill == 0) {
-        type();
-        break;
+      sovereign::tray::UiCalendar calendar = civil(sovereign::tray::NextMonth(profile.paidTill != 0 ? profile.paidTill : now, offset));
+      const sovereign::tray::UiCalendar today = civil(now);
+      calendar.todayYear = today.year;
+      calendar.todayMonth = today.month;
+      calendar.todayDay = today.day;
+      if (calendar.year < 2000 || calendar.year > 2099) {
+        calendar = today;
       }
-      const std::int64_t next = sovereign::tray::NextMonth(profile.paidTill, UtcOffsetMinutes());
-      const std::vector<std::wstring> items = {
-          L"Оплатил: до " + Widen(sovereign::tray::DateText(next, UtcOffsetMinutes())), L"Другая дата…",
-          L"Не следить за оплатой"};
-      const auto picked = PickFromMenu(owner, args.anchor, items, -1);
-      if (!picked) {
-        break;
-      }
-      if (*picked == 0) {
-        change(ProfileChange::What::PaidTill, false, std::to_string(next));
-      } else if (*picked == 1) {
-        type();
-      } else {
-        change(ProfileChange::What::PaidTill, false, std::string());
-      }
+      sovereign::tray::UiQuestion ask;
+      ask.title = L"Оплачено до";
+      ask.text = {};
+      ask.yes = L"Готово";
+      ask.other = profile.paidTill != 0 ? L"Не следить" : std::wstring();
+      ask.glyph = L"\xE787";
+      ask.calendar = calendar;
+      const std::string id = profile.id;
+      g_mainWindow->AskDate(
+          std::move(ask),
+          [id, offset](const sovereign::tray::UiCalendar& picked) {
+            const std::string text = std::format("{}.{}.{}", picked.day, picked.month, picked.year);
+            if (const auto till = sovereign::tray::PaidDate(text, std::time(nullptr), offset)) {
+              RequestProfileChange({.id = id, .what = ProfileChange::What::PaidTill, .on = false,
+                                    .text = std::to_string(*till), .hours = 0});
+            }
+          },
+          [id] {
+            RequestProfileChange({.id = id, .what = ProfileChange::What::PaidTill, .on = false, .text = {}, .hours = 0});
+          });
       break;
     }
     case UiCommand::PaidDateText: {

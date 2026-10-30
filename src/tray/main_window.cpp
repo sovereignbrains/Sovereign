@@ -167,6 +167,7 @@ constexpr const wchar_t* kGlyphClock = L"\xE917";
 constexpr const wchar_t* kGlyphRoute = L"\xE8F0";
 constexpr const wchar_t* kGlyphShield = L"\xEA18";
 constexpr const wchar_t* kGlyphSpeed = L"\xEC4A";
+constexpr const wchar_t* kGlyphCalendar = L"\xE787";
 constexpr const wchar_t* kGlyphReport = L"\xEBE8";  // Bug: "something's wrong", plainer than the feedback bubble
 
 enum class Kind : std::uint8_t {
@@ -204,6 +205,7 @@ enum class Kind : std::uint8_t {
   SpeedGraph,    // the speed test's throughput over time, down and up (index: its check's, UiCheck speedDown/Up)
   Question,      // MainWindow::Ask's card, the window dimmed round it (index: its UiQuestion::Tone)
   Pill,          // a small label in a rounded outline, not a button (`warn`: amber)
+  Day,           // a calendar's key on a question's card: a day (text: its number, checked: chosen, sub 1: today) or a step (glyph set, sub: -1 back, 1 on)
 };
 
 // EditName: the configuration `index`'s name, typed over the page's title.
@@ -245,7 +247,6 @@ struct Item {
   bool hinted = false;  // a ValueRow with a "?" after its title: the value starts after that
   bool key = false;     // an IconButton drawn as a key with height (DrawKey), not flat
   bool chrome = false;  // an IconButton of the title bar (DrawChrome): its pill inset from the bar's edges
-  bool bank = false;    // a title bar key in the bank's housing (Layout::bank): its pill sits inside it
   bool engraved = false;  // a Muted label set as engraved capitals (engraved_)
 };
 
@@ -265,8 +266,6 @@ struct Layout {
   float viewTop = 0;        // the scrolling viewport, in window DIPs
   float viewBottom = 0;
   std::optional<D2D1_RECT_F> logBox;
-  std::optional<D2D1_RECT_F> bank;  // the title bar's keys' one housing, `bankKeys` cells in it (DrawBank); fixed
-  int bankKeys = 0;
   std::optional<D2D1_RECT_F> glow;  // the main screen's switch: a light behind it, under it all (DrawBackdrop)
 };
 
@@ -500,6 +499,68 @@ struct Interaction {
 bool Contains(const D2D1_RECT_F& r, float x, float y) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; }
 
 D2D1_RECT_F Inflate(const D2D1_RECT_F& r, float by) { return {r.left - by, r.top - by, r.right + by, r.bottom + by}; }
+
+// The calendar on a question's card (UiCalendar): dates as days since
+// 1970-01-01 in the Gregorian calendar, to move by days and by months.
+// A calendar key's Item::index as an answer (below them: 0 no, 1 yes, 2 other).
+constexpr int kAnswerMonthBack = 10;
+constexpr int kAnswerMonthOn = 11;
+constexpr int kAnswerYearBack = 12;
+constexpr int kAnswerYearOn = 13;
+constexpr int kAnswerDay = 100;  // + the day of the month
+constexpr int kCalendarFirstYear = 2000;
+constexpr int kCalendarLastYear = 2099;
+constexpr std::array<const wchar_t*, 12> kMonthNames = {L"Январь", L"Февраль", L"Март",    L"Апрель",
+                                                        L"Май",    L"Июнь",    L"Июль",    L"Август",
+                                                        L"Сентябрь", L"Октябрь", L"Ноябрь",  L"Декабрь"};
+constexpr std::array<const wchar_t*, 7> kWeekdayNames = {L"пн", L"вт", L"ср", L"чт", L"пт", L"сб", L"вс"};
+
+std::int64_t DaysFromCivil(int year, int month, int day) {
+  const int y = year - (month <= 2 ? 1 : 0);
+  const std::int64_t era = (y >= 0 ? y : y - 399) / 400;
+  const auto yoe = static_cast<std::int64_t>(y - era * 400);
+  const std::int64_t doy = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
+  const std::int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+void CivilFromDays(std::int64_t days, int& year, int& month, int& day) {
+  const std::int64_t z = days + 719468;
+  const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const std::int64_t doe = z - era * 146097;
+  const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const std::int64_t mp = (5 * doy + 2) / 153;
+  day = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
+  month = static_cast<int>(mp < 10 ? mp + 3 : mp - 9);
+  year = static_cast<int>(yoe + era * 400 + (month <= 2 ? 1 : 0));
+}
+
+int DaysInMonth(int year, int month) {
+  constexpr std::array<int, 12> days = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+  return days[static_cast<std::size_t>(month - 1)] + (month == 2 && leap ? 1 : 0);
+}
+
+// 0 for Monday: 1970-01-01 was a Thursday.
+int WeekdayOf(int year, int month, int day) {
+  return static_cast<int>(((DaysFromCivil(year, month, day) + 3) % 7 + 7) % 7);
+}
+
+void CalendarShiftDays(UiCalendar& c, int days) {
+  CivilFromDays(DaysFromCivil(c.year, c.month, c.day) + days, c.year, c.month, c.day);
+  c.year = std::clamp(c.year, kCalendarFirstYear, kCalendarLastYear);
+  c.day = std::min(c.day, DaysInMonth(c.year, c.month));
+}
+
+// A month or a year on: the day stays, or the month's last if it has fewer.
+void CalendarShiftMonths(UiCalendar& c, int months) {
+  const int total = std::clamp(c.year * 12 + (c.month - 1) + months, kCalendarFirstYear * 12,
+                               kCalendarLastYear * 12 + 11);
+  c.year = total / 12;
+  c.month = total % 12 + 1;
+  c.day = std::min(c.day, DaysInMonth(c.year, c.month));
+}
 
 std::wstring_view Glyph(const wchar_t* glyph) { return glyph != nullptr ? std::wstring_view(glyph) : std::wstring_view(); }
 
@@ -863,6 +924,34 @@ class Painter {
         no.scrolls = false;
         l.items.push_back(std::move(no));
       }
+      if (q.calendar) {
+        // The calendar's keys are answers too (kAnswerMonth.. and a day's
+        // kAnswerDay + number): they keep the card open, Answer moves the date.
+        const UiCalendar& cal = *q.calendar;
+        const CalendarKeys keys = CalendarHead(box.calHead);
+        const auto step = [&](D2D1_RECT_F rect, int index, int direction) {
+          Item it = Make(Kind::Day, rect, {}, kGlyphChevron);
+          it.action = ItemAction::Answer;
+          it.index = index;
+          it.sub = direction;
+          it.scrolls = false;
+          l.items.push_back(std::move(it));
+        };
+        step(keys.monthBack, kAnswerMonthBack, -1);
+        step(keys.monthOn, kAnswerMonthOn, 1);
+        step(keys.yearBack, kAnswerYearBack, -1);
+        step(keys.yearOn, kAnswerYearOn, 1);
+        const int firstWeekday = WeekdayOf(cal.year, cal.month, 1);
+        for (int day = 1; day <= DaysInMonth(cal.year, cal.month); ++day) {
+          Item it = Make(Kind::Day, CalendarDay(box.calGrid, firstWeekday, day), std::to_wstring(day));
+          it.action = ItemAction::Answer;
+          it.index = kAnswerDay + day;
+          it.checked = day == cal.day;
+          it.sub = cal.year == cal.todayYear && cal.month == cal.todayMonth && day == cal.todayDay ? 1 : 0;
+          it.scrolls = false;
+          l.items.push_back(std::move(it));
+        }
+      }
     }
     return l;
   }
@@ -880,7 +969,36 @@ class Painter {
     D2D1_RECT_F yes{};
     D2D1_RECT_F other{};
     D2D1_RECT_F no{};
+    D2D1_RECT_F calHead{};  // a calendar's month and year keys; the weekdays' row and the days' grid under it
+    D2D1_RECT_F calWeek{};
+    D2D1_RECT_F calGrid{};
   };
+  // A calendar's parts in the card's inner width (AskBoxes::calHead): the
+  // month's name between its two steps on the left, the year's on the right.
+  static constexpr float kCalCell = 26;  // a day's row
+  static constexpr int kCalRows = 6;
+  struct CalendarKeys {
+    D2D1_RECT_F monthBack, monthName, monthOn, yearBack, yearName, yearOn;
+  };
+  static CalendarKeys CalendarHead(D2D1_RECT_F head) {
+    const float step = 28;
+    const float month = std::round((head.right - head.left - 8) * 0.56f);  // 8: the gap between the groups
+    const float yearLeft = head.left + month + 8;
+    return {{head.left, head.top, head.left + step, head.bottom},
+            {head.left + step, head.top, head.left + month - step, head.bottom},
+            {head.left + month - step, head.top, head.left + month, head.bottom},
+            {yearLeft, head.top, yearLeft + step, head.bottom},
+            {yearLeft + step, head.top, head.right - step, head.bottom},
+            {head.right - step, head.top, head.right, head.bottom}};
+  }
+  // The cell of day `day` of a month starting on `firstWeekday` (0: Monday).
+  static D2D1_RECT_F CalendarDay(D2D1_RECT_F grid, int firstWeekday, int day) {
+    const int slot = firstWeekday + day - 1;
+    const float width = (grid.right - grid.left) / 7;
+    const float left = grid.left + width * static_cast<float>(slot % 7);
+    const float top = grid.top + kCalCell * static_cast<float>(slot / 7);
+    return {left + 3, top + 1, left + width - 3, top + kCalCell - 1};
+  }
   AskBoxes AskBox(const UiQuestion& q, float width, float height) const {
     constexpr float kAskPad = 22;
     constexpr float kCircle = 38;
@@ -896,8 +1014,11 @@ class Painter {
     const float body = std::max(kAskPad + kCircle, titleTop + titleHeight + (q.text.empty() ? 0.0f : 6 + textHeight));
     // With a second way on, the buttons go in two rows: yes across the card,
     // then the other and no side by side.
-    const bool rows = !q.other.empty();
-    const float h = body + kAskPad + kBand + (rows ? kAskButton + 8 : 0.0f);
+    // A calendar goes under it all, and with it the three buttons stand in one
+    // row (the card has to fit the window's least height).
+    const bool rows = !q.other.empty() && !q.calendar;
+    const float calendar = q.calendar ? 14 + 30 + 22 + kCalCell * kCalRows : 0.0f;
+    const float h = body + calendar + kAskPad + kBand + (rows ? kAskButton + 8 : 0.0f);
     const float left = std::round((width - w) / 2);
     const float top = std::round(std::max(kCaption + 8, (height - h) * 0.42f));
     AskBoxes b;
@@ -905,7 +1026,14 @@ class Painter {
     b.circle = {left + kAskPad, top + kAskPad, left + kAskPad + kCircle, top + kAskPad + kCircle};
     b.title = {left + textLeft, top + titleTop, left + textLeft + textWidth, top + titleTop + titleHeight};
     b.text = {b.title.left, b.title.bottom + 6, b.title.right, b.title.bottom + 6 + textHeight};
-    b.band = top + body + kAskPad;
+    if (q.calendar) {
+      const float inner = left + kAskPad;
+      const float headTop = top + body + 14;
+      b.calHead = {inner, headTop, left + w - kAskPad, headTop + 30};
+      b.calWeek = {inner, headTop + 30, left + w - kAskPad, headTop + 52};
+      b.calGrid = {inner, headTop + 52, left + w - kAskPad, headTop + 52 + kCalCell * kCalRows};
+    }
+    b.band = top + body + calendar + kAskPad;
     const float buttonTop = b.band + (kBand - kAskButton) / 2;
     const float half = (w - 2 * kAskPad - 8) / 2;
     // Alone (a note), its one button takes the right half.
@@ -917,6 +1045,13 @@ class Painter {
       b.yes = {left + kAskPad, buttonTop, left + w - kAskPad, buttonTop + kAskButton};
       b.other = {left + kAskPad, lower, left + kAskPad + half, lower + kAskButton};
       b.no = {left + w - kAskPad - half, lower, left + w - kAskPad, lower + kAskButton};
+    }
+    if (q.calendar && !q.other.empty()) {
+      const float third = (w - 2 * kAskPad - 16) / 3;
+      const float x = left + kAskPad;
+      b.yes = {x, buttonTop, x + third, buttonTop + kAskButton};
+      b.other = {x + third + 8, buttonTop, x + 2 * third + 8, buttonTop + kAskButton};
+      b.no = {x + 2 * third + 16, buttonTop, left + w - kAskPad, buttonTop + kAskButton};
     }
     return b;
   }
@@ -936,10 +1071,6 @@ class Painter {
       if (live != nullptr) {
         DrawLive(k, *live, *l.glow);  // under everything else: behind the glass, under the cards
       }
-    }
-
-    if (l.bank) {
-      DrawBank(k, *l.bank, l.bankKeys);
     }
 
     bool clipped = false;
@@ -1037,14 +1168,14 @@ class Painter {
     return line;
   }
   std::wstring Describe(const Layout& l, float width) const {
-    static constexpr std::array<const wchar_t*, 34> kNames = {
+    static constexpr std::array<const wchar_t*, 35> kNames = {
         L"Card",     L"Divider",  L"Title",    L"Heading",  L"Text",     L"Muted",  L"Wrap",   L"Caption",
         L"Error",    L"Field",    L"Power",    L"Server",   L"Banner",
         L"Button",   L"Accent",   L"Danger",   L"Icon",     L"Switch",   L"Choice", L"Profile", L"Toggle",
         L"Check",    L"Segment",  L"Chip",     L"App",      L"Log",      L"Hint",   L"Value",   L"Meter",  L"Tag",
-        L"AppTitle", L"Speed",    L"Question", L"Pill"};
+        L"AppTitle", L"Speed",    L"Question", L"Pill",    L"Day"};
     // One per Kind, in its order: a kind added or gone shifts every name after it.
-    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Pill) + 1);
+    static_assert(kNames.size() == static_cast<std::size_t>(Kind::Day) + 1);
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
@@ -1696,14 +1827,6 @@ class Painter {
     l.items.push_back(std::move(report));
     if (update) {
       l.items.push_back(std::move(*update));
-    }
-    if (page == UiPage::Overview && keys.size() > 1) {
-      // The page keys share one housing, a cell each.
-      for (Item& key : keys) {
-        key.bank = true;
-      }
-      l.bank = D2D1_RECT_F{keys.back().rect.left, kCaption / 2 - 15, keys.front().rect.right, kCaption / 2 + 15};
-      l.bankKeys = static_cast<int>(keys.size());
     }
     for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
       l.items.push_back(std::move(*it));
@@ -3095,6 +3218,7 @@ class Painter {
       case Kind::Power: DrawPower(k, it, c, hovered, pressed); break;
       case Kind::SpeedGraph: DrawSpeed(k, it, c); break;
       case Kind::Question: DrawQuestion(k, c); break;
+      case Kind::Day: DrawDay(k, it, hovered, pressed); break;
       case Kind::ServerCard: {
         if (hoverAlpha > 0 && it.enabled) {
           k.Round(r, kRadius - 1, Rgb(255, 255, 255, hoverAlpha * 0.6f));
@@ -3302,7 +3426,6 @@ class Painter {
           k.Round(r, 5, FromColorRef(ui::kWarning, 0.10f));
         }
         k.Outline(r, 5, it.warn ? FromColorRef(ui::kWarning, 0.40f) : Rgb(255, 255, 255, 0.08f));
-        k.Line({r.left + 4, r.top + 1.5f}, {r.right - 4, r.top + 1.5f}, Rgb(0, 0, 0, 0.35f));
         k.Text(it.text, caption_.get(), {r.left + kPillPad, r.top, r.right, r.bottom}, ink);
         break;
       }
@@ -3447,6 +3570,54 @@ class Painter {
            b.circle, ToneColor(q.tone));
     k.Text(q.title, ask_.get(), b.title, FromColorRef(ui::kPrimaryText));
     k.Text(q.text, wrap_.get(), b.text, FromColorRef(ui::kSecondaryText));
+    if (q.calendar) {
+      // The month and the year between their steps (the keys are items, DrawDay);
+      // the weekdays over the grid, a hairline under them.
+      const UiCalendar& cal = *q.calendar;
+      const CalendarKeys keys = CalendarHead(b.calHead);
+      k.Text(kMonthNames[static_cast<std::size_t>(cal.month - 1)], center_.get(), keys.monthName,
+             FromColorRef(ui::kPrimaryText));
+      k.Text(std::to_wstring(cal.year), center_.get(), keys.yearName, FromColorRef(ui::kPrimaryText));
+      const float width = (b.calGrid.right - b.calGrid.left) / 7;
+      for (std::size_t i = 0; i < kWeekdayNames.size(); ++i) {
+        const float left = b.calGrid.left + width * static_cast<float>(i);
+        k.Text(kWeekdayNames[i], hint_.get(), {left, b.calWeek.top, left + width, b.calWeek.bottom},
+               FromColorRef(ui::kSecondaryText, i >= 5 ? 0.6f : 1.0f));
+      }
+      const float line = std::floor(b.calGrid.top) - 1.5f;
+      k.Line({b.calGrid.left, line}, {b.calGrid.right, line}, Rgb(255, 255, 255, 0.07f));
+    }
+  }
+
+  // A calendar key on a question's card: a step (a chevron) or a day.
+  void DrawDay(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
+    const D2D1_RECT_F r = it.rect;
+    if (!it.glyph.empty()) {
+      if (hovered || pressed) {
+        k.Round(r, 6, Rgb(255, 255, 255, pressed ? 0.05f : 0.10f));
+      }
+      const float cx = std::floor((r.left + r.right) / 2) + 0.5f;
+      const float cy = std::floor((r.top + r.bottom) / 2) + 0.5f;
+      const float direction = static_cast<float>(it.sub);
+      const D2D1_COLOR_F ink = FromColorRef(hovered ? ui::kPrimaryText : ui::kSecondaryText);
+      k.t->DrawLine({cx - direction * 2, cy - 4}, {cx + direction * 2, cy}, k.Color(ink), 1.3f, roundCaps_.get());
+      k.t->DrawLine({cx + direction * 2, cy}, {cx - direction * 2, cy + 4}, k.Color(ink), 1.3f, roundCaps_.get());
+      return;
+    }
+    D2D1_COLOR_F ink = FromColorRef(ui::kPrimaryText);
+    if (it.checked) {
+      k.Round(r, 6, FromColorRef(ui::kAccent, pressed ? 0.8f : 1.0f));
+      ink = Rgb(12, 20, 36);
+    } else {
+      if (hovered || pressed) {
+        k.Round(r, 6, Rgb(255, 255, 255, pressed ? 0.05f : 0.10f));
+      }
+      if (it.sub == 1) {  // today
+        k.Outline(r, 6, FromColorRef(ui::kAccent, 0.55f));
+        ink = FromColorRef(ui::kAccent);
+      }
+    }
+    k.Text(it.text, button_.get(), r, ink);
   }
 
   // The log's visible lines in `box`: time and level in their own colors,
@@ -3544,14 +3715,6 @@ class Painter {
     k.Round(r, 6, fill);
     if (it.kind == Kind::Button) {
       k.Outline(r, 6, Rgb(255, 255, 255, 0.07f));
-      if (it.enabled) {  // a machined face: the light on its top edge, the shade under
-        if (pressed) {
-          k.Line({r.left + 5, r.top + 1.5f}, {r.right - 5, r.top + 1.5f}, Rgb(0, 0, 0, 0.40f));
-        } else {
-          k.Line({r.left + 5, r.top + 1.5f}, {r.right - 5, r.top + 1.5f}, Rgb(255, 255, 255, 0.12f));
-          k.Line({r.left + 5, r.bottom - 1.5f}, {r.right - 5, r.bottom - 1.5f}, Rgb(0, 0, 0, 0.30f));
-        }
-      }
     }
     // Glyph and text centered together.
     float textWidth = 0;
@@ -3789,9 +3952,6 @@ class Painter {
       const float cy = (it.rect.top + it.rect.bottom) / 2;
       return {it.rect.left + 2, cy - 14, it.rect.right - 2, cy + 14};
     }
-    if (it.bank) {  // the housing's cell, a step in from its edges
-      return {it.rect.left + 3, it.rect.top + 7, it.rect.right - 3, it.rect.bottom - 7};
-    }
     return ChromePill(it.rect);
   }
   // Capitals cut into a panel breathe: a hair space between the letters (a
@@ -3806,17 +3966,55 @@ class Painter {
     }
     return out;
   }
-  // The title bar's keys of the main screen in one housing, like a module on
-  // a rack: a face lit from above, a hairline round it, and a groove (dark,
-  // then light) between the keys.
-  void DrawBank(const Canvas& k, D2D1_RECT_F r, int keys) const {
-    k.Bevel(r, 9, 0.035f, false);
-    const float cell = (r.right - r.left) / static_cast<float>(keys);
-    for (int i = 1; i < keys; ++i) {
-      const float x = std::floor(r.left + cell * static_cast<float>(i)) + 0.5f;
-      k.Line({x, r.top + 8}, {x, r.bottom - 8}, Rgb(0, 0, 0, 0.45f));
-      k.Line({x + 1, r.top + 8}, {x + 1, r.bottom - 8}, Rgb(255, 255, 255, 0.06f));
+  // The title bar's own icons, drawn as lines like the cross and the dash -
+  // one stroke, round ends, 14 DIPs across, nothing filled - instead of
+  // Segoe's glyphs, which differ in weight and detail from each other
+  // (30.10.2026, his: "слишком пестро ... я хотел что ты сам рисунок кнопок
+  // переделал"). False: not one of ours, the font's glyph is drawn.
+  bool DrawLineIcon(const Canvas& k, std::wstring_view glyph, float cx, float cy, D2D1_COLOR_F ink) const {
+    constexpr float kStroke = 1.3f;
+    const auto line = [&](float x0, float y0, float x1, float y1) {
+      k.t->DrawLine({cx + x0, cy + y0}, {cx + x1, cy + y1}, k.Color(ink), kStroke, roundCaps_.get());
+    };
+    const auto ring = [&](float x, float y, float rx, float ry) {
+      k.t->DrawEllipse(D2D1::Ellipse({cx + x, cy + y}, rx, ry), k.Color(ink), kStroke);
+    };
+    if (glyph == kGlyphSettings) {
+      // Three sliders: a line each, a ring on it where it's set.
+      const std::array<std::pair<float, float>, 3> sliders{{{-4.5f, -2.5f}, {0.0f, 2.5f}, {4.5f, -0.5f}}};
+      for (const auto& [y, x] : sliders) {
+        line(-7, y, x - 2.9f, y);
+        line(x + 2.9f, y, 7, y);
+        ring(x, y, 1.9f, 1.9f);
+      }
+    } else if (glyph == kGlyphLog) {
+      // A sheet with its lines.
+      k.t->DrawRoundedRectangle(D2D1::RoundedRect({cx - 5.5f, cy - 7, cx + 5.5f, cy + 7}, 2, 2), k.Color(ink),
+                                kStroke);
+      line(-2.5f, -2.5f, 2.5f, -2.5f);
+      line(-2.5f, 0.5f, 2.5f, 0.5f);
+      line(-2.5f, 3.5f, 0.5f, 3.5f);
+    } else if (glyph == kGlyphRoute) {
+      // A way from one point to another: a step up, with a ring at its start and a dot at its end.
+      ring(-5, 5, 1.8f, 1.8f);
+      line(-5, 3.2f, -5, -0.5f);
+      line(-5, -0.5f, 5, -0.5f);
+      line(5, -0.5f, 5, -3.2f);
+      k.t->FillEllipse(D2D1::Ellipse({cx + 5, cy - 5}, 1.8f, 1.8f), k.Color(ink));
+    } else if (glyph == kGlyphReport) {
+      // A bug: the body split down its back, a head, legs and feelers.
+      ring(0, 1.5f, 3.4f, 4.4f);
+      line(0, -2.9f, 0, 5.9f);
+      line(-1.4f, -4.2f, -2.8f, -6.2f);
+      line(1.4f, -4.2f, 2.8f, -6.2f);
+      for (const float y : {-0.8f, 2.0f, 4.6f}) {
+        line(-3.4f, y, -6.4f, y - 1.0f);
+        line(3.4f, y, 6.4f, y - 1.0f);
+      }
+    } else {
+      return false;
     }
+    return true;
   }
   static D2D1_RECT_F ChromePill(D2D1_RECT_F r) {
     const float cx = (r.left + r.right) / 2;
@@ -3830,21 +4028,6 @@ class Painter {
   void DrawChrome(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
     const D2D1_RECT_F r = it.rect;
     const bool cross = it.glyph == kGlyphClose;
-    if (it.bank) {
-      // A key in the housing: under the pointer it rises (a lit face), pressed it sinks.
-      const D2D1_RECT_F cap = KeyPill(it);
-      if (pressed) {
-        k.Bevel(cap, 6, 0.05f, true);
-      } else if (hovered) {
-        k.Bevel(cap, 6, 0.09f, false);
-      }
-      const float drop = pressed ? 1.0f : 0.0f;
-      k.Text(it.glyph, glyph_.get(), {r.left, r.top + drop, r.right, r.bottom + drop},
-             !it.enabled ? FromColorRef(ui::kSecondaryText, 0.4f)
-             : hovered   ? FromColorRef(ui::kPrimaryText)
-                         : FromColorRef(ui::kSecondaryText));
-      return;
-    }
     if (!it.checked && (hovered || pressed)) {
       k.Round(ChromePill(r), 8,
               cross ? FromColorRef(ui::kDanger, pressed ? 0.14f : 0.22f)
@@ -3863,7 +4046,6 @@ class Painter {
       k.Round(pill, 7, Rgb(0, 0, 0, 0.38f));
       k.Round(pill, 7, FromColorRef(ui::kAccent, pressed ? 0.04f : (hovered ? 0.16f : 0.08f)));
       k.Outline(pill, 7, FromColorRef(ui::kAccent, hovered ? 0.85f : 0.50f));
-      k.Line({pill.left + 6, pill.top + 1.5f}, {pill.right - 6, pill.top + 1.5f}, Rgb(0, 0, 0, 0.45f));
       if (it.detail.empty()) {
         k.Text(it.glyph, glyph_.get(), r, FromColorRef(ui::kPrimaryText));
         k.Led({pill.right - 5, pill.top + 5}, 2.0f, lamp);
@@ -3888,7 +4070,7 @@ class Painter {
       k.t->DrawLine({cx - kHalf, cy + kHalf}, {cx + kHalf, cy - kHalf}, k.Color(ink), kStroke, roundCaps_.get());
     } else if (it.glyph == kGlyphMinimize) {
       k.t->DrawLine({cx - kHalf, cy}, {cx + kHalf, cy}, k.Color(ink), kStroke, roundCaps_.get());
-    } else {
+    } else if (!DrawLineIcon(k, it.glyph, cx, cy, ink)) {
       k.Text(it.glyph, glyph_.get(), r, ink);
     }
   }
@@ -3985,6 +4167,7 @@ struct MainWindow::Impl {
   std::optional<UiQuestion> question;
   std::function<void()> onYes;
   std::function<void()> onOther;
+  std::function<void(const UiCalendar&)> onDate;  // a calendar's yes (AskDate)
   std::chrono::steady_clock::time_point questionAt{};
   std::optional<float> barGrab;  // dragging the log's thumb: where in it it was taken, DIPs below its top
   ULONGLONG panSince = 0;        // the middle button went down (log.pan)
@@ -4411,6 +4594,7 @@ struct MainWindow::Impl {
     question = std::move(asked);
     onYes = std::move(yes);
     onOther = std::move(other);
+    onDate = nullptr;
     in.focus = in.pressed = in.tip = -1;
     in.focusVisible = false;
     questionAt = std::chrono::steady_clock::now();
@@ -4423,15 +4607,67 @@ struct MainWindow::Impl {
     if (!question) {
       return;
     }
+    if (which >= kAnswerMonthBack && question->calendar) {
+      // A calendar's key: the date moves, the card stays.
+      UiCalendar& cal = *question->calendar;
+      switch (which) {
+        case kAnswerMonthBack: CalendarShiftMonths(cal, -1); break;
+        case kAnswerMonthOn: CalendarShiftMonths(cal, 1); break;
+        case kAnswerYearBack: CalendarShiftMonths(cal, -12); break;
+        case kAnswerYearOn: CalendarShiftMonths(cal, 12); break;
+        default:
+          if (which > kAnswerDay) {
+            cal.day = std::clamp(which - kAnswerDay, 1, DaysInMonth(cal.year, cal.month));
+          }
+          break;
+      }
+      Relayout();
+      return;
+    }
     const std::function<void()> yes = std::exchange(onYes, nullptr);
     const std::function<void()> other = std::exchange(onOther, nullptr);
+    const std::function<void(const UiCalendar&)> picked = std::exchange(onDate, nullptr);
+    const std::optional<UiCalendar> date = question->calendar;
     question.reset();
     in.focus = in.pressed = -1;
     Relayout();
+    if (which == 1 && date && picked) {
+      picked(*date);
+      return;
+    }
     const std::function<void()>& then = which == 1 ? yes : other;
     if (which != 0 && then) {
       then();
     }
+  }
+
+  // A date asked on a calendar (MainWindow::AskDate): yes hands over what it
+  // holds, the arrows, Page Up/Down (with Ctrl: the year) and Enter work it.
+  void AskDate(UiQuestion asked, std::function<void(const UiCalendar&)> picked, std::function<void()> other) {
+    Ask(std::move(asked), nullptr, std::move(other));
+    onDate = std::move(picked);
+  }
+
+  // A key on a calendar's card: false if the question has none or the key
+  // isn't one of its.
+  bool CalendarKey(WPARAM key, bool ctrl) {
+    if (!question || !question->calendar) {
+      return false;
+    }
+    UiCalendar& cal = *question->calendar;
+    switch (key) {
+      case VK_LEFT: CalendarShiftDays(cal, -1); break;
+      case VK_RIGHT: CalendarShiftDays(cal, 1); break;
+      case VK_UP: CalendarShiftDays(cal, -7); break;
+      case VK_DOWN: CalendarShiftDays(cal, 7); break;
+      case VK_PRIOR: CalendarShiftMonths(cal, ctrl ? -12 : -1); break;
+      case VK_NEXT: CalendarShiftMonths(cal, ctrl ? 12 : 1); break;
+      case VK_HOME: cal.day = 1; break;
+      case VK_END: cal.day = DaysInMonth(cal.year, cal.month); break;
+      default: return false;
+    }
+    Relayout();
+    return true;
   }
 
   // An edit box over the item for `anchor` and `index` on the page shown
@@ -4882,7 +5118,7 @@ struct MainWindow::Impl {
   void MoveFocus(bool back) {
     std::vector<int> order;
     for (std::size_t i = 0; i < layout.items.size(); ++i) {
-      if (Interactive(layout.items[i]) && layout.items[i].kind != Kind::Hint &&
+      if (Interactive(layout.items[i]) && layout.items[i].kind != Kind::Hint && layout.items[i].kind != Kind::Day &&
           (!question || layout.items[i].action == ItemAction::Answer)) {
         order.push_back(static_cast<int>(i));
       }
@@ -5337,6 +5573,9 @@ struct MainWindow::Impl {
     if (question) {
       // Only its buttons: the page under it waits for the answer. Enter
       // with neither in focus is yes.
+      if (CalendarKey(key, ctrl)) {
+        return true;
+      }
       switch (key) {
         case VK_ESCAPE: Answer(0); return true;
         case VK_TAB:
@@ -5514,6 +5753,14 @@ void MainWindow::Ask(UiQuestion question, std::function<void()> onYes, std::func
     Show(impl_->page);
   }
   impl_->Ask(std::move(question), std::move(onYes), std::move(onOther));
+}
+
+void MainWindow::AskDate(UiQuestion question, std::function<void(const UiCalendar&)> onDate,
+                         std::function<void()> onOther) {
+  if (!IsVisible()) {
+    Show(impl_->page);
+  }
+  impl_->AskDate(std::move(question), std::move(onDate), std::move(onOther));
 }
 
 void MainWindow::SetLogs(const std::vector<std::wstring>& lines) { impl_->AddLogs(lines, true); }

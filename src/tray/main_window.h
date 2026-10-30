@@ -61,6 +61,10 @@ class MainWindow {
   // question.other set, a button for it too: onOther runs on that one.
   void Ask(UiQuestion question, std::function<void()> onYes, std::function<void()> onOther = {});
 
+  // The same with a calendar (question.calendar) under the title: yes, or
+  // Enter, calls onDate with the day chosen; onOther is the other button's.
+  void AskDate(UiQuestion question, std::function<void(const UiCalendar&)> onDate, std::function<void()> onOther = {});
+
   // The log page's lines: all of them, or new ones at the bottom.
   void SetLogs(const std::vector<std::wstring>& lines);
   void AppendLogs(const std::vector<std::wstring>& lines);

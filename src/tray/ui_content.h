@@ -196,6 +196,16 @@ struct UiCheck {
   std::vector<float> speedUp;
 };
 
+// The date a calendar on a question's card holds (UiQuestion::calendar).
+struct UiCalendar {
+  int year = 0;
+  int month = 1;  // 1..12
+  int day = 1;
+  int todayYear = 0;  // marked on the grid; 0: none
+  int todayMonth = 0;
+  int todayDay = 0;
+};
+
 // A question the window asks over itself (MainWindow::Ask) - its own dark
 // card in place of the system's light MessageBox. no empty: a note with one
 // button (yes).
@@ -207,6 +217,9 @@ struct UiQuestion {
   std::wstring no = L"Отмена";
   std::wstring other{};  // a second way to go on, under yes and over no; empty: none
   Tone tone = Tone::Accent;
+  // A date to pick on the card (MainWindow::AskDate): a month's grid under the
+  // title, the day chosen in it; yes takes it, in this field's own place.
+  std::optional<UiCalendar> calendar{};
   std::wstring glyph{};  // a Segoe Fluent Icons character, in a circle before the title; empty: a "!"
 };
 

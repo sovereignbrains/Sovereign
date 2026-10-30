@@ -38,6 +38,7 @@ namespace {
 
 using sovereign::tray::UiContent;
 using sovereign::tray::UiPage;
+using sovereign::tray::UiCalendar;
 using sovereign::tray::UiQuestion;
 
 // The routing board with a bit of everything, a long site among it.
@@ -380,6 +381,15 @@ int Snapshots(const std::wstring& dir) {
                                 .glyph = L"\xE896"};
     sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Overview, logs, 400, 620, 96,
                                               dir + L"\\question-relay.png");
+    // A date on a calendar, in the window's least height and width.
+    asked.question = UiQuestion{.title = L"Оплачено до",
+                                .yes = L"Готово",
+                                .other = L"Не следить",
+                                .calendar = UiCalendar{.year = 2026, .month = 2, .day = 28,
+                                                       .todayYear = 2026, .todayMonth = 2, .todayDay = 9},
+                                .glyph = L"\xE787"};
+    sovereign::tray::RenderMainWindowSnapshot(asked, UiPage::Profile, logs, 360, 440, 96,
+                                              dir + L"\\question-date.png");
     asked.question.reset();
     asked.settingsMore = true;
     asked.sharedRelay = true;
@@ -811,6 +821,15 @@ int LayoutTest(const std::wstring& dir) {
                               .other = L"Напрямую",
                               .tone = UiQuestion::Tone::Warning,
                               .glyph = L"\xE896"};
+  // A date asked on a calendar (MainWindow::AskDate), a month of 31 days that
+  // starts late in the week, the three buttons in one row.
+  UiContent dated = content;
+  dated.question = UiQuestion{.title = L"Оплачено до",
+                              .yes = L"Готово",
+                              .other = L"Не следить",
+                              .calendar = UiCalendar{.year = 2026, .month = 12, .day = 15,
+                                                     .todayYear = 2026, .todayMonth = 12, .todayDay = 3},
+                              .glyph = L"\xE787"};
   // The relay fold open, Sovereign's own chosen.
   UiContent relayOpen = content;
   relayOpen.settingsMore = true;
@@ -838,7 +857,7 @@ int LayoutTest(const std::wstring& dir) {
     const wchar_t* name;
     const UiContent* content;
   };
-  const std::array<Page, 14> pages = {{{UiPage::Overview, L"overview", &content},
+  const std::array<Page, 15> pages = {{{UiPage::Overview, L"overview", &content},
                                       {UiPage::Overview, L"overview-troubled", &troubled},
                                       {UiPage::Logs, L"logs-troubled", &troubled},
                                       {UiPage::Servers, L"servers", &content},
@@ -849,6 +868,7 @@ int LayoutTest(const std::wstring& dir) {
                                       {UiPage::Routing, L"routing", &routed},
                                       {UiPage::Checks, L"checks", &content},
                                       {UiPage::Overview, L"question", &asked},
+                                      {UiPage::Profile, L"question-date", &dated},
                                       {UiPage::Subscription, L"relay-open", &relayOpen},
                                       {UiPage::Settings, L"settings-install", &installing},
                                       {UiPage::Settings, L"settings-idle", &idle}}};
