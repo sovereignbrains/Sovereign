@@ -196,12 +196,12 @@ float EaseOut(float t) {
 }
 
 float NextRestYaw(float yaw) {
-  float on = std::fmod(45 - yaw, 90.0f);
+  float on = std::fmod(45 - yaw, 180.0f);
   if (on < 0) {
-    on += 90;
+    on += 180;
   }
   if (on < 30) {
-    on += 90;
+    on += 180;
   }
   return yaw + on;
 }

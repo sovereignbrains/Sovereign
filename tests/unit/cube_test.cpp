@@ -16,15 +16,16 @@ using namespace sovereign::tray;
 bool Close(float a, float b) { return std::abs(a - b) < 0.01f; }
 
 void TestRestYaw() {
-  CHECK(Close(NextRestYaw(45), 135));    // square-on: a full quarter turn on, not none
-  CHECK(Close(NextRestYaw(100), 135));   // 35 degrees to go: enough
-  CHECK(Close(NextRestYaw(120), 225));   // 15 to go is too little to see: the next one
+  CHECK(Close(NextRestYaw(45), 225));    // at rest: a half turn on, not none
+  CHECK(Close(NextRestYaw(100), 225));   // 125 degrees to go: enough
+  CHECK(Close(NextRestYaw(200), 405));   // 25 to go is too little to see: the next one
   CHECK(Close(NextRestYaw(-30), 45));
   for (float yaw = -400; yaw < 400; yaw += 7) {
     const float rest = NextRestYaw(yaw);
-    CHECK(rest - yaw >= 30 - 0.01f && rest - yaw < 120 + 0.01f);  // always forward, never more than a turn and a bit
-    CHECK(Close(std::fmod(std::fmod(rest - 45, 90.0f) + 90, 90.0f), 0) ||
-          Close(std::fmod(std::fmod(rest - 45, 90.0f) + 90, 90.0f), 90));
+    CHECK(rest - yaw >= 30 - 0.01f && rest - yaw < 210 + 0.01f);  // always forward, never more than a half turn and a bit
+    // Only 45 + 180k: the box shows the same faces as at rest, never the other pair (a mirror image).
+    CHECK(Close(std::fmod(std::fmod(rest - 45, 180.0f) + 180, 180.0f), 0) ||
+          Close(std::fmod(std::fmod(rest - 45, 180.0f) + 180, 180.0f), 180));
   }
 }
 

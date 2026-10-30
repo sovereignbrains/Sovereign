@@ -43,8 +43,10 @@ CubePose BlendPose(const CubePose& a, const CubePose& b, float t);
 // Fast at first, settling at the end: t in 0..1.
 float EaseOut(float t);
 
-// Where a turn from `yaw` comes to rest: the next 45 + 90k at least 30
-// degrees on - always forward, always a visible turn.
+// Where a turn from `yaw` comes to rest: the next 45 + 180k at least 30
+// degrees on - always forward, always a visible turn. Half turns only: a
+// quarter turn shows the box's other faces, the tape on the other side, as if
+// the cube were mirrored.
 float NextRestYaw(float yaw);
 
 // A face that shows: its corners on screen in order round it, how lit it
