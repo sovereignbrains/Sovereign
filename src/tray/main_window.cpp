@@ -1816,7 +1816,9 @@ class Painter {
         {kBucketWarp, L"Через WARP", r.warpState, warpHint},
         {kBucketBlock, L"Блок", std::wstring(),
          L"Что сюда попадёт, не откроется: ни сайт, ни программа. Пока там пусто — блокировать нечего. "
-         L"Рекламу и баннеры cookie убирают настройки."},
+         L"Рекламу и баннеры cookie убирают настройки.\n\nОсторожно с «Microsoft»: в этот список входят GitHub, "
+         L"Windows Update, OneDrive и Office — они перестанут открываться. Выключателем слежки Windows это не "
+         L"служит."},
     }};
     // A way's card: a rail of its colour down the left edge, its head - name,
     // "?", how many things, "+" - and its things wrapped under it. Compact
@@ -2846,6 +2848,15 @@ class Painter {
       }
       y += kModePad + kSegment + 8 + kRestLine + kModePad + kGap;
       y = Heading(l, L"Идёт иначе", x0, x1, y);
+      // How an exception is made, said where it's made (31.10.2026, his: sending a site "напрямую"
+      // meant finding the "+" of a way - "новички и не только не прохавают").
+      y = Paragraph(l, Kind::Caption,
+                    r.finalDirect ? L"Напрямую идёт всё, кроме того, что добавишь ниже. «+» у нужного пути — сайт, "
+                                    L"сервис или программа."
+                                  : L"Всё идёт через VPN, кроме того, что добавишь ниже. «+» у нужного пути — сайт, "
+                                    L"сервис или программа.",
+                    x0, x1, y) +
+          4;
     }
     // Where everything goes: the board. (The fine settings - QUIC, IPv4, DNS -
     // are the settings' since 17.10.2026: nothing of where a site goes.)
