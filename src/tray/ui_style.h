@@ -39,6 +39,8 @@ inline D2D1_COLOR_F FromColorRef(COLORREF c, float a = 1.0f) {
 inline constexpr COLORREF kWindowColor = RGB(14, 14, 15);
 inline constexpr COLORREF kPanelColor = RGB(18, 18, 19);  // the window's caption, the navigation
 inline constexpr COLORREF kCardColor = RGB(24, 24, 26);
+inline constexpr COLORREF kDialogColor = RGB(36, 37, 41);  // a question's card (its band under the buttons is kCardColor)
+inline constexpr COLORREF kRaisedColor = RGB(44, 44, 49);  // a tip, a menu
 inline constexpr COLORREF kPrimaryText = RGB(242, 244, 248);
 inline constexpr COLORREF kSecondaryText = RGB(156, 158, 164);
 // Your hand: what's on, what's picked; kLitInk is text on its fill.
@@ -51,7 +53,17 @@ inline constexpr COLORREF kDirect = RGB(160, 165, 176);
 // A check's verdicts (and the blocked way's red).
 inline constexpr COLORREF kUpload = RGB(64, 196, 140);
 inline constexpr COLORREF kDanger = RGB(240, 96, 96);
-inline constexpr COLORREF kWarning = RGB(235, 180, 60);
+inline constexpr COLORREF kBlock = kDanger;  // the law's name for the same red: a flow's fate
+inline constexpr COLORREF kWarning = RGB(240, 196, 64);
+
+// The type scale (docs/design/law.md, Typography Logic): 14 x 1.125 per step,
+// two weights. A size is one of these or it is not set.
+inline constexpr float kTMicro = 11.0f;     // the "?", an engraved label
+inline constexpr float kTCaption = 12.5f;   // a value at the right, help, a pill
+inline constexpr float kTBody = 14.0f;      // a field's label, a button
+inline constexpr float kTHeading = 15.75f;  // a group's name
+inline constexpr float kTLead = 17.75f;     // a question
+inline constexpr float kTTitle = 20.0f;     // a page's name
 
 // A latency's color: fast green, slow amber, very slow or dead red.
 inline COLORREF DelayColor(const UiDelay& delay) {

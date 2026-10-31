@@ -147,6 +147,12 @@ target_link_libraries(unit-cube PRIVATE sovereign_tray_ui)
 sovereign_copy_asan_runtime(unit-cube)
 add_test(NAME unit-cube COMMAND unit-cube)
 
+add_executable(unit-ui-style ui_style_test.cpp check.h)
+target_link_libraries(unit-ui-style PRIVATE sovereign_tray_ui)
+target_compile_definitions(unit-ui-style PRIVATE SOV_REPO_DIR="${CMAKE_SOURCE_DIR}")
+sovereign_copy_asan_runtime(unit-ui-style)
+add_test(NAME unit-ui-style COMMAND unit-ui-style)
+
 add_executable(unit-lan lan_test.cpp check.h)
 target_link_libraries(unit-lan PRIVATE sovereign_tray_lib)
 sovereign_copy_asan_runtime(unit-lan)

@@ -889,8 +889,8 @@ class Painter {
     wic_ = wil::CoCreateInstanceNoThrow<IWICImagingFactory>(CLSID_WICImagingFactory);
     fonts_ = LoadFontCollection(dwrite_.get());
     THROW_IF_FAILED(dwrite_->CreateEllipsisTrimmingSign(MakeFormat(Text(), 14).get(), ellipsis_.put()));
-    title_ = MakeFormat(Display(), 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    state_ = MakeFormat(Display(), 20, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    title_ = MakeFormat(Display(), ui::kTTitle, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    state_ = MakeFormat(Display(), ui::kTTitle, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     delay_ = MakeFormat(Text(), 14, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     delay_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     heading_ = MakeFormat(Text(), 15.75f, DWRITE_FONT_WEIGHT_SEMI_BOLD);  // 14 x 1.125: the scale caption 12.5 / body 14 / heading 15.75 / title 20
@@ -908,11 +908,11 @@ class Painter {
     trailing_ = MakeFormat(Text(), 12.5f);
     trailing_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
     pill_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    engraved_ = MakeFormat(Text(), 10.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    engraved_ = MakeFormat(Text(), ui::kTMicro, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_ = MakeFormat(Text(), 11, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     hint_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     tip_ = MakeFormat(Text(), 12.5f, DWRITE_FONT_WEIGHT_NORMAL, true);
-    ask_ = MakeFormat(Display(), 18, DWRITE_FONT_WEIGHT_SEMI_BOLD, true);
+    ask_ = MakeFormat(Display(), ui::kTLead, DWRITE_FONT_WEIGHT_SEMI_BOLD, true);
     const std::wstring glyphs = ui::GlyphFamily(dwrite_.get());
     glyph_ = MakeFormat(glyphs.c_str(), 16);
     glyph_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -3696,7 +3696,7 @@ class Painter {
     const float top = below ? std::min(at.bottom + kTipGap + kNose, std::max(kEdge, size.height - kEdge - h))
                             : std::max(kEdge, at.top - kTipGap - kNose - h);
 
-    const D2D1_COLOR_F fill = Rgb(44, 44, 49);
+    const D2D1_COLOR_F fill = FromColorRef(ui::kRaisedColor);
     k.Round({left, top, left + w, top + h}, kTipRound, fill);
     const float noseX = std::clamp(middle, left + kTipRound + kNose, left + w - kTipRound - kNose);
     const float baseY = below ? top + 0.5f : top + h - 0.5f;  // a hair into the box: no seam
@@ -3742,9 +3742,9 @@ class Painter {
       k.Round({r.left - f * 2.5f, r.top - f * 1.5f, r.right + f * 2.5f, r.bottom + f * 4}, kAskRadius + f * 2.5f,
               Rgb(0, 0, 0, 0.07f));
     }
-    k.Round(r, kAskRadius, Rgb(25, 26, 29));  // the band's
-    k.Round({r.left, r.top, r.right, b.band}, kAskRadius, Rgb(36, 37, 41));
-    k.Fill({r.left, b.band - kAskRadius, r.right, b.band}, Rgb(36, 37, 41));
+    k.Round(r, kAskRadius, FromColorRef(ui::kCardColor));  // the band's
+    k.Round({r.left, r.top, r.right, b.band}, kAskRadius, FromColorRef(ui::kDialogColor));
+    k.Fill({r.left, b.band - kAskRadius, r.right, b.band}, FromColorRef(ui::kDialogColor));
     k.Line({r.left, b.band + 0.5f}, {r.right, b.band + 0.5f}, Rgb(255, 255, 255, 0.06f));
     k.Outline(r, kAskRadius, Rgb(255, 255, 255, 0.09f));
     k.Line({r.left + kAskRadius, r.top + 1.5f}, {r.right - kAskRadius, r.top + 1.5f}, Rgb(255, 255, 255, 0.07f));
@@ -3838,7 +3838,7 @@ class Painter {
           levelColor = FromColorRef(ui::kDanger);
           message = levelColor;
         } else if (level.starts_with(L"WARN")) {
-          levelColor = FromColorRef(RGB(235, 180, 60));
+          levelColor = FromColorRef(ui::kWarning);
         } else if (level.starts_with(L"DEBUG") || level.starts_with(L"TRACE")) {
           message = secondary;
         }
@@ -3892,7 +3892,7 @@ class Painter {
     if (it.action == ItemAction::Answer && it.index == 1) {
       // A question's yes: solid in its tone (sub: UiQuestion::Tone).
       fill = ToneColor(static_cast<UiQuestion::Tone>(it.sub), pressed ? 0.8f : (hovered ? 0.9f : 1.0f));
-      ink = Rgb(16, 18, 24);
+      ink = FromColorRef(ui::kLitInk);
     }
     if (!it.enabled) {
       fill = Rgb(255, 255, 255, 0.03f);
