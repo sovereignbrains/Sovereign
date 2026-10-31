@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/sovereignbrains/Sovereign/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sovereignbrains/Sovereign/actions/workflows/ci.yml)
 
+> **Experimental, still being finished.** Sovereign is under active development; the releases are not recommended for anyone else to download yet. Expect rough edges and changes without notice.
+
 A native Windows client for [sing-box](https://github.com/SagerNet/sing-box), written in C++23 — and built so that its quality can be checked rather than claimed.
 
 Third-party sing-box clients have a reputation for being thin, sloppy wrappers. Sovereign's answer is evidence in CI:
