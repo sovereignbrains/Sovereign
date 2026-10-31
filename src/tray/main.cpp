@@ -5365,7 +5365,7 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
     }
     case UiCommand::BoardAdd: {
       // What can go to this bucket: the Russian sites, a service, a program, a site.
-      enum class Add : std::uint8_t { Russia, Service, Program, Site, Import };
+      enum class Add : std::uint8_t { Russia, Service, Program, Site, Import, Ads, Cookies };
       const int bucket = args.index;
       std::vector<std::wstring> items;
       std::vector<Add> adds;
@@ -5379,8 +5379,22 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         items.emplace_back(L"Российские сайты");
         adds.push_back(Add::Russia);
       }
-      items.emplace_back(L"Сервис…");
-      adds.push_back(Add::Service);
+      if (bucket == sovereign::tray::kBucketBlock) {
+        // The block's own list (31.10.2026, his: "кто на серьёзном будет блочить Netflix?"): not
+        // the catalog of the streamers, but what is blocked for real - the ads and the cookie
+        // windows, the settings' two switches, offered while they are off.
+        if (!r.blockAds) {
+          items.emplace_back(L"Убирать рекламу");
+          adds.push_back(Add::Ads);
+        }
+        if (!r.cookieWindows) {
+          items.emplace_back(L"Убирать баннеры cookie");
+          adds.push_back(Add::Cookies);
+        }
+      } else {
+        items.emplace_back(L"Сервис…");
+        adds.push_back(Add::Service);
+      }
       items.emplace_back(L"Программа…");
       adds.push_back(Add::Program);
       // Where everything else goes anyway, a service or a program changes
@@ -5403,6 +5417,8 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
       }
       switch (adds[*picked]) {
         case Add::Russia: send(What::Russia, false, bucket); break;
+        case Add::Ads: send(What::BlockAds, true); break;
+        case Add::Cookies: send(What::CookieWindows, true); break;
         case Add::Service: {
           std::vector<std::wstring> names;
           std::vector<std::string> ids;
