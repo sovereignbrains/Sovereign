@@ -2,13 +2,13 @@
 /* Sovereign: компоненты макета «Закон судьбы» (docs/design/law.md).
  *
  * Цвета, радиусы, штрихи, времена и шаги отступов берутся только из
- * tokens.css; ?selftest проверяет это по отрисованным стилям, а не по
+ * tokens.css; ?check проверяет это по отрисованным стилям, а не по
  * тексту файла. Геометрия отдельной вещи (ядро лампы, ручка переключателя,
  * ширина меню) записана здесь: общей у неё не бывает. Нет градиентов, теней,
  * фильтров и размытия.
  *
  * Порядок: основа, стенд, окно и карточка, строка, складка, переключатель,
- * сегменты, пилюля и точка, пути и фишки, всплывающее, кнопки, паспорт.
+ * сегменты, пилюля и точка, пути и фишки, всплывающее, кнопки, проверка.
  */
 
 @font-face {
@@ -57,13 +57,13 @@ img, svg { display: block; }
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 
-/* ---- Стенд: одна колонка, две, две и паспорт ------------------------- */
+/* ---- Стенд: одна колонка, две --------------------------------------- */
 .stage {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--s-6) var(--s-4);
   align-items: start;
-  max-width: calc(2 * var(--w-page-max) + 400px + 4 * var(--s-4));
+  max-width: calc(2 * var(--w-page-max) + 4 * var(--s-4));
   margin: 0 auto;
   padding: var(--s-6) var(--s-4) var(--s-8);
 }
@@ -87,29 +87,16 @@ img, svg { display: block; }
   letter-spacing: .12em;
   text-transform: uppercase;
 }
-.passport { min-width: 0; }
 
 /* Две страницы рядом, когда каждой хватает 360 (меньше окно приложения не бывает):
    2 x 360 + зазор 16 + поля 2 x 16 = 768. */
 @media (min-width: 768px) {
   .stage { grid-template-columns: repeat(2, minmax(0, var(--w-page-max))); justify-content: center; }
-  .passport { grid-column: 1 / -1; }
-}
-@media (min-width: 1360px) {
-  .stage { grid-template-columns: repeat(2, minmax(0, var(--w-page-max))) minmax(320px, 400px); }
-  .passport {
-    grid-column: auto;
-    grid-row: 2 / span 1;
-    position: sticky;
-    top: var(--s-4);
-    max-height: calc(100vh - 2 * var(--s-4));
-    overflow: auto;
-  }
 }
 /* На экране уже 400 окно идёт от края до края. */
 @media (max-width: 400px) {
   .stage { padding-inline: 0; }
-  .stage-head, .passport, .engraved { padding-inline: var(--s-4); }
+  .stage-head, .engraved, .check-out { padding-inline: var(--s-4); }
   .win, .win::after { border-radius: 0; }
   .win::after { border-inline: 0; }
 }
@@ -125,7 +112,7 @@ img, svg { display: block; }
   background: var(--surface-panel);
   border-radius: var(--r-card);
 }
-.win::after, .card::after, .passport-body::after, .menu::after {
+.win::after, .card::after, .menu::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -145,19 +132,6 @@ img, svg { display: block; }
   line-height: var(--s-6);
 }
 
-/* Три линии от края карточки: 4 (зона строки), 8 (плиты), 20 (содержимое).
-   Закон проверяется глазом: включи «Линии 4 · 8 · 20» в паспорте. */
-.guide {
-  position: absolute; top: 0; bottom: 0; width: var(--stroke-hair);
-  background: rgb(var(--lit-rgb) / var(--a-edge));
-  pointer-events: none; z-index: var(--z-bar);
-}
-.guide[data-at="4"] { left: var(--inset-row); }
-.guide[data-at="8"] { left: var(--inset-plate); }
-.guide[data-at="20"] { left: var(--line); }
-.guide[data-at="-4"] { right: var(--inset-row); }
-.guide[data-at="-8"] { right: var(--inset-plate); }
-.guide[data-at="-20"] { right: var(--line); }
 
 /* ---- Строка ----------------------------------------------------------- */
 .row {
@@ -184,26 +158,26 @@ img, svg { display: block; }
 .hit[aria-disabled="true"]:hover { background: none; }
 
 .lead { display: grid; place-items: center; width: var(--icon); height: var(--icon); color: var(--ink-2); }
+/* Имя и значение делят строку поровну по длине и переносятся по словам: ни то, ни другое не
+   усекается многоточием (значение «утечки, скорость» в «…» ничего не значит), строка просто
+   вырастает на вторую линию. min-width: auto - не уже самого длинного слова. */
 .label {
   flex: 0 1 auto;
-  min-width: 0;
   color: var(--ink-1);
   font-size: var(--t-body);
   line-height: var(--s-5);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .value {
-  flex: 0 100 auto;
-  min-width: 0;
+  flex: 0 1 auto;
   margin-left: auto;
-  overflow: hidden;
   color: var(--ink-2);
   font-size: var(--t-caption);
   line-height: var(--s-5);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
   text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-wrap: balance;
 }
 .end { flex: none; margin-left: auto; color: var(--ink-2); }
 .row > :is(.btn, .key) { margin-left: auto; }
@@ -331,16 +305,15 @@ img, svg { display: block; }
 .seg {
   display: grid;
   place-items: center;
-  height: var(--segment);
-  padding-inline: var(--s-2);
-  overflow: hidden;
+  min-height: var(--segment);
+  padding: var(--s-1) var(--s-2);
   border: var(--stroke-edge) solid var(--hair);
   border-radius: var(--r-plate);
   background: var(--well);
   color: var(--ink-2);
   font-size: var(--t-body);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: var(--s-5);
+  text-align: center;
   transition: background-color var(--d-state) var(--ease), border-color var(--d-state) var(--ease),
     color var(--d-state) var(--ease);
 }
@@ -620,42 +593,10 @@ button.muted:hover { color: var(--ink-1); }
   line-height: var(--s-5);
 }
 
-/* ---- Паспорт закона ---------------------------------------------------- */
-.passport-body {
-  position: relative;
-  display: grid;
-  gap: var(--s-4);
-  padding: var(--pad);
-  background: var(--surface-panel);
-  border-radius: var(--r-card);
-}
-.pp-sec { display: grid; gap: var(--s-2); min-width: 0; }
-.pp-sec > h3 { font-size: var(--t-heading); font-weight: var(--w-strong); line-height: var(--s-6); }
-.pp-text { color: var(--ink-2); font-size: var(--t-caption); line-height: var(--lh-body); }
-.pp-law { font-size: var(--t-lead); font-weight: var(--w-strong); line-height: var(--lh-tight); }
-.pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--gap-card); }
-.pp-cell { display: grid; gap: var(--s-1); align-content: start; padding: var(--s-2) var(--s-3); border-radius: var(--r-plate); background: var(--plate); }
-.pp-cell > .caption { color: var(--ink-2); font-size: var(--t-caption); line-height: var(--s-5); }
-.pp-cell > .mono { font-family: var(--font-mono); font-size: var(--t-caption); line-height: var(--s-5); }
-.pp-bar { display: flex; flex-wrap: wrap; gap: var(--s-2); }
-.specimen { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); pointer-events: none; }
-.specimen * { pointer-events: none; }
-.swatch { flex: none; width: var(--s-8); height: var(--s-1); border-radius: var(--r-rail); background: rgb(var(--fate-rgb) / var(--a-rail)); }
-.pp-table { width: 100%; border-collapse: collapse; font-size: var(--t-caption); font-variant-numeric: tabular-nums; }
-.pp-table th { color: var(--ink-2); font-weight: var(--w-regular); text-align: left; }
-.pp-table th, .pp-table td { padding: var(--s-1) var(--s-2) var(--s-1) 0; vertical-align: middle; }
-.pp-table td:last-child, .pp-table th:last-child { padding-right: 0; }
-.pp-table tr + tr td { border-top: var(--stroke-hair) solid var(--hair); }
-.pp-table .num { text-align: right; white-space: nowrap; }
-.pp-table .ok { display: inline-flex; align-items: center; gap: var(--s-1); }
-.type-step { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); }
-.type-step > .caption { flex: none; color: var(--ink-2); font-size: var(--t-caption); font-variant-numeric: tabular-nums; }
-.pp-mark { display: flex; align-items: center; gap: var(--s-3); }
-.pp-selftest {
-  max-height: 240px; overflow: auto; margin: 0; padding: var(--s-2) var(--s-3);
+/* ---- Проверка закона (?check) ------------------------------------------ */
+.check-out {
+  grid-column: 1 / -1; margin: 0; padding: var(--s-2) var(--s-3);
   border-radius: var(--r-plate); background: var(--well); color: var(--ink-1);
   font: var(--w-regular) var(--t-caption) / var(--lh-body) var(--font-mono);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.probe-frames { display: grid; gap: var(--s-2); }
-.probe-frames iframe { width: 0; height: 0; border: 0; }

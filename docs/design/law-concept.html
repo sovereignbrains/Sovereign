@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sovereign — закон судьбы: «Настройки» и «Маршруты»</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="law-concept.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-chevron-down" viewBox="0 0 16 16"><path d="M4 6.5 8 10.5 12 6.5"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 16 16"><path d="M6.5 4 10.5 8 6.5 12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></symbol>
+  <symbol id="i-back" viewBox="0 0 16 16"><path d="M9.5 4 5.5 8l4 4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.55"/><path d="M13 2.8v2.9h-2.9"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.8h4.5a1 1 0 0 1 1 1V11.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 16 16"><path d="M8 2.5 3.5 4v3.7c0 2.7 1.9 4.6 4.5 5.8 2.6-1.2 4.5-3.1 4.5-5.8V4z"/></symbol>
+  <symbol id="i-app" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 6h11"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.6 1.6 2.4 3.4 2.4 5.5S9.6 11.9 8 13.5C6.4 11.9 5.6 10.1 5.6 8S6.4 4.1 8 2.5z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 16 16"><path d="M5.5 4h7M5.5 8h7M5.5 12h7M3 4h.01M3 8h.01M3 12h.01"/></symbol>
+</svg>
+
+<main class="stage">
+  <header class="stage-head">
+    <h1>Закон судьбы</h1>
+    <p>Цвет — судьба потока: оттенок есть только у пути пакета (VPN, WARP, напрямую, блок) и у вердикта. Рука и покой — белое и графит. Два экрана Sovereign, «Настройки» и «Маршруты», собраны на одних токенах и одной грамматике раскрытия. Всё нажимается: данные из приложения, а чего на стенде нет, об этом честно говорит строка действия под окном.</p>
+  </header>
+
+  <section class="screen" aria-labelledby="h-a-title">
+    <div class="engraved" aria-hidden="true">Настройки</div>
+    <div class="win" id="win-a"></div>
+    <div class="status" id="status-a"></div>
+  </section>
+
+  <section class="screen" aria-label="Маршруты">
+    <div class="engraved" aria-hidden="true">Маршруты</div>
+    <div class="win" id="win-b"></div>
+    <div class="status" id="status-b"></div>
+  </section>
+</main>
+
+<div id="tip" class="tip" role="tooltip"></div>
+<div id="live" class="sr-only" aria-live="polite"></div>
+
+<script src="law-kit.js"></script>
+<script src="law-concept.js"></script>
+</body>
+</html>
