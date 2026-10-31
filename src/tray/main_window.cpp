@@ -1797,6 +1797,7 @@ class Painter {
       const wchar_t* name;
       std::wstring note;
       std::wstring hint;
+      std::wstring idleNote;  // said by the way's quiet line while nothing is on it: what it is for
     };
     const std::wstring warpHint =
         L"WARP — бесплатный выход через Cloudflare. Выручает там, где сайт не пускает с адресов VPN-серверов "
@@ -1810,15 +1811,19 @@ class Painter {
     const std::wstring restHint = RestHint(idle);
     const std::array<Bucket, 4> buckets = {{
         {kBucketProxy, L"Через VPN", restBucket == kBucketProxy ? rest : std::wstring(),
-         restBucket == kBucketProxy ? restHint : std::wstring()},
+         restBucket == kBucketProxy ? restHint : std::wstring(), std::wstring()},
         {kBucketDirect, L"Напрямую", restBucket == kBucketDirect ? rest : std::wstring(),
-         restBucket == kBucketDirect ? restHint : std::wstring()},
-        {kBucketWarp, L"Через WARP", r.warpState, warpHint},
+         restBucket == kBucketDirect ? restHint : std::wstring(), std::wstring()},
+        {kBucketWarp, L"Через WARP", r.warpState, warpHint, std::wstring()},
+        // (31.10.2026, his: "не понимаю, чё в блок можно кинуть": the line says what goes in, the
+        // "?" gives the examples.)
         {kBucketBlock, L"Блок", std::wstring(),
-         L"Что сюда попадёт, не откроется: ни сайт, ни программа. Пока там пусто — блокировать нечего. "
-         L"Рекламу и баннеры cookie убирают настройки.\n\nОсторожно с «Microsoft»: в этот список входят GitHub, "
-         L"Windows Update, OneDrive и Office — они перестанут открываться. Выключателем слежки Windows это не "
-         L"служит."},
+         L"Сюда — то, чему нужно закрыть сеть совсем: сайт, который не хочешь открывать; программа, которой нельзя "
+         L"выходить в интернет (например, назойливый апдейтер); сервис из списка. Оно не откроется ни через VPN, "
+         L"ни напрямую. Пока тут пусто — блокировать нечего.\n\nРекламу и баннеры cookie сюда добавлять не надо: "
+         L"их убирают настройки.\n\nОсторожно с «Microsoft»: в этот список входят GitHub, Windows Update, OneDrive "
+         L"и Office — они перестанут открываться. Выключателем слежки Windows это не служит.",
+         L"отрезать сайт или программу"},
     }};
     // A way's card: a rail of its colour down the left edge, its head - name,
     // "?", how many things, "+" - and its things wrapped under it. Compact
@@ -1896,6 +1901,14 @@ class Painter {
         l.items.push_back(Make(Kind::Muted, {left, y, left + nameWidth + 4, y + kQuiet}, b.name));
         if (!b.hint.empty()) {
           HintAfter(l, b.name, caption_.get(), left, keyRight - kAddKey - 8, y + kQuiet / 2, b.hint);
+        }
+        // What the way is for, after the "?" - only while it fits whole (never cut to "…").
+        if (!b.idleNote.empty()) {
+          const float noteLeft = left + nameWidth + 6 + kHint + 8;
+          const float noteRight = keyRight - kAddKey - 8;
+          if (noteLeft + std::ceil(TextWidth(b.idleNote, caption_.get())) + 4 <= noteRight) {
+            l.items.push_back(Make(Kind::Muted, {noteLeft, y, noteRight, y + kQuiet}, b.idleNote));
+          }
         }
         l.items.push_back(addKey(y + 1, kQuiet - 2));
         y += kQuiet + kWayGap;
