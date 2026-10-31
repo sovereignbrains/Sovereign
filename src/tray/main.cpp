@@ -6076,6 +6076,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ChooseUpdateQuiet: {
       const auto& choices = sovereign::tray::kQuietChoices;
       std::vector<std::wstring> labels;
+      labels.reserve(choices.size());
       for (const int minutes : choices) {
         labels.push_back(minutes == 1 ? L"1 минуту" : minutes < 5 ? std::to_wstring(minutes) + L" минуты"
                                                                   : std::to_wstring(minutes) + L" минут");
