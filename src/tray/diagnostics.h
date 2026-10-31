@@ -33,6 +33,10 @@ struct CheckResult {
   // the page draws them as they come (a speed test's graph).
   std::vector<float> speedDown;
   std::vector<float> speedUp;
+  // The route check of one typed address: the address, and the way it went as a rule's action
+  // (RouteRule::Action as int; -1: not seen) - the page offers the other ways under it.
+  std::string site;
+  int siteWay = -1;
 };
 
 // The speed test: a download and an upload, each this long at most, the
@@ -91,6 +95,8 @@ struct RouteWay {
 std::optional<RouteWay> ParseRouteAnswer(std::string_view json);
 // As the user reads it: "напрямую", "через WARP", "через VPN".
 std::string WayText(const RouteWay& way);
+// The way as the rule that would send an address there: RouteRule::Action as int.
+int WayAction(const RouteWay& way);
 
 // The sites "Проверить всё" sends a request to: a Russian one should go the
 // Russian sites' way (RoutingSettings::russia), the foreign ones through the VPN.

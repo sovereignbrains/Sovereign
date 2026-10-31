@@ -99,6 +99,13 @@ void TestRoutes() {
   CHECK(WayText(direct) == "напрямую");
   CHECK(WayText(RouteWay{.outbound = "warp 2", .type = "wireguard", .chain = {}, .rule = {}}) == "через WARP");
   CHECK(WayText(RouteWay{.outbound = "Home WG", .type = "wireguard", .chain = {}, .rule = {}}) == "через VPN");
+  // The bucket a checked address went to - what the "Пустить иначе" buttons leave out.
+  const auto action = [](RouteRule::Action a) { return static_cast<int>(a); };
+  CHECK(WayAction(direct) == action(RouteRule::Action::Direct));
+  CHECK(WayAction(RouteWay{.outbound = "block", .type = "block", .chain = {}, .rule = {}}) == action(RouteRule::Action::Block));
+  CHECK(WayAction(RouteWay{.outbound = "warp 2", .type = "wireguard", .chain = {}, .rule = {}}) == action(RouteRule::Action::Warp));
+  CHECK(WayAction(RouteWay{.outbound = "Home WG", .type = "wireguard", .chain = {}, .rule = {}}) == action(RouteRule::Action::Proxy));
+  CHECK(WayAction(RouteWay{.outbound = "AnyTLS · aeza", .type = "anytls", .chain = {}, .rule = {}}) == action(RouteRule::Action::Proxy));
 
   RoutingSettings routing;  // the Russian sites directly
   const auto site = [](const char* host, bool russian, std::optional<RouteWay> way) {

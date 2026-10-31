@@ -293,6 +293,19 @@ std::string WayText(const RouteWay& way) {
   return "через VPN";
 }
 
+int WayAction(const RouteWay& way) {
+  if (way.type == "direct") {
+    return static_cast<int>(RouteRule::Action::Direct);
+  }
+  if (way.type == "block") {
+    return static_cast<int>(RouteRule::Action::Block);
+  }
+  if (way.type == "wireguard" && way.outbound.starts_with(kWarpTag)) {
+    return static_cast<int>(RouteRule::Action::Warp);
+  }
+  return static_cast<int>(RouteRule::Action::Proxy);
+}
+
 std::string SiteLine(const SiteWay& site, const RoutingSettings& routing) {
   std::string line = site.host + " — ";
   if (!site.resolved) {

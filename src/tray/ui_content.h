@@ -193,6 +193,10 @@ struct UiCheck {
   // The speed test's throughput, Mbit/s every quarter of a second (diagnostics.h kSpeedSampleMs).
   std::vector<float> speedDown;
   std::vector<float> speedUp;
+  // The address the route check was asked about and the bucket it went to (kBucket*, -1: not
+  // seen): the page offers the other ways under the result. Empty: none was typed.
+  std::wstring site;
+  int siteWay = -1;
 };
 
 // The date a calendar on a question's card holds (UiQuestion::calendar).
@@ -381,6 +385,7 @@ enum class UiCommand : std::uint8_t {
   RunSpeed,
   CheckRoute,         // starts typing an address over the button
   CheckRouteText,     // text: the address
+  RouteSite,          // index: the bucket - the address just checked goes there (a rule for it)
   TakeSubscription,  // the waiting subscription replaces the edited config
   KeepConfig,        // the edited config stays
   CarryOverEdits,    // the edits, merged into the waiting subscription

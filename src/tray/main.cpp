@@ -4465,7 +4465,9 @@ sovereign::tray::UiCheck LeaksLine(const View& v) {
                        L"который браузер может выдать сайту) и IPv6. «Нет» — всё идёт как надо.",
                .fix = UiCheck::Fix::None,
                .speedDown = {},
-               .speedUp = {}};
+               .speedUp = {},
+               .site = {},
+               .siteWay = -1};
   bool any = false;
   bool running = false;
   std::string failed;
@@ -4652,7 +4654,9 @@ UiContent ContentFrom(const View& v) {
                               ? static_cast<UiCheck::Fix>(result.fix)
                               : UiCheck::Fix::None,
                    .speedDown = result.speedDown,
-                   .speedUp = result.speedUp};
+                   .speedUp = result.speedUp,
+                   .site = Widen(result.site),
+                   .siteWay = result.siteWay};
   };
   c.checks.push_back(line(CheckId::Exit, L"Выход через VPN",
                           L"Какой адрес и страну видят сайты, которые идут через VPN. Должен быть адрес сервера, а "
@@ -5189,6 +5193,26 @@ void OnRoutingCommand(HWND owner, UiCommand command, const sovereign::tray::UiAr
         send(What::Quic, false, static_cast<int>(*picked));
       }
       break;
+    case UiCommand::RouteSite: {  // the address just checked, sent another way from the check's own row
+      using sovereign::tray::CheckId;
+      const auto& checked = view.checks[static_cast<std::size_t>(CheckId::Route)];
+      if (checked.site.empty() || args.index < 0 || args.index > 3 ||
+          (args.index == static_cast<int>(sovereign::tray::RouteRule::Action::Warp) && !r.warp)) {
+        break;
+      }
+      send(What::AddRule, false, args.index, 0, checked.site);
+      // What was seen is no more: the result says where the address goes now, with nothing to
+      // offer (a new check shows it by the core). Order as RouteRule::Action.
+      static constexpr std::array<const wchar_t*, 4> kWay = {L"напрямую", L"через VPN", L"заблокировано", L"через WARP"};
+      sovereign::tray::CheckResult now;
+      now.status = sovereign::tray::CheckResult::Status::Ok;
+      now.summary = checked.site + ": теперь " + Narrow(kWay.at(static_cast<std::size_t>(args.index)));
+      now.detail = "Правило добавлено на доске «Маршруты». Проверь ещё раз, чтобы увидеть, как сайт пошёл.";
+      auto& s = State();
+      const std::scoped_lock lock(s.mutex);
+      s.view.checks[static_cast<std::size_t>(CheckId::Route)] = std::move(now);
+      break;
+    }
     case UiCommand::SetRouteMode: send(What::FinalDirect, args.index == 1); break;
     case UiCommand::SetHysteriaMbps: send(What::HysteriaMbps, false, args.index); break;
     case UiCommand::ToggleIpv4Only: send(What::Ipv4Only, !r.ipv4Only); break;
@@ -5741,6 +5765,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
     case UiCommand::ChooseQuic:
     case UiCommand::SetHysteriaMbps:
     case UiCommand::SetRouteMode:
+    case UiCommand::RouteSite:
     case UiCommand::ToggleIpv4Only:
     case UiCommand::ToggleWarp:
     case UiCommand::ToggleBlockAds:

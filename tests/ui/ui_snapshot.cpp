@@ -243,6 +243,20 @@ int Snapshots(const std::wstring& dir) {
     routed.checks[3].status = sovereign::tray::UiCheck::Status::NotRun;
     sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 350, 900, 96,
                                               dir + L"\\routing-narrow.png");
+    // An address checked and seen: the other ways one tap each under the result (31.10.2026).
+    routed.checks[3] = {L"Не открывается сайт?", L"yandex.ru: через VPN", L"yandex.ru — через VPN (AnyTLS); ни одно правило не подошло — «остальное»",
+                        sovereign::tray::UiCheck::Status::Ok, L"Что проверяет и как.", sovereign::tray::UiCheck::Fix::None,
+                        {}, {}, L"yandex.ru", 1};
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 350, 1000, 96,
+                                              dir + L"\\routing-site-ways.png");
+    // Only the chosen through the VPN: what goes directly - the things named there, quieter - is seen.
+    routed.checks[3].site.clear();
+    routed.routing.finalDirect = true;
+    for (sovereign::tray::UiChip& chip : routed.routing.board) {
+      chip.idle = chip.bucket == 0 && chip.kind != sovereign::tray::UiChip::Kind::Rule;
+    }
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 350, 1100, 96,
+                                              dir + L"\\routing-direct-seen.png");
   });
   // The checks: run, one warning, one failing, one running, speed and an address.
   variant([&](UiContent& checked) {

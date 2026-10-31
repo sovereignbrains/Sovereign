@@ -760,6 +760,8 @@ struct Run {
                                : !site.way    ? std::string("не видно")
                                               : WayText(*site.way));
     r.detail = SiteLine(site, input.routing);
+    r.site = host;  // the page offers the other ways under the result
+    r.siteWay = site.way ? WayAction(*site.way) : -1;
     return r;
   }
 };
@@ -776,7 +778,9 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
                                .detail = std::format("Winsock не запустился (ошибка {}).", failed),
                                .fix = CheckFix::None,
                                .speedDown = {},
-                               .speedUp = {}});
+                               .speedUp = {},
+                               .site = {},
+                               .siteWay = -1});
     }
     return;
   }
@@ -791,7 +795,9 @@ void RunChecks(const std::stop_token& stop, const std::vector<CheckId>& which, c
                              .detail = {},
                              .fix = CheckFix::None,
                              .speedDown = {},
-                             .speedUp = {}});
+                             .speedUp = {},
+                             .site = {},
+                             .siteWay = -1});
     run.live = [&progress, id](const CheckResult& partial) { progress(id, partial); };
     if (id == CheckId::Exit || id == CheckId::RussiaDirect || id == CheckId::WebRtc || id == CheckId::Ipv6) {
       run.RefreshVpn();  // the ones that compare with the VPN's exit: its address as it is now

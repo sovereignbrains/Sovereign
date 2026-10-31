@@ -1806,7 +1806,7 @@ class Painter {
     // Where everything else goes: said on that bucket, with how many it doesn't show.
     const int restBucket = r.finalDirect ? kBucketDirect : kBucketProxy;
     const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
-    const std::wstring rest = idle > 0 ? std::format(L"и всё остальное · скрыто {}", idle) : std::wstring(L"и всё остальное");
+    const std::wstring rest = L"и всё остальное";
     const std::wstring restHint = RestHint(idle);
     const std::array<Bucket, 4> buckets = {{
         {kBucketProxy, L"Через VPN", restBucket == kBucketProxy ? rest : std::wstring(),
@@ -1833,15 +1833,31 @@ class Painter {
     const float left = x0 + 20;
     const float right = x1 - 20;
     const float keyRight = x1 - 14;
-    for (const Bucket& b : buckets) {
+    // The exceptions first, the way everything else goes last: it closes the board, with what's
+    // named there set quieter (31.10.2026, his: "видеть, чё напрямую").
+    std::array<const Bucket*, 4> order{};
+    {
+      std::size_t n = 0;
+      for (const Bucket& b : buckets) {
+        order[n] = &b;
+        n += b.id == restBucket ? 0 : 1;
+      }
+      for (const Bucket& b : buckets) {
+        if (b.id == restBucket) {
+          order[n++] = &b;
+        }
+      }
+    }
+    for (const Bucket* bucket : order) {
+      const Bucket& b = *bucket;
       // Its things in rows from the card's left, wrapped at its right.
       std::vector<std::pair<std::size_t, D2D1_RECT_F>> placed;
       float cx = left;
       float cy = 0;  // from the first row's top
       for (std::size_t n = 0; n < r.board.size(); ++n) {
         const UiChip& chip = r.board[n];
-        if (chip.bucket != b.id || chip.idle) {
-          continue;
+        if (chip.bucket != b.id) {
+          continue;  // (what goes here anyway is shown too, quieter: he wants to see what goes directly)
         }
         // Whole pixels up: a chip as wide as its text to the last float got its
         // last letters trimmed to "…" (brave.exe -> "brave.e…", 30.10.2026).
@@ -1926,6 +1942,7 @@ class Painter {
         tag.detail = chip.detail;
         tag.text2 = chip.icon;
         tag.logo = chip.logo;
+        tag.quiet = chip.idle;
         l.items.push_back(std::move(tag));
       }
       y += h + kWayGap;
@@ -1936,8 +1953,9 @@ class Painter {
   // What the hidden things on the way everything else goes to say of
   // themselves (UiChip::idle); empty with none.
   static std::wstring RestHint(std::ptrdiff_t idle) {
-    return idle > 0 ? std::wstring(L"Скрытое и так идёт сюда вместе со всем остальным, поэтому ничего не меняет. Оно "
-                                   L"не удалено: переключи режим наверху — и вернётся на экран.")
+    return idle > 0 ? std::wstring(L"Сюда идёт всё, что не названо выше. Названное здесь приглушено: оно шло бы сюда "
+                                   L"и без записи, поэтому ничего не меняет. Это не исключения; если переключить режим "
+                                   L"наверху, они ими станут.")
                     : std::wstring();
   }
   float Paragraph(Layout& l, Kind kind, const std::wstring& text, float x0, float x1, float y) const {
@@ -2818,7 +2836,6 @@ class Painter {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kModePad + kSegment + 8 + kRestLine + kModePad}));
       const float mid = (x0 + x1) / 2;
       const float inLeft = x0 + 20;
-      const float inRight = x1 - 20;
       Item all = CommandItem(Kind::Segment, {x0 + kModePad, y + kModePad, mid - 4, y + kModePad + kSegment}, L"всё",
                              nullptr, UiCommand::SetRouteMode, 0);
       all.checked = !r.finalDirect;
@@ -2838,14 +2855,6 @@ class Painter {
                           way);
       restWay.rail = r.finalDirect ? kBucketDirect : kBucketProxy;
       l.items.push_back(std::move(restWay));
-      const auto idle = std::count_if(r.board.begin(), r.board.end(), [](const UiChip& chip) { return chip.idle; });
-      if (idle > 0) {  // what the other mode keeps, not shown here
-        const std::wstring hidden = std::format(L"скрыто {}", idle);
-        const float hiddenWidth = TextWidth(hidden, caption_.get());
-        Item note = Make(Kind::Muted, {inRight - hiddenWidth - 2, lineTop, inRight, lineTop + kRestLine}, hidden);
-        note.tip = RestHint(idle);
-        l.items.push_back(std::move(note));
-      }
       y += kModePad + kSegment + 8 + kRestLine + kModePad + kGap;
       y = Heading(l, L"Идёт иначе", x0, x1, y);
       // How an exception is made, said where it's made (31.10.2026, his: sending a site "напрямую"
@@ -2872,6 +2881,47 @@ class Painter {
       CheckLine(l, c, kCheckRoute, x0, x1, y);
       y += kCheckRow;
       const UiCheck& route = c.checks[kCheckRoute];
+      // An address was checked and seen (or not seen: the one that doesn't open): the ways it
+      // can be sent instead, one tap each - a rule for it on the board (31.10.2026, his: the
+      // check at the bottom should do something, not only say). The way it went isn't offered; nor
+      // is WARP while it's off; blocking isn't a way to fix a site that won't open.
+      if (!route.site.empty() && (route.status == UiCheck::Status::Ok || route.status == UiCheck::Status::Warn)) {
+        std::vector<std::pair<int, const wchar_t*>> ways;
+        for (const auto& [bucket, label] : {std::pair{kBucketDirect, L"Напрямую"}, std::pair{kBucketProxy, L"Через VPN"},
+                                            std::pair{kBucketWarp, L"Через WARP"}}) {
+          if (bucket != route.siteWay && (bucket != kBucketWarp || c.routing.warp)) {
+            ways.emplace_back(bucket, label);
+          }
+        }
+        if (!ways.empty()) {
+          y += 8;
+          constexpr float kSendPad = 8;
+          const float inLeft = x0 + 20;
+          const float inRight = x1 - 20;
+          // The check row cuts a long address short: the label says what was checked and how it
+          // goes now, so "иначе" has something to be other than.
+          static constexpr std::array<const wchar_t*, 4> kNow = {L"идёт напрямую", L"идёт через VPN", L"заблокирован",
+                                                                 L"идёт через WARP"};
+          const std::wstring ask =
+              L"«" + route.site + L"» " +
+              (route.siteWay >= 0 && route.siteWay < 4 ? std::wstring(kNow.at(static_cast<std::size_t>(route.siteWay))) + L". Пустить:"
+                                                       : std::wstring(L"— пустить иначе:"));
+          const float askHeight = std::max(24.0f, TextHeight(ask, captionWrap_.get(), inRight - inLeft));
+          const float cardHeight = kSendPad + askHeight + 32 + kSendPad;
+          l.items.push_back(Make(Kind::Card, {x0, y, x1, y + cardHeight}));
+          l.items.push_back(Make(Kind::Caption, {inLeft, y + kSendPad, inRight, y + kSendPad + askHeight}, ask));
+          const float each = (inRight - inLeft - 8 * static_cast<float>(ways.size() - 1)) / static_cast<float>(ways.size());
+          const float top = y + kSendPad + askHeight;
+          for (std::size_t k = 0; k < ways.size(); ++k) {
+            const float bx = inLeft + static_cast<float>(k) * (each + 8);
+            Item send = CommandItem(Kind::Button, {bx, top, bx + each, top + 32}, ways[k].second, nullptr,
+                                    UiCommand::RouteSite, ways[k].first);
+            send.tip = L"Добавить сайт в этот путь на доске «Маршруты». Уберёшь там же.";
+            l.items.push_back(std::move(send));
+          }
+          y += cardHeight;
+        }
+      }
       if (route.status == UiCheck::Status::Fail && route.fix != UiCheck::Fix::None) {
         const FixAction way = FixWay(route.fix, c);
         y += 8;
@@ -3809,7 +3859,8 @@ class Painter {
           k.t->DrawBitmap(icon, {left, cy - 8, left + 16, cy + 8});
           left += 24;
         }
-        k.Text(it.text, body_.get(), {left, r.top, r.right - 10, r.bottom}, primary);  // 2 of slack: see Board
+        // A thing that goes here anyway (the rest's way, UiChip::idle) is set quieter: named, no exception.
+        k.Text(it.text, body_.get(), {left, r.top, r.right - 10, r.bottom}, it.quiet ? secondary : primary);  // 2 of slack: see Board
         if (!it.detail.empty()) {
           const float after = left + std::ceil(TextWidth(it.text, body_.get())) + 8;
           k.Text(it.detail, caption_.get(), {after, r.top, r.right - 10, r.bottom}, secondary);
