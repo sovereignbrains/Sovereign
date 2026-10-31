@@ -699,6 +699,95 @@ int TipTest(HINSTANCE instance) {
   return failures == 0 ? 0 : 1;
 }
 
+// The window's whole client as DWM has it, pixel by pixel (BGRA).
+std::vector<std::uint8_t> WindowFrame(HWND hwnd) {
+  RECT client{};
+  GetClientRect(hwnd, &client);
+  const wil::unique_hdc_window screen = wil::GetDC(hwnd);
+  const wil::unique_hdc memory(CreateCompatibleDC(screen.get()));
+  const wil::unique_hbitmap bitmap(CreateCompatibleBitmap(screen.get(), client.right, client.bottom));
+  if (!memory || !bitmap) {
+    return {};
+  }
+  const auto selected = wil::SelectObject(memory.get(), bitmap.get());
+  if (PrintWindow(hwnd, memory.get(), PW_CLIENTONLY | PW_RENDERFULLCONTENT) == FALSE) {
+    return {};
+  }
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(info.bmiHeader);
+  info.bmiHeader.biWidth = client.right;
+  info.bmiHeader.biHeight = -client.bottom;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(client.right) * static_cast<std::size_t>(client.bottom) * 4);
+  if (GetDIBits(memory.get(), bitmap.get(), 0, static_cast<UINT>(client.bottom), pixels.data(), &info,
+                DIB_RGB_COLORS) == 0) {
+    return {};
+  }
+  return pixels;
+}
+
+// --fold-test: the fine settings' fold opened under a window that shows it
+// (the host's flag, as a click on its handle sets it): the frame meanwhile is
+// neither the folded one nor the open one, and a while later it is the open
+// one and stays - the frames stopped. With Windows' animations off it opens at
+// once, and only the end is checked. Needs a desktop.
+int FoldTest(HINSTANCE instance) {
+  if (!OnDesktop("fold")) {
+    return 0;
+  }
+  sovereign::tray::MainWindow window(instance, [](sovereign::tray::UiCommand, const sovereign::tray::UiArgs&) {});
+  UiContent content = SampleContent();
+  window.Update(content);
+  window.Show(UiPage::Settings);
+  const HWND hwnd = OwnWindow();
+  if (hwnd == nullptr) {
+    std::fputs("fold: no window of this test's own\n", stderr);
+    return 1;
+  }
+  Pump();
+  const std::vector<std::uint8_t> folded = WindowFrame(hwnd);
+  BOOL animations = TRUE;
+  SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
+
+  content.routingMore = true;
+  window.Update(content);
+  const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(60);
+  while (std::chrono::steady_clock::now() < until) {  // a part of the 240 ms
+    MSG msg;
+    if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    } else {
+      Sleep(5);
+    }
+  }
+  const std::vector<std::uint8_t> meanwhile = WindowFrame(hwnd);
+  Pump();
+  Pump();
+  const std::vector<std::uint8_t> open = WindowFrame(hwnd);
+  Pump();
+  const std::vector<std::uint8_t> later = WindowFrame(hwnd);
+
+  std::printf("fold: animations %s, the frame meanwhile differs from the folded one: %s, from the open one: %s\n",
+              animations != FALSE ? "on" : "off", meanwhile != folded ? "yes" : "no", meanwhile != open ? "yes" : "no");
+  int failures = 0;
+  const auto check = [&](bool ok, const char* what) {
+    if (!ok) {
+      std::fprintf(stderr, "fold: %s\n", what);
+      ++failures;
+    }
+  };
+  check(!folded.empty() && folded.size() == open.size(), "no frames of the window");
+  check(open != folded, "the fold didn't open");
+  check(open == later, "the frames didn't stop after the fold opened");
+  if (animations != FALSE) {
+    check(meanwhile != folded && meanwhile != open, "no frame between the folded and the open one");
+  }
+  return failures == 0 ? 0 : 1;
+}
+
 // --ask-test: a question over the real window (MainWindow::Ask), answered as
 // a user would. The page under it takes no click; Esc and "Отмена" drop it,
 // Enter and its yes button answer it, Tab stays on its buttons; hiding the
@@ -861,7 +950,7 @@ int LayoutTest(const std::wstring& dir) {
   UiContent content = SampleContent();
   content.checks = SampleChecks();
   // The variants live on the heap: eight UiContents on the stack pass /analyze's 16 KB (C6262).
-  std::vector<UiContent> variants(7, content);
+  std::vector<UiContent> variants(9, content);
   UiContent& routed = variants[0];
   // WARP on, with a site of its own: its card lists it, "Свои правила" doesn't.
   routed.routing.rules = {{L"qwen.ai, qwenlm.ai, alicdn.com, aliyun.com", L"напрямую"},
@@ -919,12 +1008,20 @@ int LayoutTest(const std::wstring& dir) {
   troubled.killSwitch = true;
   troubled.killSwitchError = L"не удалось добавить фильтр WFP";
   troubled.localNetwork = L"Тормозит твоя сеть, а не VPN: напрямую до интернета 900 мс.";
+  // Both folds on their way, half open (the window eases them over 240 ms): the cut rows stay inside their
+  // card and clear of what is under it.
+  UiContent& foldingSettings = variants[7];
+  foldingSettings.routingMore = true;
+  foldingSettings.routingFold = 0.5f;
+  UiContent& foldingRelay = variants[8];
+  foldingRelay.settingsMore = true;
+  foldingRelay.relayFold = 0.5f;
   struct Page {
     UiPage page;
     const wchar_t* name;
     const UiContent* content;
   };
-  const std::array<Page, 15> pages = {{{UiPage::Overview, L"overview", &content},
+  const std::array<Page, 17> pages = {{{UiPage::Overview, L"overview", &content},
                                       {UiPage::Overview, L"overview-troubled", &troubled},
                                       {UiPage::Logs, L"logs-troubled", &troubled},
                                       {UiPage::Servers, L"servers", &content},
@@ -938,7 +1035,9 @@ int LayoutTest(const std::wstring& dir) {
                                       {UiPage::Profile, L"question-date", &dated},
                                       {UiPage::Subscription, L"relay-open", &relayOpen},
                                       {UiPage::Settings, L"settings-install", &installing},
-                                      {UiPage::Settings, L"settings-idle", &idle}}};
+                                      {UiPage::Settings, L"settings-idle", &idle},
+                                      {UiPage::Settings, L"settings-folding", &foldingSettings},
+                                      {UiPage::Subscription, L"relay-folding", &foldingRelay}}};
   CreateDirectoryW(dir.c_str(), nullptr);
   int failures = 0;
   int cut = 0;
@@ -986,6 +1085,7 @@ int wmain(int argc, wchar_t** argv) {  // NOLINT(bugprone-exception-escape) - se
              : arg == L"--edit-test" ? EditTest(GetModuleHandleW(nullptr))
              : arg == L"--ask-test"  ? AskTest(GetModuleHandleW(nullptr))
              : arg == L"--tip-test"  ? TipTest(GetModuleHandleW(nullptr))
+: arg == L"--fold-test" ? FoldTest(GetModuleHandleW(nullptr))
              : arg == L"--layout-test" ? LayoutTest(argc > 2 ? argv[2] : L"ui-layout")
                                      : Snapshots(arg);
   } catch (const wil::ResultException& e) {

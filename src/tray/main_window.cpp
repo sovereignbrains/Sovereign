@@ -135,6 +135,7 @@ constexpr UINT kCubeFrameMs = 15;
 constexpr UINT kCubeIdleFrameMs = 33;  // the idle life (Idle) is slow: 30 frames a second are plenty
 constexpr ULONGLONG kCubeTurnMs = 520;
 constexpr UINT kQuestionInMs = 170;  // MainWindow::Ask's card coming in
+constexpr UINT kFoldMs = 240;        // a fold opening or closing (law.md --d-fold)
 constexpr float kCubeSpin = 0.12f;
 
 // Segoe Fluent Icons (Windows 11; the same code points in Segoe MDL2 Assets).
@@ -271,7 +272,22 @@ struct Item {
   bool quiet = false;   // a Card with a rail: only the rail, no panel - an empty way, a line to find
   int tick = -1;        // a Switch or ValueRow of known fate (a bucket, BucketColor): its mark on the card's edge; -1: none
   bool tickAlways = false;  // the mark stays with the switch off (a DNS way); else it burns while the switch is on
+  float fold = -1;      // a fold's handle: how open it is (0..1), its chevron turned by it; -1: not a fold's
+  float clip = -1;      // a fold's row while the fold moves: seen and clicked above this line only; -1: whole
 };
+
+// What of an item is seen: its rectangle, a moving fold's row cut at the fold's foot.
+inline D2D1_RECT_F Seen(const Item& it) {
+  D2D1_RECT_F r = it.rect;
+  if (it.clip >= 0) {
+    r.bottom = std::min(r.bottom, it.clip);
+  }
+  return r;
+}
+
+// How open a fold is: while it moves, the window's number; at rest, its flag.
+inline float FoldOf(bool open, float moving) { return moving >= 0 ? moving : (open ? 1.0f : 0.0f); }
+
 
 // A way's colour on the routing board: a rail down its card's left edge and
 // a dot on its labels - the traffic's own (ui_style.h), the cube's blue and
@@ -311,6 +327,25 @@ struct Layout {
   std::optional<D2D1_RECT_F> logBox;
   std::optional<D2D1_RECT_F> glow;  // the main screen's switch: a light behind it, under it all (DrawBackdrop)
 };
+
+// A fold's body built in full from `from` to `to`, shown as far as the fold has opened: its
+// card ends at the foot, the rows over it are cut there and the ones past it are gone.
+// Returns the foot. (law.md: the disclosure runs 240 ms, --d-fold.)
+inline float FoldBody(Layout& l, std::size_t first, float from, float to, float open) {
+  if (open >= 1) {
+    return to;
+  }
+  const float foot = from + (to - from) * std::max(open, 0.0f);
+  l.items.erase(std::remove_if(l.items.begin() + static_cast<std::ptrdiff_t>(first), l.items.end(),
+                               [&](const Item& it) { return it.rect.top >= foot; }),
+                l.items.end());
+  for (std::size_t i = first; i < l.items.size(); ++i) {
+    if (l.items[i].rect.bottom > foot) {
+      l.items[i].clip = foot;
+    }
+  }
+  return foot;
+}
 
 // The log's level groups, as its filter shows them.
 constexpr int kLevelGroups = 4;
@@ -1177,10 +1212,16 @@ class Painter {
                                            D2D1::IdentityMatrix(), shown),
                      layer.get());
       }
+      if (it.clip >= 0) {  // a row of a fold that is moving: cut at its foot
+        t->PushAxisAlignedClip({0, l.viewTop, size.width, std::max(l.viewTop, it.clip)}, D2D1_ANTIALIAS_MODE_ALIASED);
+      }
       if (it.kind == Kind::LogBox && l.logBox) {
         DrawLog(k, *l.logBox, log);
       } else {
         DrawItem(k, it, c, n == in.hover, n == in.pressed);
+      }
+      if (it.clip >= 0) {
+        t->PopAxisAlignedClip();
       }
       if (n == in.focus && in.focusVisible) {
         // A title bar key's ring goes round its pill: the cell runs to the window's edges.
@@ -1283,7 +1324,7 @@ class Painter {
     std::wstring out;
     for (std::size_t i = 0; i < l.items.size(); ++i) {
       const Item& it = l.items[i];
-      const D2D1_RECT_F r = it.rect;
+      const D2D1_RECT_F r = Seen(it);
       const float w = r.right - r.left;
       // Room for the text on the item's line, as DrawItem gives it.
       float room = 0;
@@ -1324,8 +1365,8 @@ class Painter {
       if (Interactive(it) && it.kind != Kind::Hint) {
         for (std::size_t j = i + 1; j < l.items.size(); ++j) {
           const Item& o = l.items[j];
-          const bool over = Interactive(o) && o.rect.left < r.right && o.rect.right > r.left && o.rect.top < r.bottom &&
-                            o.rect.bottom > r.top;
+          const D2D1_RECT_F s = Seen(o);
+          const bool over = Interactive(o) && s.left < r.right && s.right > r.left && s.top < r.bottom && s.bottom > r.top;
           // A card that is a link holds buttons and lines that are links of their own: they take the click.
           // A question's buttons lie over the page, which takes no click while it's open.
           const bool allowed = o.kind == Kind::Hint || o.action == ItemAction::Answer ||
@@ -2493,10 +2534,11 @@ class Painter {
       const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1})); };
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y}));
       const std::size_t card = l.items.size() - 1;
-      Item relay = Make(Kind::ValueRow, row(y), L"Скачивать без подключения",
-                        c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
+      const float fold = FoldOf(c.settingsMore, c.relayFold);
+      Item relay = Make(Kind::ValueRow, row(y), L"Скачивать без подключения", kGlyphChevronDown);
       relay.action = ItemAction::ToggleMore;
-      if (!c.settingsMore) {  // the summary is the folded fold's; open, the rows say it
+      relay.fold = fold;
+      if (fold < 0.5f) {  // the summary is the folded fold's; open, the rows say it
         relay.detail = !c.relayHost.empty() ? L"свой" : (c.sharedRelay ? L"Sovereign" : L"выключено");
       }
       l.items.push_back(std::move(relay));
@@ -2509,7 +2551,9 @@ class Painter {
                 L"tools/relay/deploy.ps1. Свой главнее.\n\nБез пересыльщика новую подписку предложат скачать "
                 L"напрямую, остальные ждут подключения.");
       float top = y + kRow;
-      if (c.settingsMore) {
+      if (fold > 0) {
+        const std::size_t first = l.items.size();
+        const float bodyTop = top;
         line(top);
         Item shared = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + 56 - 2}, L"Через сервер Sovereign", nullptr,
                                   UiCommand::ToggleSharedRelay);
@@ -2528,7 +2572,7 @@ class Painter {
         key.detail = c.relaySet ? L"задан" : L"не задан";
         key.enabled = !c.relayHost.empty();
         l.items.push_back(std::move(key));
-        top += kRow;
+        top = FoldBody(l, first, bodyTop, top + kRow, fold);
       }
       l.items[card].rect.bottom = top;
       y = top;
@@ -3331,9 +3375,10 @@ class Painter {
       // One card: the handle, its summary while folded, and - open - the seam and
       // the rows under it (the law's disclosure grammar).
       const std::size_t card = open(y);
-      Item more = CommandItem(Kind::ValueRow, row(y), L"Тонкая настройка",
-                              c.routingMore ? kGlyphChevronUp : kGlyphChevronDown, UiCommand::ToggleRoutingMore);
-      if (!c.routingMore) {
+      const float fold = FoldOf(c.routingMore, c.routingFold);
+      Item more = CommandItem(Kind::ValueRow, row(y), L"Тонкая настройка", kGlyphChevronDown, UiCommand::ToggleRoutingMore);
+      more.fold = fold;
+      if (fold < 0.5f) {
         // What's set, not what's inside: QUIC as it stands, IPv4 only when on,
         // a DNS of the user's own when there is one.
         const UiRouting& r = c.routing;
@@ -3349,8 +3394,9 @@ class Painter {
       }
       l.items.push_back(std::move(more));
       float top = y + kSettingsRow;
-      if (c.routingMore) {
-        top = FineRows(l, c, x0, x1, top);
+      if (fold > 0) {
+        const std::size_t first = l.items.size();
+        top = FoldBody(l, first, top, FineRows(l, c, x0, x1, top), fold);
       }
       y = close(card, top);
     }
@@ -3538,7 +3584,7 @@ class Painter {
         // Its own glyph if it has one (a fold's), else "goes on to a choice".
         if (!tells) {
           DrawIcon(k, it.glyph.empty() ? std::wstring_view(kGlyphChevron) : std::wstring_view(it.glyph),
-                   {r.right - 28, r.top, r.right - 8, r.bottom}, it.warn ? ink : secondary);
+                   {r.right - 28, r.top, r.right - 8, r.bottom}, it.warn ? ink : secondary, std::max(it.fold, 0.0f));
         }
         break;
       }
@@ -4285,15 +4331,17 @@ class Painter {
   // (30.10.2026, his: "слишком пестро ... я хотел что ты сам рисунок кнопок
   // переделал"). False: not one of ours, the font's glyph is drawn.
   // A glyph in `box`: ours drawn in lines where there is one, else the font's.
-  void DrawIcon(const Canvas& k, std::wstring_view glyph, D2D1_RECT_F box, D2D1_COLOR_F ink) const {
+  // `turn`: a fold's chevron, 0 pointing down (folded) .. 1 up (open), turned half a circle by it.
+  void DrawIcon(const Canvas& k, std::wstring_view glyph, D2D1_RECT_F box, D2D1_COLOR_F ink, float turn = 0) const {
     // Through pixels' middles: at 100 % lines a pixel thick, not two halves.
     const float cx = std::floor((box.left + box.right) / 2) + 0.5f;
     const float cy = std::floor((box.top + box.bottom) / 2) + 0.5f;
-    if (!DrawLineIcon(k, glyph, cx, cy, ink)) {
+    if (!DrawLineIcon(k, glyph, cx, cy, ink, turn)) {
       k.Text(glyph, glyph_.get(), box, ink);
     }
   }
-  bool DrawLineIcon(const Canvas& k, std::wstring_view glyph, float cx, float cy, D2D1_COLOR_F ink) const {
+  bool DrawLineIcon(const Canvas& k, std::wstring_view glyph, float cx, float cy, D2D1_COLOR_F ink,
+                    float turn = 0) const {
     const auto line = [&](float x0, float y0, float x1, float y1) {
       k.t->DrawLine({cx + x0, cy + y0}, {cx + x1, cy + y1}, k.Color(ink), kIconStroke, roundCaps_.get());
     };
@@ -4336,9 +4384,16 @@ class Painter {
       line(-1.8f, -4, 2.2f, 0);
       line(2.2f, 0, -1.8f, 4);
     } else if (glyph == kGlyphChevronDown || glyph == kGlyphChevronUp) {  // a fold: opens, closes
-      const float d = glyph == kGlyphChevronDown ? 1.0f : -1.0f;
-      line(-4, -2 * d, 0, 2 * d);
-      line(0, 2 * d, 4, -2 * d);
+      // Down (folded) turned half a circle round its middle to up (open) by `turn`.
+      const float angle = (glyph == kGlyphChevronUp ? 1.0f : turn) * 3.14159265f;
+      const float sine = std::sin(angle);
+      const float cosine = std::cos(angle);
+      const auto at = [&](float x, float y) { return D2D1_POINT_2F{x * cosine - y * sine, x * sine + y * cosine}; };
+      const D2D1_POINT_2F a = at(-4, -2);
+      const D2D1_POINT_2F b = at(0, 2);
+      const D2D1_POINT_2F c = at(4, -2);
+      line(a.x, a.y, b.x, b.y);
+      line(b.x, b.y, c.x, c.y);
     } else if (glyph == kGlyphAdd) {
       line(-5.5f, 0, 5.5f, 0);
       line(0, -5.5f, 0, 5.5f);
@@ -4655,6 +4710,63 @@ struct MainWindow::Impl {
     return t < 1.0f;
   }
 
+  // A fold opening or closing (the fine settings', the relay's): how open it is, eased over
+  // kFoldMs from where it was; its flag in the content says where it goes.
+  struct FoldMove {
+    bool known = false;
+    float from = 0;
+    float to = 0;
+    std::chrono::steady_clock::time_point at{};
+    float Progress() const {
+      const float t = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - at).count() /
+                      static_cast<float>(kFoldMs);
+      return std::clamp(t, 0.0f, 1.0f);
+    }
+    float Now() const { return from + (to - from) * EaseOut(Progress()); }
+    bool Moving() const { return known && from != to && Progress() < 1.0f; }
+  };
+  FoldMove routingMove;
+  FoldMove relayMove;
+
+  // The flag says where the fold goes; if that's new, it moves from where it is - at once with the
+  // window away, a modal box up or Windows' animations off.
+  void Aim(FoldMove& move, bool open) {
+    const float to = open ? 1.0f : 0.0f;
+    const bool still = !Motion() || hwnd == nullptr || IsWindowVisible(hwnd) == FALSE || Blocked();
+    if (!move.known || still) {
+      move = {true, to, to, std::chrono::steady_clock::now()};
+    } else if (move.to != to) {
+      move = {true, move.Now(), to, std::chrono::steady_clock::now()};
+    }
+  }
+
+  // The content's folds as they stand now: at rest -1, the flag says all.
+  void SetFolds() {
+    content.routingFold = routingMove.Moving() ? routingMove.Now() : -1.0f;
+    content.relayFold = relayMove.Moving() ? relayMove.Now() : -1.0f;
+  }
+
+  // New flags (from the host, or the window's own): the folds aimed anew.
+  void NoteFolds() {
+    Aim(routingMove, content.routingMore);
+    Aim(relayMove, settingsMore);
+    SetFolds();
+  }
+
+  // A frame of a fold moving: the page laid out again at its height of now; true while one still does.
+  bool StepFold() {
+    if (!routingMove.Moving() && !relayMove.Moving()) {
+      if (content.routingFold >= 0 || content.relayFold >= 0) {  // the last frame: at rest
+        SetFolds();
+        Relayout();
+      }
+      return false;
+    }
+    SetFolds();
+    Relayout();
+    return true;
+  }
+
   // A frame of a question coming in (Painter::questionShown); true while it still is.
   bool StepQuestion() {
     if (!question || IsWindowVisible(hwnd) == FALSE || !Motion() || Blocked()) {
@@ -4781,7 +4893,7 @@ struct MainWindow::Impl {
       if (question && item.action != ItemAction::Answer) {
         continue;  // a question open: the page under it takes nothing
       }
-      if ((!anyItem && !Interactive(item)) || !Contains(item.rect, x, y)) {
+      if ((!anyItem && !Interactive(item)) || !Contains(Seen(item), x, y)) {
         continue;
       }
       if (item.scrolls && (y < layout.viewTop || y >= layout.viewBottom)) {
@@ -5316,6 +5428,7 @@ struct MainWindow::Impl {
       case ItemAction::SaveLogs: SaveLogs(); return;
       case ItemAction::ToggleMore:
         settingsMore = !settingsMore;
+        NoteFolds();
         Relayout();
         return;
       case ItemAction::Hide: PostMessageW(hwnd, WM_CLOSE, 0, 0); return;
@@ -5640,11 +5753,12 @@ struct MainWindow::Impl {
         const bool going = liveAt && StepLiveTraffic();
         const bool easing = StepSpeed();
         const bool coming = StepQuestion();
+        const bool folding = StepFold();
         PAINTSTRUCT ps;
         BeginPaint(w, &ps);
         Paint();
         EndPaint(w, &ps);
-        if (going || easing || coming) {
+        if (going || easing || coming || folding) {
           InvalidateRect(w, nullptr, FALSE);  // the next frame: this one waited for the screen's refresh
         }
         return 0;
@@ -6127,6 +6241,7 @@ void MainWindow::Update(const UiContent& content) {
   }
   m.content = content;
   m.NoteSpeed();
+  m.NoteFolds();
   if (IsVisible()) {
     m.Relayout();
     m.KickLive();

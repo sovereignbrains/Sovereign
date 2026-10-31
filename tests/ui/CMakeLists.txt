@@ -19,3 +19,6 @@ add_test(NAME ui-layout COMMAND ui-snapshot --layout-test "${CMAKE_CURRENT_BINAR
 # A tip over a title bar key, shown on the overview whose live traffic redraws
 # without pause (a desktop, as above).
 add_test(NAME ui-tip COMMAND ui-snapshot --tip-test)
+# A fold opening under the window that shows it: a frame between the folded and
+# the open one, then the frames stop (a desktop, as above).
+add_test(NAME ui-fold COMMAND ui-snapshot --fold-test)
