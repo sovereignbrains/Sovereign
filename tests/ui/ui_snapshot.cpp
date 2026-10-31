@@ -236,6 +236,13 @@ int Snapshots(const std::wstring& dir) {
     std::erase_if(routed.routing.board, [](const sovereign::tray::UiChip& chip) { return chip.bucket == 2; });
     sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 400, 900, 96,
                                               dir + L"\\routing-block-empty.png");
+    // His narrow window (350, 31.10.2026): WARP's note - a long server's name - on a line under the
+    // name, not cut to "…"; the route's "?" before its button, not on the title.
+    routed.routing.warpState = L"через «AnyTLS-Reality | Frankfurt №1»";
+    routed.checks = SampleChecks();
+    routed.checks[3].status = sovereign::tray::UiCheck::Status::NotRun;
+    sovereign::tray::RenderMainWindowSnapshot(routed, UiPage::Routing, logs, 350, 900, 96,
+                                              dir + L"\\routing-narrow.png");
   });
   // The checks: run, one warning, one failing, one running, speed and an address.
   variant([&](UiContent& checked) {

@@ -1782,30 +1782,40 @@ class Painter {
         y += kQuiet + 6;
         continue;
       }
-      const float h = kHead + cy + kTag + 9;
-      Item card = Make(Kind::Card, {x0, y, x1, y + h});
-      card.rail = b.id;
-      l.items.push_back(std::move(card));
       // Its name a row's title, as a setting's: the section heading is over the board.
       const float nameWidth = TextWidth(b.name, body_.get());
-      l.items.push_back(Make(Kind::Text, {left, y + 3, left + nameWidth + 4, y + kHead - 3}, b.name));
       float noteLeft = left + nameWidth + 14;
       if (!b.hint.empty()) {
-        HintAfter(l, b.name, body_.get(), left, right - kAddKey - 8, y + kHead / 2, b.hint);
         noteLeft += kHint + 6;
       }
       // How many are on it, engraved in a pill by the "+".
       const std::wstring count = std::format(L"{:02}", placed.size());
       const float countWidth = TextWidth(count, caption_.get()) + 2 * kPillPad;
       const float countRight = right - kAddKey - 6;
+      // The note (WARP's "через «server»") by the name while it fits; else a line of its own under
+      // the head, wrapped - a value is never cut to "…" (31.10.2026: "через «AnyTL…" at 350 wide).
+      const float noteRoom = countRight - countWidth - 8 - noteLeft;
+      const bool noteBelow = !b.note.empty() && std::ceil(TextWidth(b.note, caption_.get())) + 4 > noteRoom;
+      const float noteHeight = noteBelow ? std::max(18.0f, TextHeight(b.note, captionWrap_.get(), right - left)) : 0.0f;
+      const float head = kHead + noteHeight;
+      const float h = head + cy + kTag + 9;
+      Item card = Make(Kind::Card, {x0, y, x1, y + h});
+      card.rail = b.id;
+      l.items.push_back(std::move(card));
+      l.items.push_back(Make(Kind::Text, {left, y + 3, left + nameWidth + 4, y + kHead - 3}, b.name));
+      if (!b.hint.empty()) {
+        HintAfter(l, b.name, body_.get(), left, right - kAddKey - 8, y + kHead / 2, b.hint);
+      }
       l.items.push_back(Make(Kind::Pill, {countRight - countWidth, y + kHead / 2 - 10, countRight, y + kHead / 2 + 10}, count));
-      if (!b.note.empty()) {
+      if (noteBelow) {
+        l.items.push_back(Make(Kind::Caption, {left, y + kHead - 6, right, y + kHead - 6 + noteHeight}, b.note));
+      } else if (!b.note.empty()) {
         l.items.push_back(Make(Kind::Muted, {noteLeft, y + 3, countRight - countWidth - 8, y + kHead - 3}, b.note));
       }
       l.items.push_back(addKey(y + 3, kAddKey));
       for (const auto& [n, at] : placed) {
         const UiChip& chip = r.board[n];
-        const D2D1_RECT_F place = {at.left, y + kHead + at.top, at.right, y + kHead + at.bottom};
+        const D2D1_RECT_F place = {at.left, y + head + at.top, at.right, y + head + at.bottom};
         Item tag = CommandItem(Kind::Tag, place, chip.text, nullptr, UiCommand::ChipMenu, static_cast<int>(n));
         tag.tip = L"Перенести в другой путь или убрать";
         tag.detail = chip.detail;
@@ -2861,12 +2871,15 @@ class Painter {
         hint += L"\n" + check.detail;
       }
     }
-    HintAfter(l, check.title, body_.get(), x0 + 4 + 30, x1 - 120, top + kCheckRow / 2, std::move(hint));
+    // With a result, its room (120) is the "?"'s limit; with the word "Проверить" and no result - the
+    // button's edge: at 350 wide the "?" sat on "сайт?" (31.10.2026).
+    const bool word = i == kCheckRoute && check.status == UiCheck::Status::NotRun;
+    const float hintRight = word ? x1 - 4 - kRouteButton - 6 : x1 - 120;
+    HintAfter(l, check.title, body_.get(), x0 + 4 + 30, hintRight, top + kCheckRow / 2, std::move(hint));
 
     if (hasButton) {
       // The route's a word, not an arrow: an arrow there read as "unfold" (30.10.2026);
       // with a result in the room, "again" - the icons' refresh.
-      const bool word = i == kCheckRoute && check.status == UiCheck::Status::NotRun;
       Item run = word ? CommandItem(Kind::Button, {x1 - 4 - kRouteButton, top + 4, x1 - 4, top + kCheckRow - 4},
                                     L"Проверить", nullptr, UiCommand::CheckRoute)
                       : CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
