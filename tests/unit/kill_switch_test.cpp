@@ -126,6 +126,10 @@ void TestLanClosed() {
         continue;
       }
       CHECK(!closed->permit && !closed->remotePrefixes.empty() && closed->coreApp == false);
+      // The shared range (100.64/10: provider routers, hotspots, Tailscale) is the local network too.
+      CHECK(v6 || std::any_of(closed->remotePrefixes.begin(), closed->remotePrefixes.end(), [](const Prefix& p) {
+              return p.bytes[0] == 100 && p.bytes[1] == 64 && p.bits == 10;
+            }));
       // What's let in, the tunnel (in a private range itself) and DHCP win over the block.
       CHECK(let->permit && let->remotePrefixes.size() == 1 && let->weight > closed->weight);
       CHECK(tunnel->permit && tunnel->weight > closed->weight);

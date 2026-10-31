@@ -17,6 +17,8 @@ void TestLanAddress() {
   CHECK(LanAddress("  10.0.0.7\t") == "10.0.0.7");
   CHECK(LanAddress("172.16.5.4") == "172.16.5.4");
   CHECK(LanAddress("169.254.1.1") == "169.254.1.1");
+  CHECK(LanAddress("100.64.0.1") == "100.64.0.1");
+  CHECK(!LanAddress("100.128.0.1") && !LanAddress("100.63.255.255"));
   CHECK(LanAddress("192.168.31.77/24") == "192.168.31.0/24");  // a subnet, written from its start
   CHECK(LanAddress("10.1.2.3/8") == "10.0.0.0/8");
   // Not the local network's: the internet, or wider than its range.

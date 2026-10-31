@@ -5983,7 +5983,7 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
       if (!address) {
         TellLan(L"«" + args.text +
                 L"» — не адрес локальной сети. Нужен вида 192.168.1.20 или подсеть 192.168.1.0/24 "
-                L"(10.x, 172.16–31.x, 192.168.x, 169.254.x).");
+                L"(10.x, 172.16–31.x, 192.168.x, 100.64–127.x, 169.254.x).");
         break;
       }
       if (view.lanAllowed.size() >= sovereign::tray::kMaxLanAllowed) {

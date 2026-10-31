@@ -49,10 +49,11 @@ bool PrivateRange(std::uint32_t v, int bits) {
     std::uint32_t base;
     int bits;
   };
-  static constexpr std::array<Range, 4> kRanges = {{
+  static constexpr std::array<Range, 5> kRanges = {{
       {0x0A000000, 8},   // 10/8
       {0xAC100000, 12},  // 172.16/12
       {0xC0A80000, 16},  // 192.168/16
+      {0x64400000, 10},  // 100.64/10
       {0xA9FE0000, 16},  // 169.254/16
   }};
   return std::any_of(kRanges.begin(), kRanges.end(), [&](const Range& r) {

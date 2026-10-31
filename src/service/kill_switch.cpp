@@ -106,13 +106,15 @@ Prefix Make(bool v6, std::initializer_list<std::uint8_t> bytes, int bits) {
   return p;
 }
 
-// Private, link-local and multicast destinations: the local network.
+// Private, shared (100.64/10: the provider's routers, hotspots, Tailscale),
+// link-local and multicast destinations: the local network.
 std::vector<Prefix> LanPrefixes(bool v6) {
   if (v6) {
     return {Make(true, {0xFE, 0x80}, 10), Make(true, {0xFC}, 7), Make(true, {0xFF}, 8)};
   }
-  return {Make(false, {10}, 8),         Make(false, {172, 16}, 12),         Make(false, {192, 168}, 16),
-          Make(false, {169, 254}, 16),  Make(false, {224}, 4),              Make(false, {255, 255, 255, 255}, 32)};
+  return {Make(false, {10}, 8),        Make(false, {172, 16}, 12), Make(false, {192, 168}, 16),
+          Make(false, {100, 64}, 10),  Make(false, {169, 254}, 16), Make(false, {224}, 4),
+          Make(false, {255, 255, 255, 255}, 32)};
 }
 
 void AddAddresses(const nlohmann::json& value, std::vector<Prefix>& out) {
