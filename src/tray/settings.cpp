@@ -239,6 +239,9 @@ TraySettings LoadSettings() {
   if (const auto v = json.find("updates"); v != json.end() && v->is_string()) {
     settings.updates = ParseUpdateMode(v->get<std::string>());
   }
+  if (const auto v = json.find("updateQuietMinutes"); v != json.end() && v->is_number_integer()) {
+    settings.updateQuietMinutes = ClampQuietMinutes(v->get<int>());
+  }
   // What the file says; nothing - a tray.json from before it was the default - off.
   bool killSwitch = false;
   if (const auto v = json.find("killSwitch"); v != json.end() && v->is_boolean()) {
@@ -331,6 +334,7 @@ void SaveSettings(const TraySettings& settings) {
   json["connectAtStartup"] = settings.connectAtStartup;
   json["routingMore"] = settings.routingMore;
   json["updates"] = std::string(UpdateModeName(settings.updates));
+  json["updateQuietMinutes"] = settings.updateQuietMinutes;
   json["logLevel"] = settings.logLevel;
   json["killSwitch"] = settings.killSwitch;
   json["killSwitchChosen"] = settings.killSwitchChosen;

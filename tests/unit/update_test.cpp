@@ -107,6 +107,9 @@ void TestQuiet() {
   CHECK(!QuietForUpdate(seconds(119), false, minutes(60)));  // at the computer
   CHECK(!QuietForUpdate(minutes(60), true, minutes(60)));   // a game in full screen, no input
   CHECK(!QuietForUpdate(minutes(60), false, seconds(30)));  // downloading
+  CHECK(QuietForUpdate(minutes(5), false, minutes(10), minutes(5)));  // the user's own wait
+  CHECK(!QuietForUpdate(minutes(4), false, minutes(10), minutes(5)));
+  CHECK(ClampQuietMinutes(10) == 10 && ClampQuietMinutes(7) == 2 && ClampQuietMinutes(-1) == 2 && ClampQuietMinutes(30) == 30);
 }
 
 }  // namespace

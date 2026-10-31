@@ -89,6 +89,11 @@ void TestUpdates(const fs::path& data) {
     SaveSettings(s);
   }
   CHECK(LoadSettings().updates == UpdateMode::Off);
+  CHECK(LoadSettings().updateQuietMinutes == 2);
+  Write(data / "tray.json", R"({"updateQuietMinutes":10})");
+  CHECK(LoadSettings().updateQuietMinutes == 10);
+  Write(data / "tray.json", R"({"updateQuietMinutes":7})");
+  CHECK(LoadSettings().updateQuietMinutes == 2);
   fs::remove_all(data, ec);
 }
 

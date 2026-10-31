@@ -3517,11 +3517,19 @@ class Painter {
       HintAfter(l, L"Обновления", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
                 L"«Только проверять» — раз в 12 часов; новая версия появится значком в заголовке окна, "
                 L"обновляешь нажатием на него. «Ставить сами» — новая версия скачивается сама и "
-                L"ставится без вопросов, когда компьютер свободен: 2 минуты никто не трогал мышь и клавиатуру, "
+                L"ставится без вопросов, когда компьютер свободен: никто не трогал мышь и клавиатуру столько минут, сколько выбрано строкой ниже, "
                 L"ничего не открыто на весь экран, ничего не качается. VPN пропадает примерно на полминуты. «Не "
                 L"проверять» — только строкой «Проверить сейчас» ниже.");
       top += kSettingsRow;
       line(top);
+
+      if (c.updateMode == UpdateMode::Install) {  // how long the computer must be left alone before it installs
+        Item quiet = CommandItem(Kind::ValueRow, row(top), L"Ставить после тишины", nullptr, UiCommand::ChooseUpdateQuiet);
+        quiet.detail = std::to_wstring(c.updateQuietMinutes) + L" мин";
+        l.items.push_back(std::move(quiet));
+        top += kSettingsRow;
+        line(top);
+      }
 
       // The check by hand; its answer in the row.
       Item check = CommandItem(Kind::ValueRow, row(top), L"Проверить сейчас", kGlyphRefresh, UiCommand::CheckUpdate);

@@ -500,6 +500,7 @@ struct Shared {
   std::optional<bool> pendingServersByDelay;
   std::optional<bool> pendingConnectAtStartup;
   std::optional<sovereign::tray::UpdateMode> pendingUpdates;
+  std::optional<int> pendingUpdateQuiet;
   bool pendingToggleRoutingMore = false;
   std::optional<std::string> pendingLogLevel;  // "" = the config's
   bool pendingToggleKillSwitch = false;
@@ -524,7 +525,7 @@ struct Shared {
     return pendingWant || pendingImport || pendingLocalConfig || !pendingChanges.empty() || !pendingRouting.empty() ||
            pendingRemove ||
            pendingRefresh || pendingRelay ||
-           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingServersByDelay.has_value() || pendingConnectAtStartup.has_value() || pendingUpdates.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingRecheck || pendingProtectionAlert.has_value() ||
+           pendingUrlTest || pendingToggleExitIp || pendingToggleDelayDetails || pendingServersByDelay.has_value() || pendingConnectAtStartup.has_value() || pendingUpdates.has_value() || pendingUpdateQuiet.has_value() || pendingToggleRoutingMore || pendingLogLevel || pendingToggleKillSwitch || pendingReconnect || pendingRecheck || pendingProtectionAlert.has_value() ||
            pendingToggleLanClosed || !pendingLan.empty() || pendingApps || pendingProtocol ||
            pendingChoice;
   }
@@ -712,6 +713,7 @@ class Worker {
       std::optional<bool> serversByDelay;
       std::optional<bool> connectAtStartup;
       std::optional<sovereign::tray::UpdateMode> updates;
+      std::optional<int> updateQuiet;
       bool toggleRoutingMore = false;
       std::optional<std::string> logLevel;
       bool toggleKillSwitch = false;
@@ -741,6 +743,7 @@ class Worker {
         serversByDelay = std::exchange(shared.pendingServersByDelay, std::nullopt);
         connectAtStartup = std::exchange(shared.pendingConnectAtStartup, std::nullopt);
         updates = std::exchange(shared.pendingUpdates, std::nullopt);
+        updateQuiet = std::exchange(shared.pendingUpdateQuiet, std::nullopt);
         toggleRoutingMore = std::exchange(shared.pendingToggleRoutingMore, false);
         logLevel = std::exchange(shared.pendingLogLevel, std::nullopt);
         toggleKillSwitch = std::exchange(shared.pendingToggleKillSwitch, false);
@@ -859,6 +862,10 @@ class Worker {
       }
       if (connectAtStartup && *connectAtStartup != settings_.connectAtStartup) {
         settings_.connectAtStartup = *connectAtStartup;
+        Save();
+      }
+      if (updateQuiet && *updateQuiet != settings_.updateQuietMinutes) {
+        settings_.updateQuietMinutes = *updateQuiet;
         Save();
       }
       if (updates && *updates != settings_.updates) {
@@ -4418,6 +4425,7 @@ sovereign::tray::Updater* g_updater = nullptr;  // the UI thread's; the updater 
 // What the updater does unasked: the UI thread's copy of tray.json's, which
 // the worker keeps (pendingUpdates) - a pick acts at once, before it's saved.
 sovereign::tray::UpdateMode g_updateMode = sovereign::tray::UpdateMode::Check;
+int g_updateQuietMinutes = static_cast<int>(sovereign::tray::kQuietInput.count());  // likewise (pendingUpdateQuiet)
 // The user asked for the update (the key, the button): it installs at once.
 // Not asked - installing unasked - it waits for a quiet moment (QuietForUpdate).
 bool g_updateAsked = false;
@@ -4888,6 +4896,7 @@ UiContent ContentFrom(const View& v) {
     }
   }
   c.updateMode = g_updateMode;
+  c.updateQuietMinutes = g_updateQuietMinutes;
   return c;
 }
 
@@ -6064,6 +6073,28 @@ void OnUiCommand(HWND trayWindow, UiCommand command, const sovereign::tray::UiAr
         }
       }
       break;
+    case UiCommand::ChooseUpdateQuiet: {
+      const auto& choices = sovereign::tray::kQuietChoices;
+      std::vector<std::wstring> labels;
+      for (const int minutes : choices) {
+        labels.push_back(minutes == 1 ? L"1 минуту" : minutes < 5 ? std::to_wstring(minutes) + L" минуты"
+                                                                  : std::to_wstring(minutes) + L" минут");
+      }
+      const auto current = std::ranges::find(choices, g_updateQuietMinutes);
+      const auto picked = PickFromMenu(owner, args.anchor, labels, static_cast<int>(current - choices.begin()));
+      if (!picked || *picked < 0 || static_cast<std::size_t>(*picked) >= choices.size()) {
+        break;
+      }
+      g_updateQuietMinutes = choices[static_cast<std::size_t>(*picked)];
+      {
+        const std::scoped_lock lock(State().mutex);
+        State().pendingUpdateQuiet = g_updateQuietMinutes;
+      }
+      Wake();
+      OnUpdateChanged(trayWindow);  // an installer already waiting: the new wait counts at once
+      UpdateWindows();
+      break;
+    }
     case UiCommand::ChooseUpdates: {
       using sovereign::tray::UpdateMode;
       const auto picked =
@@ -6169,7 +6200,7 @@ bool ComputerQuiet() {
                            shell == QUNS_PRESENTATION_MODE || shell == QUNS_APP);
   const auto sinceTraffic =
       std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - g_lastTraffic);
-  return sovereign::tray::QuietForUpdate(sinceInput, fullScreen, sinceTraffic);
+  return sovereign::tray::QuietForUpdate(sinceInput, fullScreen, sinceTraffic, std::chrono::minutes(g_updateQuietMinutes));
 }
 
 std::jthread g_updateLaunch;           // asks the service to install (it checks a checksum: a second or two)
@@ -6465,6 +6496,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR, 
   };
   sovereign::tray::MainWindow mainWindow(instance, onCommand);
   g_updateMode = settings.updates;
+  g_updateQuietMinutes = sovereign::tray::ClampQuietMinutes(settings.updateQuietMinutes);
   sovereign::tray::Updater updater(
       sovereign::tray::ParseVersion(Narrow(SOVEREIGN_VERSION_W)).value_or(sovereign::tray::Version{}), kUserAgent,
       g_updateMode != sovereign::tray::UpdateMode::Off, [window] { PostMessageW(window, kUpdateChangedMessage, 0, 0); });

@@ -84,8 +84,14 @@ std::string ChecksumUrl(const Version& version) {
   return std::string(kReleaseDownloads) + "v" + ToString(version) + "/" + InstallerName(version) + ".sha256";
 }
 
-bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic) {
-  return !fullScreen && sinceInput >= kQuietInput && sinceTraffic >= kQuietFor;
+int ClampQuietMinutes(int minutes) {
+  return std::ranges::find(kQuietChoices, minutes) != kQuietChoices.end() ? minutes
+                                                                          : static_cast<int>(kQuietInput.count());
+}
+
+bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic,
+                    std::chrono::minutes quietInput) {
+  return !fullScreen && sinceInput >= quietInput && sinceTraffic >= kQuietFor;
 }
 
 bool IsReleaseAssetUrl(std::string_view url) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <compare>
 #include <cstdint>
@@ -59,7 +60,12 @@ std::string ChecksumUrl(const Version& version);
 inline constexpr std::chrono::minutes kQuietInput{2};
 inline constexpr std::chrono::minutes kQuietFor{10};
 inline constexpr double kBusyBytesPerSecond = 64.0 * 1024;
-bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic);
+// The minutes without input the user can choose (the settings' row): kQuietInput is the
+// default; anything else a tray.json says is taken for it.
+inline constexpr std::array<int, 5> kQuietChoices{1, 2, 5, 10, 30};
+int ClampQuietMinutes(int minutes);
+bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic,
+                    std::chrono::minutes quietInput = kQuietInput);
 
 struct Release {
   Version version;

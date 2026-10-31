@@ -326,6 +326,7 @@ struct UiContent {
   std::wstring boxLatest;
   UiUpdate update = UiUpdate::Idle;
   UpdateMode updateMode = UpdateMode::Check;  // what the updater does unasked
+  int updateQuietMinutes = 2;           // installing unasked waits this long without input
   std::wstring updateVersion;           // the newest release, once known
   std::wstring updateError;
 };
@@ -419,6 +420,7 @@ enum class UiCommand : std::uint8_t {
   TestDelays,
   CheckUpdate,
   InstallUpdate,
+  ChooseUpdateQuiet,   // anchor: where to open the menu - the minutes without input before installing unasked
   ChooseUpdates,       // anchor: where to open the menu - looked for unasked or not, installed or not
   OpenWindow,    // index: the UiPage to show
   OpenFolder,

@@ -77,6 +77,7 @@ struct TraySettings {
   bool connectAtStartup = true;
   bool routingMore = false;  // the settings' fine settings (QUIC, IPv4, DNS) unfolded
   UpdateMode updates = UpdateMode::Check;  // what the updater does unasked (update.h)
+  int updateQuietMinutes = static_cast<int>(kQuietInput.count());  // installing unasked: minutes without input (kQuietChoices)
   std::string logLevel;     // what the core writes (log_level.h); empty = the config's
   // The kill switch (the service's kill_switch.h): in force while the
   // connection is meant to be on, so a drop doesn't let traffic around it.
