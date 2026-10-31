@@ -27,6 +27,26 @@ Fn ResolveExport(HMODULE module, const char* name) {
       reinterpret_cast<std::uintptr_t>(proc));
 }
 
+// Windows keeps what it resolved - an address from before the rules changed,
+// a fake one the stopped box handed out, a failure from while it was down - and
+// the site stays shut until that answer expires (what `ipconfig /flushdns`
+// cures). Called after every start and stop of the box, so a new rule or a
+// new way takes hold at once. Best effort: dnsapi's export isn't documented,
+// and a missing one or a stopped DNS client service leaves things as they
+// were - the answers just expire on their own.
+void FlushSystemDnsCache() noexcept {
+  using FlushFn = BOOL(WINAPI*)();
+  const HMODULE dnsapi = LoadLibraryExW(L"dnsapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+  if (dnsapi == nullptr) {
+    return;
+  }
+  if (const FARPROC proc = GetProcAddress(dnsapi, "DnsFlushResolverCache")) {
+    reinterpret_cast<FlushFn>(  // NOLINT(performance-no-int-to-ptr)
+      reinterpret_cast<std::uintptr_t>(proc))();
+  }
+  FreeLibrary(dnsapi);
+}
+
 }  // namespace
 
 std::wstring ResolveGoCoreDllPath() {
@@ -112,10 +132,20 @@ std::string GoCore::TakeOwnedString(char* dllString) {
 std::string GoCore::Ping() { return TakeOwnedString(boxPing_()); }
 
 std::string GoCore::Start(const std::string& configJson) {
-  return TakeOwnedString(boxStart_(configJson.c_str()));
+  std::string error = TakeOwnedString(boxStart_(configJson.c_str()));
+  if (error.empty()) {
+    FlushSystemDnsCache();  // after: the apps ask again of the box that runs now
+  }
+  return error;
 }
 
-std::string GoCore::Stop() { return TakeOwnedString(boxStop_()); }
+std::string GoCore::Stop() {
+  std::string error = TakeOwnedString(boxStop_());
+  if (error.empty()) {
+    FlushSystemDnsCache();  // what the box answered while it ran isn't true without it
+  }
+  return error;
+}
 
 CoreStats GoCore::Stats() {
   CoreStats stats;
