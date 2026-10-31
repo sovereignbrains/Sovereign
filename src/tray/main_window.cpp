@@ -268,6 +268,8 @@ struct Item {
   bool engraved = false;  // a Muted label set as engraved capitals (engraved_)
   int rail = -1;        // a Card or Pill of the routing board: the way it's of (a bucket, BucketColor); -1: none
   bool quiet = false;   // a Card with a rail: only the rail, no panel - an empty way, a line to find
+  int tick = -1;        // a Switch or ValueRow of known fate (a bucket, BucketColor): its mark on the card's edge; -1: none
+  bool tickAlways = false;  // the mark stays with the switch off (a DNS way); else it burns while the switch is on
 };
 
 // A way's colour on the routing board: a rail down its card's left edge and
@@ -284,6 +286,7 @@ constexpr COLORREF BucketColor(int bucket) {
   }
 }
 constexpr float kRailAlpha = 0.7f;
+constexpr float kRailQuiet = 12;  // an empty way's rail: a short stroke, not a pale long one
 // One line for every drawn icon - the title bar's, a row's chevron and "+",
 // the "?"'s ring, a switch's groove: a family of one weight (30.10.2026, a
 // review's "иконки смешаны по стилю").
@@ -1661,7 +1664,7 @@ class Painter {
       const SwitchRow& row = rows[i];
       const float rowHeight = row.detail.empty() ? kSwitchRow : 60;
       if (i > 0) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
       }
       Item item = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + rowHeight - 2}, row.title, nullptr,
                               row.command, row.index);
@@ -2348,7 +2351,7 @@ class Painter {
       }
       const float top = y + static_cast<float>(shown) * kLatencyRow;
       if (shown > 0) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
       }
       row(i, top);
       ++shown;
@@ -2381,7 +2384,7 @@ class Painter {
         const UiProfile& p = c.profiles[i];
         const float top = y + static_cast<float>(i) * kProfileRow;
         if (i > 0) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+          l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
         }
         Item row = Make(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 72, top + kProfileRow - 3}, p.name, kGlyphChevron);
         row.action = ItemAction::OpenProfile;
@@ -2413,7 +2416,7 @@ class Painter {
     // how subscriptions download, so here.)
     {
       const auto row = [&](float top) { return D2D1_RECT_F{x0 + 4, top + 2, x1 - 4, top + kRow - 2}; };
-      const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1})); };
+      const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1})); };
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y}));
       const std::size_t card = l.items.size() - 1;
       Item relay = Make(Kind::ValueRow, row(y), L"Скачивать без подключения",
@@ -2488,7 +2491,7 @@ class Painter {
     on.checked = p.enabled;
     l.items.push_back(std::move(on));
     if (p.subscription) {
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, y + 64, x1 - 16, y + 65}));
+      l.items.push_back(Make(Kind::Divider, {x0 + 20, y + 64, x1 - 20, y + 65}));
       Item autoUpdate = CommandItem(Kind::Switch, {x0 + 4, y + 68, x1 - 4, y + 124}, L"Автообновление", nullptr,
                                     UiCommand::ToggleAutoUpdate, index);
       autoUpdate.detail = p.autoUpdate ? p.period : L"только кнопкой «Обновить»";
@@ -2508,7 +2511,7 @@ class Painter {
       for (std::size_t i = 0; i < fields.size(); ++i) {
         const float top = y + static_cast<float>(i) * kRow;
         if (i > 0) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+          l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
         }
         Item field = Make(Kind::Field, {x0 + 16, top, x1 - 16, top + kRow}, fields[i].first);
         field.detail = fields[i].second;
@@ -2605,7 +2608,7 @@ class Painter {
       for (std::size_t i = 0; i < p.servers.size(); ++i) {
         const float top = y + static_cast<float>(i) * kServerRow;
         if (i > 0) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+          l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
         }
         Item server = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kServerRow - 2}, p.servers[i].name,
                                   nullptr, UiCommand::ToggleServer, index);
@@ -2784,7 +2787,7 @@ class Painter {
     for (std::size_t k = 0; k < shown.size(); ++k) {
       const float top = y + static_cast<float>(k) * kCheckRow;
       if (k > 0) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+        l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
       }
       CheckLine(l, c, shown[k], x0, x1, top);
     }
@@ -2946,7 +2949,7 @@ class Painter {
       for (std::size_t i = 0; i < c.apps.size(); ++i) {
         const float top = y + static_cast<float>(i) * kRow;
         if (i > 0) {
-          l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+          l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
         }
         Item app = Make(Kind::AppRow, {x0 + 8, top, x1 - 56, top + kRow}, c.apps[i], kGlyphProgram);
         app.detail = i < c.appPaths.size() ? c.appPaths[i] : std::wstring();  // the icon's exe
@@ -3062,7 +3065,7 @@ class Painter {
                 L"поэтому выключенный QUIC не мешает: браузеры сразу берут TCP.\n\n«Авто» включает QUIC, только "
                 L"если все твои серверы — Hysteria2 или TUIC. Есть хоть один на TCP — выключен.");
       top += kSettingsRow;
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
       Item v4 = CommandItem(Kind::Switch, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"Только IPv4", nullptr,
                             UiCommand::ToggleIpv4Only);
       v4.checked = r.ipv4Only;
@@ -3074,22 +3077,26 @@ class Painter {
 
       // DNS: who answers for the names of each kind - auto, a pick, or a
       // server of the user's own (typed over its row).
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
       Item remote = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"DNS через VPN",
                                 nullptr, UiCommand::ChooseRemoteDns);
       remote.detail = r.remoteDns;
       remote.hinted = true;
+      remote.tick = kBucketProxy;
+      remote.tickAlways = true;
       l.items.push_back(std::move(remote));
       HintAfter(l, L"DNS через VPN", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
                 L"Имена всех сайтов, кроме прямых: запрос идёт через VPN, провайдер его не видит.\n\n«Авто» "
                 L"подходит почти всем: это Cloudflare. Свой адрес пишется так: 1.2.3.4, tls://dns.example, "
                 L"https://dns.example/dns-query, quic://dns.example.");
       top += kSettingsRow;
-      l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1}));
+      l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
       Item local = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"DNS напрямую",
                                nullptr, UiCommand::ChooseLocalDns);
       local.detail = r.localDns;
       local.hinted = true;
+      local.tick = kBucketDirect;
+      local.tickAlways = true;
       l.items.push_back(std::move(local));
       HintAfter(l, L"DNS напрямую", body_.get(), x0 + 20, x1 - 8, top + kSettingsRow / 2,
                 L"Российские сайты, твои прямые и адреса самих серверов.\n\nЕсли этот DNS перестанет отвечать, "
@@ -3121,7 +3128,7 @@ class Painter {
       l.items[card].rect.bottom = bottom;
       return bottom + kSettingsGap;
     };
-    const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 16, top, x1 - 16, top + 1})); };
+    const auto line = [&](float top) { l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1})); };
     const auto row = [&](float top) { return D2D1_RECT_F{x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}; };
 
     {
@@ -3139,6 +3146,7 @@ class Painter {
       float top = y;
       Item kill = CommandItem(Kind::Switch, row(top), L"Kill switch", nullptr, UiCommand::ToggleKillSwitch);
       kill.checked = c.killSwitch;
+      kill.tick = kBucketBlock;
       l.items.push_back(std::move(kill));
       HintAfter(l, L"Kill switch", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Если подключение оборвётся, трафик не пойдёт мимо VPN: интернет закрыт, пока оно не "
@@ -3161,6 +3169,7 @@ class Painter {
       line(top);
       Item lan = CommandItem(Kind::Switch, row(top), L"Закрыть от локальной сети", nullptr, UiCommand::ToggleLanClosed);
       lan.checked = c.lanClosed;
+      lan.tick = kBucketBlock;
       l.items.push_back(std::move(lan));
       HintAfter(l, L"Закрыть от локальной сети", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Фильтр только на этом компьютере. Роутер, телефоны и другие устройства работают как обычно и "
@@ -3207,6 +3216,7 @@ class Painter {
       float top = y;
       Item ads = CommandItem(Kind::Switch, row(top), L"Блокировать рекламу", nullptr, UiCommand::ToggleBlockAds);
       ads.checked = c.routing.blockAds;
+      ads.tick = kBucketBlock;
       l.items.push_back(std::move(ads));
       HintAfter(l, L"Блокировать рекламу", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Запросы к рекламным и трекерным серверам по спискам никуда не уходят: страницы грузятся без "
@@ -3216,6 +3226,7 @@ class Painter {
       Item cookies =
           CommandItem(Kind::Switch, row(top), L"Убирать баннеры cookie", nullptr, UiCommand::ToggleCookieWindows);
       cookies.checked = c.routing.cookieWindows;
+      cookies.tick = kBucketBlock;
       l.items.push_back(std::move(cookies));
       HintAfter(l, L"Убирать баннеры cookie", body_.get(), x0 + 20, x1 - 80, top + kSettingsRow / 2,
                 L"Убирает окна «принять cookie» OneTrust, Cookiebot и подобные. Своё окно сайта (TikTok, "
@@ -3355,18 +3366,21 @@ class Painter {
         if (!it.quiet) {
           k.Round(r, kRadius, it.glass ? Rgb(255, 255, 255, 0.035f) : FromColorRef(ui::kCardColor));
           if (hoverAlpha > 0 && it.action != ItemAction::None) {  // a card that is a link
-            k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha * 0.5f));
+            k.Round(r, kRadius, Rgb(255, 255, 255, hoverAlpha));
           }
-          k.Outline(r, kRadius, Rgb(255, 255, 255, it.glass ? 0.10f : 0.06f));
+          k.Outline(r, kRadius, Rgb(255, 255, 255, it.glass ? 0.10f : 0.08f));
         }
         if (it.rail >= 0) {  // a way's card: the settings' card, and the rail down its edge - no tint, no other geometry
-          k.Round({r.left, r.top + 8, r.left + 3, r.bottom - 8}, 1.5f,
-                  FromColorRef(BucketColor(it.rail), it.quiet ? kRailAlpha / 2 : kRailAlpha));
+          // An empty way: the same rail, short and at full tone (a pale one fails 3:1), at the head's middle.
+          const float mid = (r.top + r.bottom) / 2;
+          const float top = it.quiet ? mid - kRailQuiet / 2 : r.top + 8;
+          const float bottom = it.quiet ? mid + kRailQuiet / 2 : r.bottom - 8;
+          k.Round({r.left, top, r.left + 3, bottom}, 1.5f, FromColorRef(BucketColor(it.rail), kRailAlpha));
         }
         break;
       case Kind::Divider:  // a groove cut in the panel: dark, and the lit lip under it
         k.Line({r.left, r.top + 0.5f}, {r.right, r.top + 0.5f}, Rgb(0, 0, 0, 0.35f));
-        k.Line({r.left, r.top + 1.5f}, {r.right, r.top + 1.5f}, Rgb(255, 255, 255, 0.055f));
+        k.Line({r.left, r.top + 1.5f}, {r.right, r.top + 1.5f}, Rgb(255, 255, 255, 0.05f));
         break;
       case Kind::Title: k.Text(it.text, title_.get(), r, primary); break;
       case Kind::Heading: k.Text(it.text, heading_.get(), r, primary); break;
@@ -3404,7 +3418,7 @@ class Painter {
       case Kind::Day: DrawDay(k, it, hovered, pressed); break;
       case Kind::ServerCard: {
         if (hoverAlpha > 0 && it.enabled) {
-          k.Round(r, kRadius - 1, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Round(r, kRadius - 1, Rgb(255, 255, 255, hoverAlpha));
         }
         const float mid = (r.top + r.bottom) / 2;
         k.Text(it.text, heading_.get(), {r.left + 14, r.top + 6, r.right - 34, mid + 2},
@@ -3417,9 +3431,10 @@ class Painter {
       }
       case Kind::ValueRow: {
         if (hoverAlpha > 0 && it.enabled) {
-          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
         const float cy = (r.top + r.bottom) / 2;
+        DrawTick(k, it, cy);
         float textLeft = r.left + 16;
         if (ID2D1Bitmap* logo = it.logo.empty() ? nullptr : Logo(k.t, it.logo); logo != nullptr) {
           k.t->DrawBitmap(logo, {textLeft, cy - 8, textLeft + 16, cy + 8});
@@ -3442,12 +3457,16 @@ class Painter {
         break;
       }
       case Kind::Banner: {
-        // Checked: what's wrong (Overview's Issues) - in the warning's amber, not the red;
-        // else a call to do something - lit, not a colour (ui_style.h).
-        k.Round(r, kRadius, it.checked ? FromColorRef(ui::kWarning, pressed ? 0.08f : (hovered ? 0.15f : 0.10f))
-                                       : FromColorRef(ui::kLit, pressed ? 0.05f : (hovered ? 0.12f : 0.08f)));
-        const D2D1_COLOR_F ink = !it.enabled ? secondary : it.checked ? FromColorRef(ui::kWarning) : primary;
-        k.Text(it.glyph, glyph_.get(), {r.left + 10, r.top, r.left + 38, r.bottom}, ink);
+        // The hand's plate, lit .08, for every banner. Checked: what's wrong (Overview's Issues) - the
+        // warning's dot stands where the glyph would, the plate stays; the verdict is never a fill or a glyph.
+        k.Round(r, kRadius, FromColorRef(ui::kLit, pressed ? 0.05f : (hovered ? 0.12f : 0.08f)));
+        const D2D1_COLOR_F ink = it.enabled ? primary : secondary;
+        if (it.checked) {
+          k.t->FillEllipse(D2D1::Ellipse({r.left + 24, (r.top + r.bottom) / 2}, 4.5f, 4.5f),
+                           k.Color(FromColorRef(ui::kWarning)));
+        } else {
+          k.Text(it.glyph, glyph_.get(), {r.left + 10, r.top, r.left + 38, r.bottom}, ink);
+        }
         k.Text(it.text, body_.get(), {r.left + 44, r.top, r.right - 36, r.bottom}, ink);
         if (it.enabled) {
           k.Text(kGlyphChevron, glyph_.get(), {r.right - 34, r.top, r.right - 8, r.bottom}, ink);
@@ -3476,10 +3495,11 @@ class Painter {
         break;
       case Kind::Switch: {
         if (hoverAlpha > 0) {
-          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
         const float right = r.right - 16;
         const D2D1_COLOR_F ink = it.enabled ? primary : secondary;
+        DrawTick(k, it, (r.top + r.bottom) / 2);
         if (it.detail.empty()) {
           k.Text(it.text, body_.get(), {r.left + 16, r.top, right - 60, r.bottom}, ink);
         } else {
@@ -3491,7 +3511,7 @@ class Painter {
       }
       case Kind::Choice: {
         if (hoverAlpha > 0) {
-          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
         const D2D1_POINT_2F dot{r.left + 22, (r.top + r.bottom) / 2};
         if (it.checked) {
@@ -3530,7 +3550,7 @@ class Painter {
       }
       case Kind::ProfileRow: {
         if (hoverAlpha > 0) {
-          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
         const float mid = (r.top + r.bottom) / 2;
         k.Text(it.text, body_.get(), {r.left + 14, r.top + 2, r.right - 28, mid + 1}, it.checked ? primary : secondary);
@@ -3565,7 +3585,7 @@ class Painter {
       }
       case Kind::Toggle: {
         if (hoverAlpha > 0) {
-          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
         }
         const float cx = (r.left + r.right) / 2;
         const float cy = (r.top + r.bottom) / 2;
@@ -3577,11 +3597,11 @@ class Painter {
         // blue (ui_style.h); the other a groove, its word dimmer.
         if (it.checked) {
           k.Round(r, 6, FromColorRef(ui::kLit, pressed ? 0.08f : (hovered ? 0.16f : 0.12f)));
-          k.Outline(r, 6, FromColorRef(ui::kLit, 0.30f));
+          k.Outline(r, 6, FromColorRef(ui::kLit, 0.40f));
         } else {
           k.Round(r, 6, Rgb(0, 0, 0, 0.18f));
           k.Round(r, 6, Rgb(255, 255, 255, hoverAlpha));
-          k.Outline(r, 6, Rgb(255, 255, 255, 0.07f));
+          k.Outline(r, 6, Rgb(255, 255, 255, 0.08f));
         }
         k.Text(it.text, button_.get(), r, it.checked ? primary : (hovered ? primary : secondary));
         break;
@@ -3589,9 +3609,9 @@ class Painter {
       case Kind::Chip:
         if (it.checked) {
           k.Round(r, 15, FromColorRef(ui::kLit, pressed ? 0.08f : (hovered ? 0.16f : 0.12f)));
-          k.Outline(r, 15, FromColorRef(ui::kLit, 0.30f));
+          k.Outline(r, 15, FromColorRef(ui::kLit, 0.40f));
         } else {
-          k.Round(r, 15, Rgb(255, 255, 255, hoverAlpha * 0.6f));
+          k.Round(r, 15, Rgb(255, 255, 255, hoverAlpha));
           k.Outline(r, 15, Rgb(255, 255, 255, 0.10f));
         }
         k.Text(it.text, chip_.get(), r, it.checked ? primary : secondary);
@@ -3601,16 +3621,17 @@ class Painter {
         if (it.rail >= 0) {  // a way's label: tinted in its colour, a dot before the name
           const COLORREF tone = BucketColor(it.rail);
           const float cy = (r.top + r.bottom) / 2;
-          k.Round(r, (r.bottom - r.top) / 2, FromColorRef(tone, 0.13f));
+          k.Round(r, (r.bottom - r.top) / 2, FromColorRef(tone, 0.12f));
           k.Outline(r, (r.bottom - r.top) / 2, FromColorRef(tone, 0.40f));
           k.t->FillEllipse(D2D1::Ellipse({r.left + 11, cy}, 3, 3), k.Color(FromColorRef(tone)));
           k.Text(it.text, caption_.get(), {r.left + 22, r.top, r.right, r.bottom}, primary);
           break;
         }
-        const D2D1_COLOR_F ink = it.warn ? FromColorRef(ui::kWarning) : secondary;
+        // `warn`: the verdict's lamp - glow and rim in the warning's hue, the word stays white.
+        const D2D1_COLOR_F ink = it.warn ? primary : secondary;
         k.Round(r, 5, Rgb(0, 0, 0, 0.30f));
         if (it.warn) {
-          k.Round(r, 5, FromColorRef(ui::kWarning, 0.10f));
+          k.Round(r, 5, FromColorRef(ui::kWarning, 0.12f));
         }
         k.Outline(r, 5, it.warn ? FromColorRef(ui::kWarning, 0.40f) : Rgb(255, 255, 255, 0.08f));
         k.Text(it.text, caption_.get(), {r.left + kPillPad, r.top, r.right, r.bottom}, ink);
@@ -3637,8 +3658,8 @@ class Painter {
         break;
       }
       case Kind::Tag: {
-        k.Round(r, 8, Rgb(255, 255, 255, 0.05f + hoverAlpha * 0.6f));
-        k.Outline(r, 8, Rgb(255, 255, 255, 0.10f));
+        k.Round(r, 8, Rgb(255, 255, 255, 0.05f + hoverAlpha));
+        k.Outline(r, 8, Rgb(255, 255, 255, 0.08f));
         const float cy = (r.top + r.bottom) / 2;
         float left = r.left + 10;
         if (ID2D1Bitmap* icon = it.logo.empty() ? ProgramIcon(k.t, it.text2) : Logo(k.t, it.logo); icon != nullptr) {
@@ -3876,6 +3897,17 @@ class Painter {
     }
   }
 
+  // The fate's mark on the card's edge (3x12, the rail's tone): a row whose fate is known puts it
+  // at its middle - while its switch is on, or always for a way (a DNS). The row sits 4 in from
+  // the card's edge, so the mark stands on the edge itself. The switch stays white.
+  void DrawTick(const Canvas& k, const Item& it, float cy) const {
+    if (it.tick < 0 || !(it.tickAlways || it.checked)) {
+      return;
+    }
+    const float x = it.rect.left - 4;
+    k.Round({x, cy - 6, x + 3, cy + 6}, 1.5f, FromColorRef(BucketColor(it.tick), kRailAlpha));
+  }
+
   void DrawButton(const Canvas& k, const Item& it, bool hovered, bool pressed) const {
     const D2D1_RECT_F r = it.rect;
     D2D1_COLOR_F fill = Rgb(255, 255, 255, 0.06f);
@@ -3884,23 +3916,26 @@ class Painter {
       fill = FromColorRef(ui::kLit, pressed ? 0.8f : (hovered ? 0.9f : 1.0f));
       ink = FromColorRef(ui::kLitInk);
     } else if (it.kind == Kind::DangerButton) {
-      fill = FromColorRef(ui::kDanger, pressed ? 0.12f : (hovered ? 0.24f : 0.16f));
-      ink = FromColorRef(ui::kDanger);
+      // The block's lamp: a glow and a rim, the word stays white - no red fill (law.md, Button).
+      fill = FromColorRef(ui::kDanger, pressed ? 0.08f : (hovered ? 0.18f : 0.12f));
     } else if (hovered) {
       fill = Rgb(255, 255, 255, pressed ? 0.05f : 0.10f);
     }
     if (it.action == ItemAction::Answer && it.index == 1) {
-      // A question's yes: solid in its tone (sub: UiQuestion::Tone).
-      fill = ToneColor(static_cast<UiQuestion::Tone>(it.sub), pressed ? 0.8f : (hovered ? 0.9f : 1.0f));
+      // A question's yes is always the hand's: white. The tone burns as the lamp in the question's head.
+      fill = FromColorRef(ui::kLit, pressed ? 0.8f : (hovered ? 0.9f : 1.0f));
       ink = FromColorRef(ui::kLitInk);
     }
+    const bool lamp = it.kind == Kind::DangerButton && !(it.action == ItemAction::Answer && it.index == 1);
     if (!it.enabled) {
       fill = Rgb(255, 255, 255, 0.03f);
       ink = FromColorRef(ui::kSecondaryText, 0.5f);
     }
     k.Round(r, 6, fill);
-    if (it.kind == Kind::Button) {
-      k.Outline(r, 6, Rgb(255, 255, 255, 0.07f));
+    if (lamp && it.enabled) {
+      k.Outline(r, 6, FromColorRef(ui::kDanger, 0.40f));
+    } else if (it.kind == Kind::Button || lamp) {
+      k.Outline(r, 6, Rgb(255, 255, 255, 0.08f));
     }
     // Glyph and text centered together.
     float textWidth = 0;
