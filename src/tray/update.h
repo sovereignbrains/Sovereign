@@ -51,9 +51,12 @@ std::string ChecksumUrl(const Version& version);
 
 // Whether nobody would miss the connection for the half a minute an update
 // takes it away (the service stops, the box with it): nobody at the mouse or
-// the keyboard for kQuietFor, nothing full screen (a game, a film, a
+// the keyboard for kQuietInput, nothing full screen (a game, a film, a
 // presentation), and next to no traffic for kQuietFor (a download left
 // running overnight).
+// Nobody at the keyboard: short - someone who is at the computer all day would never see 10 quiet
+// minutes - but traffic (a film, a download) is a person watching or a job running: longer.
+inline constexpr std::chrono::minutes kQuietInput{2};
 inline constexpr std::chrono::minutes kQuietFor{10};
 inline constexpr double kBusyBytesPerSecond = 64.0 * 1024;
 bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic);

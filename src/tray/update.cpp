@@ -85,7 +85,7 @@ std::string ChecksumUrl(const Version& version) {
 }
 
 bool QuietForUpdate(std::chrono::milliseconds sinceInput, bool fullScreen, std::chrono::seconds sinceTraffic) {
-  return !fullScreen && sinceInput >= kQuietFor && sinceTraffic >= kQuietFor;
+  return !fullScreen && sinceInput >= kQuietInput && sinceTraffic >= kQuietFor;
 }
 
 bool IsReleaseAssetUrl(std::string_view url) {

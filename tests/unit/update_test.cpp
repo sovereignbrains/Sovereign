@@ -102,9 +102,9 @@ void TestUpstream() {
 void TestQuiet() {
   using std::chrono::minutes;
   using std::chrono::seconds;
-  CHECK(QuietForUpdate(minutes(10), false, minutes(10)));
+  CHECK(QuietForUpdate(minutes(2), false, minutes(10)));
   CHECK(QuietForUpdate(minutes(60), false, minutes(30)));
-  CHECK(!QuietForUpdate(minutes(9), false, minutes(60)));   // at the computer
+  CHECK(!QuietForUpdate(seconds(119), false, minutes(60)));  // at the computer
   CHECK(!QuietForUpdate(minutes(60), true, minutes(60)));   // a game in full screen, no input
   CHECK(!QuietForUpdate(minutes(60), false, seconds(30)));  // downloading
 }
