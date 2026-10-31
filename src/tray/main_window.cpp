@@ -2422,7 +2422,9 @@ class Painter {
       Item relay = Make(Kind::ValueRow, row(y), L"Скачивать без подключения",
                         c.settingsMore ? kGlyphChevronUp : kGlyphChevronDown);
       relay.action = ItemAction::ToggleMore;
-      relay.detail = !c.relayHost.empty() ? L"свой" : (c.sharedRelay ? L"Sovereign" : L"выключено");
+      if (!c.settingsMore) {  // the summary is the folded fold's; open, the rows say it
+        relay.detail = !c.relayHost.empty() ? L"свой" : (c.sharedRelay ? L"Sovereign" : L"выключено");
+      }
       l.items.push_back(std::move(relay));
       HintAfter(l, L"Скачивать без подключения", body_.get(), x0 + 20, x1 - 160, y + kRow / 2,
                 L"Пока подключение работает, подписки скачиваются через него. Когда его нет, напрямую их сервер "
@@ -3041,17 +3043,17 @@ class Painter {
     return bottom - kPad + 1;  // exactly the view: nothing to scroll
   }
 
-  // The fine settings, the settings' fold: QUIC and IPv4, a card; DNS, a
-  // heading and a card. Returns under them.
-  float FineSettings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
+  // The fine settings, the settings' fold's body: the seam (a groove, the
+  // law's disclosure grammar), then QUIC, IPv4 and DNS, a row each, in the
+  // handle's own card - the fold opens in place, not in a card under it
+  // (31.10.2026). `top` is where the handle ends; returns where the last row does.
+  // (The DNS had a heading and a card of its own till 30.10.2026, his: the
+  // settings didn't fit a screen. Hysteria 2's speed is its servers' menu's
+  // since 17.10.2026.)
+  float FineRows(Layout& l, const UiContent& c, float x0, float x1, float top) const {
     const UiRouting& r = c.routing;
-    // QUIC, IPv4 and DNS: one card, a row each - the DNS had a heading and a
-    // card of its own till 30.10.2026 (his: the settings didn't fit a screen).
-    // (Hysteria 2's speed is its servers' menu's since 17.10.2026.)
     {
-      const float h = 4 * kSettingsRow;
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + h}));
-      float top = y;
+      l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
       Item quic = CommandItem(Kind::ValueRow, {x0 + 4, top + 2, x1 - 4, top + kSettingsRow - 2}, L"QUIC", nullptr,
                               UiCommand::ChooseQuic);
       quic.detail = r.quic == 1     ? L"выкл."
@@ -3102,8 +3104,9 @@ class Painter {
                 L"Российские сайты, твои прямые и адреса самих серверов.\n\nЕсли этот DNS перестанет отвечать, "
                 L"Sovereign возьмёт следующий: Cloudflare, Google, Quad9, Яндекс, в конце DNS Windows. Яндекс — "
                 L"только здесь: в России его не блокируют.");
-      y += h + kSettingsGap;
-    }    return y;
+      top += kSettingsRow;
+    }
+    return top;
   }
 
   float Settings(Layout& l, const UiContent& c, float x0, float x1, float y) const {
@@ -3245,6 +3248,9 @@ class Painter {
     // The fine settings, folded: QUIC, IPv4, DNS - auto by default, seldom
     // touched (the routing page's till 17.10.2026).
     {
+      // One card: the handle, its summary while folded, and - open - the seam and
+      // the rows under it (the law's disclosure grammar).
+      const std::size_t card = open(y);
       Item more = CommandItem(Kind::ValueRow, row(y), L"Тонкая настройка",
                               c.routingMore ? kGlyphChevronUp : kGlyphChevronDown, UiCommand::ToggleRoutingMore);
       if (!c.routingMore) {
@@ -3261,12 +3267,12 @@ class Painter {
         }
         more.detail = set.empty() ? L"QUIC, IPv4, DNS" : set;
       }
-      l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kSettingsRow}));
       l.items.push_back(std::move(more));
-      y += kSettingsRow + kSettingsGap;
-    }
-    if (c.routingMore) {
-      y = FineSettings(l, c, x0, x1, y);
+      float top = y + kSettingsRow;
+      if (c.routingMore) {
+        top = FineRows(l, c, x0, x1, top);
+      }
+      y = close(card, top);
     }
 
     // The foot, no card - it's about the app, nothing to set: the version and
