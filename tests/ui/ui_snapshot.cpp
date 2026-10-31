@@ -802,9 +802,10 @@ int AskTest(HINSTANCE instance) {
     if (const std::optional<RECT> r = boxOf(asked, L"Danger", question.yes)) {
       const std::optional<COLORREF> c =
           ShownPixel(hwnd, POINT{r->left + std::lround(6 * scale), (r->top + r->bottom) / 2});
-      check(c && std::abs(GetRValue(*c) - 240) <= 12 && std::abs(GetGValue(*c) - 96) <= 12 &&
-                std::abs(GetBValue(*c) - 96) <= 12,
-            "its yes button isn't kDanger in the window's frame: the card came in dimmed");
+      // The question's yes is the hand's, white (law.md, Button): kLit 226 229 235; the tone is the lamp in the head.
+      check(c && std::abs(GetRValue(*c) - 226) <= 12 && std::abs(GetGValue(*c) - 229) <= 12 &&
+                std::abs(GetBValue(*c) - 235) <= 12,
+            "its yes button isn't kLit in the window's frame: the card came in dimmed");
     }
     key(VK_ESCAPE);
   }
