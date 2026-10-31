@@ -63,6 +63,7 @@ constexpr float kSettingsRow = 34;  // a row of the settings: at 44 they did not
 constexpr float kLatencyRow = 56;  // a server to pick: its name and latency, what the measurement is made of
 constexpr float kProfileRow = 54;  // a configuration's row: its name and its state
 constexpr float kPillPad = 8;      // a Pill's text from its edge, each side
+constexpr float kPillHeight = 20;  // and its height (law.md: 20)
 constexpr float kCheckRow = 42;    // a check: its title and "?", its result on the right
 constexpr float kSwitchRow = 48;   // a switch whose explanation is in its "?"
 constexpr float kHint = 18;        // a "?" that shows a tip when pointed at
@@ -620,10 +621,10 @@ Item Make(Kind kind, D2D1_RECT_F rect, std::wstring text = {}, const wchar_t* gl
 // (Item::checked), or just the edge.
 float CheckButtonRoom(const Item& it) {
   if (!it.checked) {
-    return 12;
+    return 16;  // the line 20 from the card, the row being 4 in
   }
   const bool word = std::cmp_equal(it.sub, kCheckRoute) && it.index == static_cast<int>(UiCheck::Status::NotRun);
-  return word ? kRouteButton + 8 : 44;
+  return word ? 16 + kRouteButton + 8 : 44;  // the word's button ends on the line 20; a key's zone on 14
 }
 
 Item CommandItem(Kind kind, D2D1_RECT_F rect, std::wstring text, const wchar_t* glyph, UiCommand command, int index = 0) {
@@ -1233,8 +1234,38 @@ class Painter {
   // A layout as text, an item a line - its kind, rectangle, text - with "!"
   // where a line of text needs more room than the item gives it (it's cut
   // with "…" then), and "x" where two clickable items overlap other than a
-  // "?" or a button over its row. For tests/ui: the layout checked without
-  // looking at pictures.
+  // "?" or a button over its row, ">" where it leaves the window, and "e"
+  // where its edge from the card that holds it is off the law's three lines
+  // (OnTheLines). For tests/ui: the layout checked without looking at pictures.
+  //
+  // docs/design/law.md, Grid Logic: from a card's edge a row's zone lies 4
+  // off it, a plate (a segment) 8, the content - text, things, dividers - 20,
+  // and a key, whose zone reaches 6 past its ink, 14. `left` and `right` are
+  // the distances from the card's edges. What flows (text, things, a count)
+  // may lie anywhere inside the content's lines.
+  static bool OnTheLines(const Item& it, float left, float right) {
+    const auto at = [](float v, float line) { return std::abs(v - line) <= 0.5f; };
+    switch (it.kind) {
+      case Kind::Switch:
+      case Kind::Choice:
+      case Kind::ValueRow:
+      case Kind::CheckRow:
+      case Kind::AppRow:
+      case Kind::ServerCard: return at(left, 4) && at(right, 4);
+      case Kind::ProfileRow: return at(left, 4) && right >= 4 - 0.5f;  // cut short by its switch
+      case Kind::Toggle: return at(right, 8);  // a plate 64 wide round a switch 40: the switch's ink on 20
+      case Kind::Divider: return at(left, 20) && at(right, 20);
+      case Kind::Segment: return at(left, 8) || at(right, 8);  // the outer edge on the line 8, the inner 4 off the middle
+      case Kind::IconButton: {  // the zone reaches past the glyph, which keeps off the line 20
+        const float bleed = (it.rect.right - it.rect.left - 16) / 2;
+        return std::min(left, right) + bleed >= 20 - 0.5f;
+      }
+      case Kind::Banner:
+      case Kind::SpeedGraph:
+      case Kind::LogBox: return true;  // not on a card's lines: a card of its own, or the page's
+      default: return left >= 20 - 0.5f && right >= 20 - 0.5f;
+    }
+  }
   static std::wstring OneLine(std::wstring_view text, std::size_t max) {
     std::wstring line(text.substr(0, max));
     std::replace(line.begin(), line.end(), L'\n', L' ');
@@ -1269,7 +1300,7 @@ class Painter {
         case Kind::Switch: room = w - 16 - 76; need = TextWidth(it.text, body_.get()); break;
         case Kind::Choice: room = w - 42 - 120; need = TextWidth(it.text, body_.get()); break;
         case Kind::ProfileRow: room = w - 14 - 28; need = TextWidth(it.text, body_.get()); break;
-        case Kind::ServerCard: room = w - 14 - 34; need = TextWidth(it.text, heading_.get()); break;
+        case Kind::ServerCard: room = w - 16 - 34; need = TextWidth(it.text, heading_.get()); break;
         case Kind::ValueRow:
           room = w - 16 - 30;
           need = TextWidth(it.text, body_.get()) + 12 + TextWidth(it.detail, trailing_.get()) +
@@ -1278,7 +1309,7 @@ class Painter {
           break;
         case Kind::Segment: room = w - 8; need = TextWidth(it.text, button_.get()); break;
         case Kind::CheckRow:
-          room = w - 30 - CheckButtonRoom(it);
+          room = w - 34 - CheckButtonRoom(it);
           need = TextWidth(it.text, body_.get()) + 6 + kHint + 8 + TextWidth(it.detail, trailing_.get());
           break;
         case Kind::Muted:  // a line of its own; a taller one wraps
@@ -1304,9 +1335,33 @@ class Painter {
         }
       }
       const bool outside = r.left < 0 || r.right > width + 0.5f;
-      out += std::format(L"{}{}{} {:<12} [{:6.1f} {:6.1f} {:6.1f} {:6.1f}] {}", need > room + 0.5f ? L"!" : L" ",
-                         overlaps ? L"x" : L" ", outside ? L">" : L" ", kNames[static_cast<std::size_t>(it.kind)],
-                         r.left, r.top, r.right, r.bottom, OneLine(it.text, 60));
+      // The card that holds it: the nearest one before it that has it inside. A question's buttons and the
+      // calendar's days lie over the page, not on a card.
+      bool off = false;
+      if (it.kind != Kind::Card && it.kind != Kind::Question && it.kind != Kind::Day && it.action != ItemAction::Answer) {
+        for (std::size_t j = i; j-- > 0;) {
+          const D2D1_RECT_F c = l.items[j].rect;
+          if (l.items[j].kind != Kind::Card || c.left > r.left + 0.5f || c.right < r.right - 0.5f ||
+              c.top > r.top + 0.5f || c.bottom < r.bottom - 0.5f) {
+            continue;
+          }
+          off = !OnTheLines(it, r.left - c.left, c.right - r.right);
+          if (it.kind == Kind::Tag) {  // things flow: the first of a row on the line 20, the rest 4 after the one before
+            const Item* before = nullptr;
+            for (std::size_t k = i; k-- > j + 1 && before == nullptr;) {
+              before = l.items[k].kind == Kind::Tag ? &l.items[k] : nullptr;
+            }
+            const bool sameRow = before != nullptr && std::abs(before->rect.top - r.top) <= 0.5f;
+            const bool first = std::abs(r.left - c.left - 20) <= 0.5f;
+            off = off || (sameRow ? std::abs(before->rect.right + 4 - r.left) > 0.5f
+                                  : !first || (before != nullptr && std::abs(before->rect.bottom + 4 - r.top) > 0.5f));
+          }
+          break;
+        }
+      }
+      out += std::format(L"{}{}{}{} {:<12} [{:6.1f} {:6.1f} {:6.1f} {:6.1f}] {}", need > room + 0.5f ? L"!" : L" ",
+                         overlaps ? L"x" : L" ", outside ? L">" : L" ", off ? L"e" : L" ",
+                         kNames[static_cast<std::size_t>(it.kind)], r.left, r.top, r.right, r.bottom, OneLine(it.text, 60));
       if (need > room + 0.5f) {
         out += std::format(L"   (needs {:.0f}, has {:.0f})", need, room);
       }
@@ -1725,11 +1780,16 @@ class Painter {
     // A way's card: a rail of its colour down the left edge, its head - name,
     // "?", how many things, "+" - and its things wrapped under it. Compact
     // since 30.10.2026 (his: "компактнее карточки"): a head of 34, things of 28.
+    // On the law's lines (law.md, Grid Logic): words and things between the
+    // lines 20, 4 between the things both ways, 8 between the cards; the key's
+    // zone ends on the line 14 - its glyph on 20.
     constexpr float kHead = 34;
-    constexpr float kChipGap = 5;
+    constexpr float kChipGap = 4;
     constexpr float kAddKey = 28;
-    const float left = x0 + 16;  // the settings' rows' inset, past the rail
-    const float right = x1 - 10;
+    constexpr float kWayGap = 8;
+    const float left = x0 + 20;
+    const float right = x1 - 20;
+    const float keyRight = x1 - 14;
     for (const Bucket& b : buckets) {
       // Its things in rows from the card's left, wrapped at its right.
       std::vector<std::pair<std::size_t, D2D1_RECT_F>> placed;
@@ -1742,8 +1802,8 @@ class Painter {
         }
         // Whole pixels up: a chip as wide as its text to the last float got its
         // last letters trimmed to "…" (brave.exe -> "brave.e…", 30.10.2026).
-        float w = 20 + std::ceil(TextWidth(chip.text, body_.get())) + (chip.icon.empty() && chip.logo.empty() ? 0.0f : 22.0f) +
-                  (chip.detail.empty() ? 0.0f : 6 + std::ceil(TextWidth(chip.detail, caption_.get())));
+        float w = 24 + std::ceil(TextWidth(chip.text, body_.get())) + (chip.icon.empty() && chip.logo.empty() ? 0.0f : 24.0f) +
+                  (chip.detail.empty() ? 0.0f : 8 + std::ceil(TextWidth(chip.detail, caption_.get())));
         if (w > right - left) {
           w = right - left;
         }
@@ -1758,7 +1818,7 @@ class Painter {
         continue;  // where everything else goes, and nothing else: not an exception, not shown
       }
       const auto addKey = [&](float top, float height) {
-        Item add = CommandItem(Kind::IconButton, {right - kAddKey, top, right, top + height}, L"Добавить", kGlyphAdd,
+        Item add = CommandItem(Kind::IconButton, {keyRight - kAddKey, top, keyRight, top + height}, L"Добавить", kGlyphAdd,
                                UiCommand::BoardAdd, b.id);
         add.tip = std::format(L"Добавить в «{}»: сервис, программу или сайт", b.name);
         return add;
@@ -1776,37 +1836,39 @@ class Painter {
         const float nameWidth = TextWidth(b.name, caption_.get());
         l.items.push_back(Make(Kind::Muted, {left, y, left + nameWidth + 4, y + kQuiet}, b.name));
         if (!b.hint.empty()) {
-          HintAfter(l, b.name, caption_.get(), left, right - kAddKey - 8, y + kQuiet / 2, b.hint);
+          HintAfter(l, b.name, caption_.get(), left, keyRight - kAddKey - 8, y + kQuiet / 2, b.hint);
         }
         l.items.push_back(addKey(y + 1, kQuiet - 2));
-        y += kQuiet + 6;
+        y += kQuiet + kWayGap;
         continue;
       }
-      // Its name a row's title, as a setting's: the section heading is over the board.
-      const float nameWidth = TextWidth(b.name, body_.get());
-      float noteLeft = left + nameWidth + 14;
+      // Its name the card's title (heading, 15.75): the section heading over the board is the group's.
+      const float nameWidth = TextWidth(b.name, heading_.get());
+      float noteLeft = left + nameWidth + 8;
       if (!b.hint.empty()) {
-        noteLeft += kHint + 6;
+        noteLeft += kHint + 8;
       }
       // How many are on it, engraved in a pill by the "+".
       const std::wstring count = std::format(L"{:02}", placed.size());
       const float countWidth = TextWidth(count, caption_.get()) + 2 * kPillPad;
-      const float countRight = right - kAddKey - 6;
+      const float countRight = keyRight - kAddKey - 8;
       // The note (WARP's "через «server»") by the name while it fits; else a line of its own under
       // the head, wrapped - a value is never cut to "…" (31.10.2026: "через «AnyTL…" at 350 wide).
       const float noteRoom = countRight - countWidth - 8 - noteLeft;
       const bool noteBelow = !b.note.empty() && std::ceil(TextWidth(b.note, caption_.get())) + 4 > noteRoom;
       const float noteHeight = noteBelow ? std::max(18.0f, TextHeight(b.note, captionWrap_.get(), right - left)) : 0.0f;
       const float head = kHead + noteHeight;
-      const float h = head + cy + kTag + 9;
+      const float h = head + cy + kTag + 8;
       Item card = Make(Kind::Card, {x0, y, x1, y + h});
       card.rail = b.id;
       l.items.push_back(std::move(card));
-      l.items.push_back(Make(Kind::Text, {left, y + 3, left + nameWidth + 4, y + kHead - 3}, b.name));
+      l.items.push_back(Make(Kind::Heading, {left, y + 3, left + nameWidth + 4, y + kHead - 3}, b.name));
       if (!b.hint.empty()) {
-        HintAfter(l, b.name, body_.get(), left, right - kAddKey - 8, y + kHead / 2, b.hint);
+        HintAfter(l, b.name, heading_.get(), left, countRight - countWidth - 8, y + kHead / 2, b.hint);
       }
-      l.items.push_back(Make(Kind::Pill, {countRight - countWidth, y + kHead / 2 - 10, countRight, y + kHead / 2 + 10}, count));
+      l.items.push_back(Make(Kind::Pill,
+                             {countRight - countWidth, y + (kHead - kPillHeight) / 2, countRight, y + (kHead + kPillHeight) / 2},
+                             count));
       if (noteBelow) {
         l.items.push_back(Make(Kind::Caption, {left, y + kHead - 6, right, y + kHead - 6 + noteHeight}, b.note));
       } else if (!b.note.empty()) {
@@ -1823,7 +1885,7 @@ class Painter {
         tag.logo = chip.logo;
         l.items.push_back(std::move(tag));
       }
-      y += h + 6;
+      y += h + kWayGap;
     }
     return y;
   }
@@ -2075,8 +2137,8 @@ class Painter {
     for (const std::size_t i : shown) {
       h += rowHeight(c.profiles[i]);
     }
-    const float left = x0 + 16;
-    const float right = x1 - 16;
+    const float left = x0 + 20;  // the content's line (law.md, Grid Logic)
+    const float right = x1 - 20;
 
     Item card = Make(Kind::Card, {x0, y, x1, y + h}, L"Конфигурации");
     card.action = ItemAction::Page;
@@ -2092,7 +2154,9 @@ class Painter {
     constexpr float kAddKey = 32;
     constexpr float kAddStep = kAddKey + 2;
     const float addWidth = kAddStep * static_cast<float>(kAddWays.size()) - 2;
-    float addLeft = right - addWidth;
+    // The last key's glyph (16) ends on the line 20: its zone reaches past it.
+    const float keysRight = right + (kAddKey - 16) / 2;
+    float addLeft = keysRight - addWidth;
     for (const AddWay& way : kAddWays) {
       Item add = CommandItem(Kind::IconButton, {addLeft, y + 4, addLeft + kAddKey, y + kHeader - 4}, way.name, way.glyph,
                              way.command);
@@ -2100,11 +2164,11 @@ class Painter {
       l.items.push_back(std::move(add));
       addLeft += kAddStep;
     }
-    Item label = Make(Kind::Muted, {left, y + 9, right - addWidth - 8, y + kHeader - 9},
+    Item label = Make(Kind::Muted, {left, y + 9, keysRight - addWidth - 8, y + kHeader - 9},
                       std::format(L"КОНФИГУРАЦИИ · {}", shown.size()));
     label.engraved = true;
     l.items.push_back(std::move(label));
-    l.items.push_back(Make(Kind::Divider, {x0 + 1, y + kHeader, x1 - 1, y + kHeader + 1}));
+    l.items.push_back(Make(Kind::Divider, {left, y + kHeader, right, y + kHeader + 1}));
 
     float top = y + kHeader + 1;
     for (const std::size_t i : shown) {
@@ -2113,7 +2177,7 @@ class Painter {
       const float rowTop = top;
       const float rowHeightNow = rowHeight(p);
       if (i != shown.front()) {
-        l.items.push_back(Make(Kind::Divider, {x0 + 1, rowTop, x1 - 1, rowTop + 1}));
+        l.items.push_back(Make(Kind::Divider, {left, rowTop, right, rowTop + 1}));
       }
       // Right to left: the arrow, the days left, and the name stops short of them.
       const float arrow = right - 20;
@@ -2186,7 +2250,7 @@ class Painter {
     Item glass = Make(Kind::Card, {x0, y, x1, y + h});
     glass.glass = true;
     l.items.push_back(std::move(glass));
-    Item card = Make(Kind::ServerCard, {x0 + 2, y + 2, x1 - 2, y + h - 2}, {}, kGlyphChevron);
+    Item card = Make(Kind::ServerCard, {x0 + 4, y + 2, x1 - 4, y + h - 2}, {}, kGlyphChevron);
     card.action = ItemAction::Page;
     card.index = static_cast<int>(UiPage::Servers);
     if (c.protocols.empty()) {
@@ -2384,7 +2448,7 @@ class Painter {
     // Every configuration: the switch turns it on and off, a click opens it.
     if (c.profiles.empty()) {
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + 56}));
-      l.items.push_back(Make(Kind::Muted, {x0 + 16, y, x1 - 16, y + 56},
+      l.items.push_back(Make(Kind::Muted, {x0 + 20, y, x1 - 20, y + 56},
                              L"Пока ни одной — добавь через «+» на главном экране."));
       y += 56;
     } else {
@@ -2396,7 +2460,7 @@ class Painter {
         if (i > 0) {
           l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
         }
-        Item row = Make(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 72, top + kProfileRow - 3}, p.name, kGlyphChevron);
+        Item row = Make(Kind::ProfileRow, {x0 + 4, top + 3, x1 - 76, top + kProfileRow - 3}, p.name, kGlyphChevron);
         row.action = ItemAction::OpenProfile;
         row.index = static_cast<int>(i);
         row.detail = p.detail;
@@ -2404,7 +2468,7 @@ class Painter {
         row.warn = p.failed;
         row.tip = L"Открыть: имя, обновление, серверы. Правый клик — меню";
         l.items.push_back(std::move(row));
-        Item toggle = CommandItem(Kind::Toggle, {x1 - 68, top + 3, x1 - 4, top + kProfileRow - 3},
+        Item toggle = CommandItem(Kind::Toggle, {x1 - 72, top + 3, x1 - 8, top + kProfileRow - 3},
                                   p.enabled ? L"Выключить" : L"Включить", nullptr, UiCommand::ToggleProfile,
                                   static_cast<int>(i));
         toggle.checked = p.enabled;
@@ -2525,7 +2589,7 @@ class Painter {
         if (i > 0) {
           l.items.push_back(Make(Kind::Divider, {x0 + 20, top, x1 - 20, top + 1}));
         }
-        Item field = Make(Kind::Field, {x0 + 16, top, x1 - 16, top + kRow}, fields[i].first);
+        Item field = Make(Kind::Field, {x0 + 20, top, x1 - 20, top + kRow}, fields[i].first);
         field.detail = fields[i].second;
         l.items.push_back(std::move(field));
       }
@@ -2700,17 +2764,19 @@ class Painter {
       // board under it is what goes otherwise ("Идёт иначе": WARP is no
       // exception to anything, 30.10.2026, his: "варп вряд ли исключением
       // можно назвать"), so the mode's own way isn't a card among them.
-      constexpr float kModePad = 9;
+      // The law's lines (law.md, Grid Logic): the segments are plates, 8 from the card's edge and 8
+      // apart; the line under them is content, its words on the line 20.
+      constexpr float kModePad = 8;
       constexpr float kSegment = 32;
-      constexpr float kRestLine = 22;
+      constexpr float kRestLine = 24;
       l.items.push_back(Make(Kind::Card, {x0, y, x1, y + kModePad + kSegment + 8 + kRestLine + kModePad}));
       const float mid = (x0 + x1) / 2;
-      const float inLeft = x0 + kModePad;
-      const float inRight = x1 - kModePad;
-      Item all = CommandItem(Kind::Segment, {inLeft, y + kModePad, mid - 3, y + kModePad + kSegment}, L"всё", nullptr,
-                             UiCommand::SetRouteMode, 0);
+      const float inLeft = x0 + 20;
+      const float inRight = x1 - 20;
+      Item all = CommandItem(Kind::Segment, {x0 + kModePad, y + kModePad, mid - 4, y + kModePad + kSegment}, L"всё",
+                             nullptr, UiCommand::SetRouteMode, 0);
       all.checked = !r.finalDirect;
-      Item chosen = CommandItem(Kind::Segment, {mid + 3, y + kModePad, inRight, y + kModePad + kSegment},
+      Item chosen = CommandItem(Kind::Segment, {mid + 4, y + kModePad, x1 - kModePad, y + kModePad + kSegment},
                                 L"только выбранное", nullptr, UiCommand::SetRouteMode, 1);
       chosen.checked = r.finalDirect;
       l.items.push_back(std::move(all));
@@ -2718,11 +2784,11 @@ class Painter {
       const float lineTop = y + kModePad + kSegment + 8;
       const std::wstring lead = L"всё остальное →";
       const float leadWidth = TextWidth(lead, caption_.get());
-      l.items.push_back(Make(Kind::Muted, {inLeft + 3, lineTop, inLeft + 3 + leadWidth + 4, lineTop + kRestLine}, lead));
+      l.items.push_back(Make(Kind::Muted, {inLeft, lineTop, inLeft + leadWidth + 4, lineTop + kRestLine}, lead));
       const std::wstring way = r.finalDirect ? L"Напрямую" : L"VPN";
-      Item restWay = Make(Kind::Pill, {inLeft + 3 + leadWidth + 8, lineTop,
-                                       inLeft + 3 + leadWidth + 8 + TextWidth(way, caption_.get()) + kPillPad + 22,
-                                       lineTop + kRestLine},
+      Item restWay = Make(Kind::Pill, {inLeft + leadWidth + 8, lineTop + (kRestLine - kPillHeight) / 2,
+                                       inLeft + leadWidth + 8 + TextWidth(way, caption_.get()) + kPillPad + 22,
+                                       lineTop + (kRestLine + kPillHeight) / 2},
                           way);
       restWay.rail = r.finalDirect ? kBucketDirect : kBucketProxy;
       l.items.push_back(std::move(restWay));
@@ -2874,15 +2940,16 @@ class Painter {
     // With a result, its room (120) is the "?"'s limit; with the word "Проверить" and no result - the
     // button's edge: at 350 wide the "?" sat on "сайт?" (31.10.2026).
     const bool word = i == kCheckRoute && check.status == UiCheck::Status::NotRun;
-    const float hintRight = word ? x1 - 4 - kRouteButton - 6 : x1 - 120;
-    HintAfter(l, check.title, body_.get(), x0 + 4 + 30, hintRight, top + kCheckRow / 2, std::move(hint));
+    const float hintRight = word ? x1 - 20 - kRouteButton - 6 : x1 - 120;
+    HintAfter(l, check.title, body_.get(), x0 + 4 + 34, hintRight, top + kCheckRow / 2, std::move(hint));
 
     if (hasButton) {
       // The route's a word, not an arrow: an arrow there read as "unfold" (30.10.2026);
-      // with a result in the room, "again" - the icons' refresh.
-      Item run = word ? CommandItem(Kind::Button, {x1 - 4 - kRouteButton, top + 4, x1 - 4, top + kCheckRow - 4},
+      // with a result in the room, "again" - the icons' refresh. The word's button ends on
+      // the line 20, the key (28) in the zone that ends on 14: its glyph ends on 20.
+      Item run = word ? CommandItem(Kind::Button, {x1 - 20 - kRouteButton, top + 4, x1 - 20, top + kCheckRow - 4},
                                     L"Проверить", nullptr, UiCommand::CheckRoute)
-                      : CommandItem(Kind::IconButton, {x1 - 4 - 36, top + 3, x1 - 4, top + kCheckRow - 3},
+                      : CommandItem(Kind::IconButton, {x1 - 14 - 28, top + 7, x1 - 14, top + kCheckRow - 7},
                                     i == kCheckSpeed ? L"Замерить скорость" : L"Проверить другой сайт…",
                                     i == kCheckSpeed ? kGlyphSpeed : kGlyphRefresh,
                                     i == kCheckSpeed ? UiCommand::RunSpeed : UiCommand::CheckRoute);
@@ -3440,11 +3507,11 @@ class Painter {
           k.Round(r, kRadius - 1, Rgb(255, 255, 255, hoverAlpha));
         }
         const float mid = (r.top + r.bottom) / 2;
-        k.Text(it.text, heading_.get(), {r.left + 14, r.top + 6, r.right - 34, mid + 2},
+        k.Text(it.text, heading_.get(), {r.left + 16, r.top + 6, r.right - 34, mid + 2},
                it.enabled ? primary : secondary);
-        k.Text(it.detail, caption_.get(), {r.left + 14, mid + 2, r.right - 34, r.bottom - 6}, secondary);
+        k.Text(it.detail, caption_.get(), {r.left + 16, mid + 2, r.right - 34, r.bottom - 6}, secondary);
         if (it.enabled) {
-          k.Text(it.glyph, glyph_.get(), {r.right - 32, r.top, r.right - 8, r.bottom}, secondary);
+          k.Text(it.glyph, glyph_.get(), {r.right - 30, r.top, r.right - 6, r.bottom}, secondary);
         }
         break;
       }
@@ -3583,11 +3650,11 @@ class Painter {
                                                     FromColorRef(ui::kWarning), FromColorRef(ui::kDanger)};
         const D2D1_COLOR_F status = colors[static_cast<std::size_t>(std::clamp(it.index, 0, 4))];
         const float cy = (r.top + r.bottom) / 2;
-        k.t->FillEllipse(D2D1::Ellipse({r.left + 16, cy}, 4.5f, 4.5f), k.Color(status));
+        k.t->FillEllipse(D2D1::Ellipse({r.left + 20.5f, cy}, 4.5f, 4.5f), k.Color(status));  // its ink from the line 20
         // The title and its "?" (a Hint item after it), the result in what's
         // left on the right - cut with "…": the "?" has it in full.
-        const float titleRight = r.left + 30 + TextWidth(it.text, body_.get());
-        k.Text(it.text, body_.get(), {r.left + 30, r.top, titleRight + 2, r.bottom}, primary);
+        const float titleRight = r.left + 34 + TextWidth(it.text, body_.get());
+        k.Text(it.text, body_.get(), {r.left + 34, r.top, titleRight + 2, r.bottom}, primary);
         const float resultLeft = titleRight + 6 + kHint + 8;
         const float resultRight = r.right - CheckButtonRoom(it);
         const bool quiet = it.index <= 1;  // not run, running
@@ -3680,15 +3747,15 @@ class Painter {
         k.Round(r, 8, Rgb(255, 255, 255, 0.05f + hoverAlpha));
         k.Outline(r, 8, Rgb(255, 255, 255, 0.08f));
         const float cy = (r.top + r.bottom) / 2;
-        float left = r.left + 10;
+        float left = r.left + 12;  // the law's chip: 12 inside, 8 between its parts
         if (ID2D1Bitmap* icon = it.logo.empty() ? ProgramIcon(k.t, it.text2) : Logo(k.t, it.logo); icon != nullptr) {
           k.t->DrawBitmap(icon, {left, cy - 8, left + 16, cy + 8});
-          left += 22;
+          left += 24;
         }
-        k.Text(it.text, body_.get(), {left, r.top, r.right - 8, r.bottom}, primary);  // 2 of slack: see Board
+        k.Text(it.text, body_.get(), {left, r.top, r.right - 10, r.bottom}, primary);  // 2 of slack: see Board
         if (!it.detail.empty()) {
-          const float after = left + std::ceil(TextWidth(it.text, body_.get())) + 6;
-          k.Text(it.detail, caption_.get(), {after, r.top, r.right - 8, r.bottom}, secondary);
+          const float after = left + std::ceil(TextWidth(it.text, body_.get())) + 8;
+          k.Text(it.detail, caption_.get(), {after, r.top, r.right - 10, r.bottom}, secondary);
         }
         break;
       }

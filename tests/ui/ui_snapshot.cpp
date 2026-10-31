@@ -739,11 +739,11 @@ int AskTest(HINSTANCE instance) {
       const std::size_t end = std::min(text.find(L'\n', from), text.size());
       const std::wstring_view line(text.data() + from, end - from);
       from = end + 1;
-      // "   Kind         [ left top right bottom] text  | detail"
+      // "    Kind         [ left top right bottom] text  | detail" (four flags, a space)
       const std::size_t open = line.find(L'[');
       const std::size_t close = line.find(L"] ");
-      if (open == std::wstring_view::npos || close == std::wstring_view::npos || line.size() < 4 + kind.size() ||
-          line.substr(4, kind.size()) != kind || line[4 + kind.size()] != L' ') {
+      if (open == std::wstring_view::npos || close == std::wstring_view::npos || line.size() < 5 + kind.size() ||
+          line.substr(5, kind.size()) != kind || line[5 + kind.size()] != L' ') {
         continue;
       }
       const std::wstring_view rest = line.substr(close + 2);
@@ -957,12 +957,12 @@ int LayoutTest(const std::wstring& dir) {
       for (std::size_t at = 0; at < text.size();) {
         const std::size_t end = std::min(text.find(L'\n', at), text.size());
         const std::wstring_view line(text.data() + at, end - at);
-        if (line.size() > 3 && (line[1] == L'x' || line[2] == L'>')) {
+        if (line.size() > 4 && (line[1] == L'x' || line[2] == L'>' || line[3] == L'e')) {
           std::fwprintf(stderr, L"%ls @%d: %.*ls\n", name, static_cast<int>(width), static_cast<int>(line.size()),
                         line.data());
           ++failures;
         }
-        cut += line.size() > 3 && line[0] == L'!' ? 1 : 0;
+        cut += line.size() > 4 && line[0] == L'!' ? 1 : 0;
         at = end + 1;
       }
     }
